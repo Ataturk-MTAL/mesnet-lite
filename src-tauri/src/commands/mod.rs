@@ -2,6 +2,8 @@ pub mod assignment_commands;
 pub mod availability_commands;
 pub mod company_commands;
 pub mod dashboard_commands;
+pub mod export_commands;
+pub mod geocoding_commands;
 pub mod hours_commands;
 pub mod import_commands;
 pub mod settings_commands;

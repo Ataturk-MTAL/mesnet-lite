@@ -63,8 +63,33 @@ export interface NewAssignment {
   forceReason: string | null
 }
 
+export interface ProposedAssignment {
+  companyId: number
+  companyName: string
+  teacherId: number
+  teacherName: string
+  awardedHours: number
+  visitDay: number
+  visitHour: number
+  exactBranchMatch: boolean
+}
+
+export interface UnassignedCompany {
+  companyId: number
+  companyName: string
+  /** Türkçe gerekçe. */
+  reason: string
+}
+
+export interface AllocationProposal {
+  assignments: ProposedAssignment[]
+  unassigned: UnassignedCompany[]
+}
+
 export const assignmentsApi = {
   get: (): Promise<AssignmentBoard> => call('get_assignment_board'),
+  /** Öneri üretir; hiçbir şey kaydetmez. */
+  propose: (): Promise<AllocationProposal> => call('propose_assignments'),
   assign: (input: NewAssignment): Promise<AssignmentBoard> => call('assign_company', { input }),
   unassign: (companyId: number): Promise<AssignmentBoard> =>
     call('unassign_company', { companyId }),

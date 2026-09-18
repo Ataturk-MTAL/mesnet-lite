@@ -3,7 +3,10 @@ use crate::db::{
     assignments, availability, class_days, companies, company_hours, settings, students, teachers,
     AppState,
 };
-use crate::domain::scheduling::MAX_HOURS_PER_DAY;
+use crate::domain::allocation::{
+    propose, AllocationProposal, CompanyInput, TeacherInput,
+};
+use crate::domain::scheduling::{Slot, MAX_HOURS_PER_DAY};
 use crate::domain::workload::{coordinator_capacity, statutory_cap, InstitutionType};
 use crate::error::AppResult;
 use serde::Serialize;
@@ -315,6 +318,63 @@ pub async fn get_assignment_board(state: State<'_, AppState>) -> AppResult<Assig
     load_board(&state).await
 }
 
+/// Atanmamış işletmeler için yerleşim önerisi üretir. Hiçbir şey kaydedilmez;
+/// kullanıcı öneriyi görüp uygulamaya karar verir.
+#[tauri::command]
+pub async fn propose_assignments(state: State<'_, AppState>) -> AppResult<AllocationProposal> {
+    let board = load_board(&state).await?;
+
+    let companies: Vec<CompanyInput> = board
+        .companies
+        .iter()
+        // Zaten atanmış işletmeler öneriye girmez; mevcut karar korunur.
+        .filter(|c| c.assigned_teacher_id.is_none())
+        .map(|c| CompanyInput {
+            id: c.company_id,
+            name: c.company_name.clone(),
+            branches: c.branches.clone(),
+            student_count: c.student_count,
+            awarded_hours: c.awarded_hours,
+            is_honorary: c.is_honorary,
+            latitude: None,
+            longitude: None,
+            workplace_days: c.workplace_days.iter().copied().collect(),
+            one_way_distance_km: c.one_way_distance_km,
+        })
+        .collect();
+
+    let teachers: Vec<TeacherInput> = board
+        .teachers
+        .iter()
+        .map(|t| TeacherInput {
+            id: t.teacher_id,
+            name: t.teacher_name.clone(),
+            branches: t.branches.clone(),
+            capacity: t.capacity,
+            free_slots: t.free_slots.iter().filter_map(|key| parse_slot_key(key)).collect(),
+            already_assigned_hours: t.assigned_hours,
+            used_slots: board
+                .companies
+                .iter()
+                .filter(|c| c.assigned_teacher_id == Some(t.teacher_id))
+                .filter_map(|c| match (c.visit_day, c.visit_hour) {
+                    (Some(day), Some(hour)) => Some(Slot::new(day, hour)),
+                    _ => None,
+                })
+                .collect(),
+            hours_by_day: t.hours_per_day.clone(),
+        })
+        .collect();
+
+    Ok(propose(&companies, &teachers))
+}
+
+/// `{gün}-{saat}` anahtarını dilime çevirir. Bozuk anahtar sessizce atlanır.
+fn parse_slot_key(key: &str) -> Option<Slot> {
+    let (day, hour) = key.split_once('-')?;
+    Some(Slot::new(day.parse().ok()?, hour.parse().ok()?))
+}
+
 #[tauri::command]
 pub async fn assign_company(
     state: State<'_, AppState>,
@@ -376,5 +436,19 @@ mod tests {
     #[test]
     fn pool_is_zero_when_settings_are_absent() {
         assert_eq!(pool_from_settings(&BTreeMap::new()), 0);
+    }
+
+    #[test]
+    fn slot_keys_round_trip() {
+        assert_eq!(parse_slot_key("3-10"), Some(Slot::new(3, 10)));
+        assert_eq!(parse_slot_key("1-8"), Some(Slot::new(1, 8)));
+    }
+
+    /// Bozuk anahtar panik yerine None vermeli.
+    #[test]
+    fn malformed_slot_keys_are_ignored() {
+        assert_eq!(parse_slot_key("bozuk"), None);
+        assert_eq!(parse_slot_key("a-b"), None);
+        assert_eq!(parse_slot_key(""), None);
     }
 }
