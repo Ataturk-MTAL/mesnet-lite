@@ -4,6 +4,7 @@ use sqlx::SqlitePool;
 use std::path::Path;
 
 pub mod companies;
+pub mod settings;
 pub mod students;
 pub mod teachers;
 

@@ -29,6 +29,19 @@ pub fn run() {
             commands::company_commands::update_company,
             commands::company_commands::delete_company,
             commands::company_commands::set_company_location,
+            commands::student_commands::list_students,
+            commands::student_commands::create_student,
+            commands::student_commands::update_student,
+            commands::student_commands::delete_student,
+            commands::teacher_commands::list_teachers,
+            commands::teacher_commands::create_teacher,
+            commands::teacher_commands::update_teacher,
+            commands::teacher_commands::delete_teacher,
+            commands::settings_commands::get_settings,
+            commands::settings_commands::save_settings,
+            commands::settings_commands::set_school_location,
+            commands::import_commands::preview_csv_import,
+            commands::import_commands::apply_csv_import,
         ])
         .run(tauri::generate_context!())
         .expect("Uygulama başlatılamadı");
