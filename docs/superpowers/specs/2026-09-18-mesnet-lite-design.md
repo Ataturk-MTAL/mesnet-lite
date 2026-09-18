@@ -510,7 +510,26 @@ Menü grupları:
 2. **Mükerrer kontrolü** — işletme adı Unicode-doğru normalize edilerek (`to_lowercase()` + boşluk sadeleştirme) mevcut kayıtlarla karşılaştırılır; her mükerrer için *atla / güncelle / yeni kayıt* seçimi sunulur. 32 öğrenci → 28 tekil işletme birleştirmesi bu adımda olur.
 3. **İçe aktar ve coğrafi kodla** — kayıtlar yazılır, Nominatim kuyruğu 1 istek/saniye ile çalışır, `ProgressBar` ile ilerleme gösterilir.
 
-### 12.4 Leaflet entegrasyon uyarısı
+### 12.4 Konum seçme — iki kullanım, tek bileşen
+
+Harita üzerinden konum işaretleme **iki yerde** gerekir ve ikisi de aynı
+`LocationPickerMap.vue` bileşenini kullanır:
+
+1. **İşletme konumu** — İşletmeler ekranında; coğrafi kodlama tutmadığında veya
+   sonucu düzeltmek gerektiğinde. Yazılan yer: `companies.latitude` / `companies.longitude`,
+   durum `geocode_status = 'manual'`.
+2. **Okul konumu** — Ayarlar ekranında. Yazılan yer: `settings.school_latitude` /
+   `settings.school_longitude`.
+
+Bileşen sözleşmesi: `modelValue` olarak `{ latitude, longitude } | null` alır, haritaya
+tıklandığında veya işaret sürüklendiğinde güncellenmiş değeri yayar. Konum boşken harita
+okul konumuna, o da boşsa Mersin merkezine odaklanır. Enlem/boylam ayrıca sayı girdisi
+olarak da düzenlenebilir; harita ve girdiler tek yönlü değil, çift yönlü bağlıdır.
+
+**Okul konumu mesafe hesabında kullanılmaz** (§11). Kullanım amacı harita odağı ve
+dağıtım motorunun kümeleme referansıdır (§9).
+
+### 12.5 Leaflet entegrasyon uyarısı
 
 Leaflet kendi DOM'unu yönetir. Marker nesneleri `ref()` içine konursa Vue onları proxy'ler ve Leaflet'in iç referans karşılaştırmaları bozulur. Marker'lar `shallowRef` içinde veya bileşen dışı bir `Map<id, Marker>` yapısında tutulur.
 
@@ -577,6 +596,7 @@ MESNET.Lite/
 │   ├── i18n/labels.ts                      -- Türkçe etiket sözlüğü
 │   ├── components/
 │   │   ├── layout/AppSidebar.vue
+│   │   ├── map/LocationPickerMap.vue
 │   │   ├── map/CompanyMap.vue
 │   │   ├── schedule/AvailabilityGrid.vue
 │   │   ├── allocation/TeacherCard.vue
