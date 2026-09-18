@@ -52,6 +52,10 @@ pub fn run() {
             commands::assignment_commands::assign_company,
             commands::assignment_commands::unassign_company,
             commands::assignment_commands::clear_assignments,
+            commands::availability_commands::get_availability_board,
+            commands::availability_commands::save_teacher_availability,
+            commands::availability_commands::save_class_days,
+            commands::availability_commands::copy_schedule_from_term,
         ])
         .run(tauri::generate_context!())
         .expect("Uygulama başlatılamadı");
