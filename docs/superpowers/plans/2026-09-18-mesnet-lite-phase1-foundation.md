@@ -63,25 +63,46 @@ Bu bölüm her görevin gereksinimlerine örtük olarak dahildir.
 - Consumes: yok (ilk görev)
 - Produces: Çalışan `npm run tauri dev`; otomatik kayıtlı PrimeVue bileşenleri; `src/i18n/labels.ts` içinden `labels` nesnesi
 
-- [ ] **Step 1: Tauri 2 + Vue + TypeScript iskeletini oluştur**
+- [x] **Step 1: Tauri 2 + Vue + TypeScript iskeletini oluştur**
 
-Proje dizini zaten var ve git deposu kurulu (`docs/`, `.gitignore`, CSV mevcut). İskeleti mevcut dizine kur:
+Proje dizini zaten var ve git deposu kurulu (`docs/`, `.gitignore`, CSV mevcut).
+`npm create tauri-app` boş olmayan dizinde mevcut dosyalara müdahale edebilir, bu yüzden
+iskelet önce geçici bir dizine kurulur, sonra yalnızca gereken dosyalar kopyalanır:
 
 ```bash
-cd /Users/ogretmen/VSCodeProjects/MESNET.Lite
-npm create tauri-app@latest . -- --template vue-ts --manager npm --yes
+cd /tmp
+npm create tauri-app@latest mesnet-scaffold -- --template vue-ts --manager npm --yes
+
+P=/Users/ogretmen/VSCodeProjects/MESNET.Lite
+cp -R /tmp/mesnet-scaffold/index.html /tmp/mesnet-scaffold/package.json \
+      /tmp/mesnet-scaffold/tsconfig.json /tmp/mesnet-scaffold/tsconfig.node.json \
+      /tmp/mesnet-scaffold/vite.config.ts /tmp/mesnet-scaffold/README.md "$P/"
+cp -R /tmp/mesnet-scaffold/public /tmp/mesnet-scaffold/src \
+      /tmp/mesnet-scaffold/src-tauri /tmp/mesnet-scaffold/.vscode "$P/"
 ```
 
-Çakışma uyarısı gelirse mevcut dosyaların üzerine yazmayı **reddet**, yalnızca yeni dosyaları ekle.
+Proje `.gitignore` dosyası korunur; iskeletinki kopyalanmaz.
 
-- [ ] **Step 2: Paketleri kur**
+- [ ] **Step 1b: İskeletten gelen `scaffold` adını değiştir**
+
+`npm create tauri-app <ad>` verilen dizin adını crate ve ürün adı olarak yazar.
+Geçici dizin adı kullanıldığı için dört yerde düzeltme gerekir:
+
+- `src-tauri/Cargo.toml` → `name = "mesnet-lite"`, `[lib] name = "mesnet_lite_lib"`
+- `src-tauri/src/main.rs` → `mesnet_lite_lib::run()`
+- `src-tauri/tauri.conf.json` → `productName: "MESNET.Lite"`, `identifier: "ai.alplab.mesnet-lite"`, pencere `title: "MESNET.Lite"`, `width: 1280`, `height: 800`
+- `package.json` → `"name": "mesnet-lite"`, `"scripts"` içine `"test": "vitest run"`
+
+Atlanırsa `cargo test` ve `npm run build` çalışır ama üretilen uygulama iskelet adını taşır.
+
+- [x] **Step 2: Paketleri kur**
 
 ```bash
 npm install primevue@5.0.0 @primeuix/themes@3.0.0 @primeicons/vue vue-router@4 pinia leaflet
 npm install --save-dev @primevue/auto-import-resolver unplugin-vue-components @types/leaflet vitest @vue/test-utils jsdom
 ```
 
-- [ ] **Step 3: `vite.config.ts` içine otomatik bileşen çözümleyiciyi ekle**
+- [x] **Step 3: `vite.config.ts` içine otomatik bileşen çözümleyiciyi ekle**
 
 ```typescript
 import { defineConfig } from 'vite'
@@ -101,7 +122,7 @@ export default defineConfig({
 })
 ```
 
-- [ ] **Step 4: `src/main.ts` içinde PrimeVue'yu Aura preset'i ile kur**
+- [x] **Step 4: `src/main.ts` içinde PrimeVue'yu Aura preset'i ile kur**
 
 ```typescript
 import { createApp } from 'vue'
@@ -124,7 +145,7 @@ app.use(ConfirmationService)
 app.mount('#app')
 ```
 
-- [ ] **Step 5: `index.html` kök font boyutunu 16px'e sabitle**
+- [x] **Step 5: `index.html` kök font boyutunu 16px'e sabitle**
 
 `<head>` içine ekle:
 
@@ -136,7 +157,7 @@ app.mount('#app')
 </style>
 ```
 
-- [ ] **Step 6: `src/i18n/labels.ts` oluştur**
+- [x] **Step 6: `src/i18n/labels.ts` oluştur**
 
 ```typescript
 // Tüm Türkçe arayüz metinleri burada toplanır; başka dosyada sabit metin yazılmaz.
@@ -199,12 +220,12 @@ export const labels = {
 } as const
 ```
 
-- [ ] **Step 7: Uygulamanın çalıştığını doğrula**
+- [x] **Step 7: Uygulamanın çalıştığını doğrula**
 
 Çalıştır: `npm run tauri dev`
 Beklenen: Masaüstü penceresi açılır, hata yok. Pencereyi kapat.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A
@@ -225,7 +246,7 @@ git commit -m "feat: Tauri 2 + Vue 3 + PrimeVue v5 iskeleti ve Türkçe etiket s
 - Consumes: `labels` (Task 1)
 - Produces: `/`, `/companies`, `/students`, `/teachers`, `/settings`, `/import-export` rotaları; `AppSidebar` bileşeni
 
-- [ ] **Step 1: Başarısız testi yaz**
+- [x] **Step 1: Başarısız testi yaz**
 
 `src/components/layout/AppSidebar.spec.ts`:
 
@@ -237,8 +258,16 @@ import { labels } from '../../i18n/labels'
 
 describe('AppSidebar', () => {
   it('tüm ana menü başlıklarını Türkçe olarak gösterir', () => {
+    // `RouterLink: true` stub'i slot icerigini BASMAZ; SidebarMenuButton
+    // as-child ile metni RouterLink'e devrettigi icin menu etiketleri kaybolur.
+    // Stub'a template vermek zorunludur.
     const wrapper = mount(AppSidebar, {
-      global: { stubs: { RouterLink: true, RouterView: true } },
+      global: {
+        stubs: {
+          RouterLink: { template: '<a><slot /></a>' },
+          RouterView: { template: '<div />' },
+        },
+      },
     })
     const text = wrapper.text()
     expect(text).toContain(labels.nav.companies)
@@ -249,12 +278,12 @@ describe('AppSidebar', () => {
 })
 ```
 
-- [ ] **Step 2: Testi çalıştır, başarısız olduğunu doğrula**
+- [x] **Step 2: Testi çalıştır, başarısız olduğunu doğrula**
 
 Çalıştır: `npx vitest run src/components/layout/AppSidebar.spec.ts`
 Beklenen: FAIL — `Failed to resolve import "./AppSidebar.vue"`
 
-- [ ] **Step 3: Yönlendiriciyi oluştur**
+- [x] **Step 3: Yönlendiriciyi oluştur**
 
 `src/router/index.ts`:
 
@@ -276,7 +305,7 @@ const router = createRouter({
 export default router
 ```
 
-- [ ] **Step 4: Altı görünüm dosyasını yer tutucu olarak oluştur**
+- [x] **Step 4: Altı görünüm dosyasını yer tutucu olarak oluştur**
 
 `src/views/DashboardView.vue`:
 
@@ -300,7 +329,7 @@ Diğer beş dosya birebir aynı yapıda; yalnızca başlık ifadesi değişir:
 - `src/views/SettingsView.vue` → `{{ labels.nav.settings }}`
 - `src/views/ImportExportView.vue` → `{{ labels.nav.importExport }}`
 
-- [ ] **Step 5: `AppSidebar.vue` bileşenini yaz**
+- [x] **Step 5: `AppSidebar.vue` bileşenini yaz**
 
 ```vue
 <template>
@@ -384,7 +413,7 @@ const navGroups = [
 </script>
 ```
 
-- [ ] **Step 6: `src/App.vue` içeriğini değiştir**
+- [x] **Step 6: `src/App.vue` içeriğini değiştir**
 
 ```vue
 <template>
@@ -398,17 +427,17 @@ import AppSidebar from './components/layout/AppSidebar.vue'
 </script>
 ```
 
-- [ ] **Step 7: Testi çalıştır, geçtiğini doğrula**
+- [x] **Step 7: Testi çalıştır, geçtiğini doğrula**
 
 Çalıştır: `npx vitest run src/components/layout/AppSidebar.spec.ts`
 Beklenen: PASS
 
-- [ ] **Step 8: Uygulamayı çalıştır ve gezinmeyi doğrula**
+- [x] **Step 8: Uygulamayı çalıştır ve gezinmeyi doğrula**
 
 Çalıştır: `npm run tauri dev`
 Beklenen: Sol tarafta Sidebar görünür, ikon moduna daraltılabilir, menü öğelerine tıklayınca sağdaki başlık değişir.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add -A
@@ -433,7 +462,7 @@ git commit -m "feat: PrimeVue v5 Sidebar navigasyon kabuğu ve yönlendirme"
   - `pub struct AppState { pub pool: sqlx::SqlitePool }`
   - `pub async fn init_pool(db_path: &std::path::Path) -> AppResult<sqlx::SqlitePool>`
 
-- [ ] **Step 1: `Cargo.toml` bağımlılıklarını ekle**
+- [x] **Step 1: `Cargo.toml` bağımlılıklarını ekle**
 
 `[dependencies]` altına:
 
@@ -455,7 +484,7 @@ tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-- [ ] **Step 2: Başarısız testi yaz**
+- [x] **Step 2: Başarısız testi yaz**
 
 `src-tauri/src/db/mod.rs` dosyasını yalnızca bu test modülüyle oluştur:
 
@@ -531,12 +560,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Testi çalıştır, başarısız olduğunu doğrula**
+- [x] **Step 3: Testi çalıştır, başarısız olduğunu doğrula**
 
 Çalıştır: `cd src-tauri && cargo test db::tests`
 Beklenen: FAIL — `cannot find function 'init_pool' in this scope`
 
-- [ ] **Step 4: `src-tauri/src/error.rs` yaz**
+- [x] **Step 4: `src-tauri/src/error.rs` yaz**
 
 ```rust
 /// Uygulamanın tek hata tipi. Tauri komutlarından doğrudan döner.
@@ -586,7 +615,7 @@ impl From<std::io::Error> for AppError {
 }
 ```
 
-- [ ] **Step 5: `src-tauri/migrations/0001_initial.sql` yaz**
+- [x] **Step 5: `src-tauri/migrations/0001_initial.sql` yaz**
 
 ```sql
 -- MESNET.Lite başlangıç şeması.
@@ -721,7 +750,7 @@ INSERT INTO settings (key, value) VALUES
     ('branch_group_counts',      '{}');
 ```
 
-- [ ] **Step 6: `src-tauri/migrations/0002_seed_hour_rules.sql` yaz**
+- [x] **Step 6: `src-tauri/migrations/0002_seed_hour_rules.sql` yaz**
 
 ```sql
 -- İşletme saat tavanı başlangıç tablosu.
@@ -760,7 +789,7 @@ VALUES
     (5.0, NULL, 6, NULL, 11);
 ```
 
-- [ ] **Step 7: `src-tauri/src/db/mod.rs` içeriğini tamamla**
+- [x] **Step 7: `src-tauri/src/db/mod.rs` içeriğini tamamla**
 
 Step 2'de yazdığın test modülünün **üstüne** ekle:
 
@@ -807,7 +836,7 @@ pub async fn init_pool(db_path: &Path) -> AppResult<SqlitePool> {
 
 Ardından `src-tauri/src/db/companies.rs`, `src-tauri/src/db/students.rs`, `src-tauri/src/db/teachers.rs` dosyalarını **boş** oluştur — aksi hâlde `pub mod` bildirimleri derlenmez. Bu dosyalar Task 5, 12 ve 13'te doldurulacak.
 
-- [ ] **Step 8: `src-tauri/src/lib.rs` içinde modülleri bildir ve havuzu kur**
+- [x] **Step 8: `src-tauri/src/lib.rs` içinde modülleri bildir ve havuzu kur**
 
 ```rust
 mod commands;
@@ -822,6 +851,7 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // Veritabanı platform-doğru uygulama veri dizininde tutulur.
             let dir = app.path().app_data_dir()?;
@@ -840,12 +870,12 @@ pub fn run() {
 
 `src-tauri/src/commands/mod.rs`, `src-tauri/src/domain/mod.rs`, `src-tauri/src/services/mod.rs` dosyalarını boş oluştur.
 
-- [ ] **Step 9: Testi çalıştır, geçtiğini doğrula**
+- [x] **Step 9: Testi çalıştır, geçtiğini doğrula**
 
 Çalıştır: `cd src-tauri && cargo test db::tests`
 Beklenen: PASS — üç test de geçer
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add -A
@@ -864,7 +894,7 @@ git commit -m "feat: SQLite şeması, saat tavanı seed tablosu ve AppError tipi
 - Consumes: yok
 - Produces: `Company`, `NewCompany`, `Student`, `NewStudent`, `Teacher`, `NewTeacher`, `GeocodeStatus`, `ChiefType`, `EmploymentType`; `ChiefType::weekly_hours() -> i64`; `Company::round_trip_distance_km() -> Option<f64>`
 
-- [ ] **Step 1: Başarısız testi yaz**
+- [x] **Step 1: Başarısız testi yaz**
 
 `src-tauri/src/domain/models.rs` dosyasını yalnızca bu test modülüyle oluştur:
 
@@ -927,12 +957,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Testi çalıştır, başarısız olduğunu doğrula**
+- [x] **Step 2: Testi çalıştır, başarısız olduğunu doğrula**
 
 Çalıştır: `cd src-tauri && cargo test domain::models`
 Beklenen: FAIL — `cannot find type 'ChiefType' in this scope`
 
-- [ ] **Step 3: Modelleri yaz**
+- [x] **Step 3: Modelleri yaz**
 
 Test modülünün **üstüne** ekle:
 
@@ -1081,18 +1111,18 @@ pub struct NewTeacher {
 }
 ```
 
-- [ ] **Step 4: `src-tauri/src/domain/mod.rs` içinde modülü bildir**
+- [x] **Step 4: `src-tauri/src/domain/mod.rs` içinde modülü bildir**
 
 ```rust
 pub mod models;
 ```
 
-- [ ] **Step 5: Testi çalıştır, geçtiğini doğrula**
+- [x] **Step 5: Testi çalıştır, geçtiğini doğrula**
 
 Çalıştır: `cd src-tauri && cargo test domain::models`
 Beklenen: PASS — üç test de geçer
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A
