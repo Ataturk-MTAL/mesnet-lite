@@ -8,7 +8,30 @@
     <style>
       /* OpenVue, PrimeVue 4.5.5 tabanlıdır ve 14px kök font varsayar. */
       html { font-size: 14px; }
-      body { margin: 0; }
+
+      *,
+      *::before,
+      *::after { box-sizing: border-box; }
+
+      /* OpenVue teması font ailesi tanımlamaz; tanımlanmazsa tarayıcı
+         varsayılanı (serif) devreye girer. Sistem font yığını kullanılır. */
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+          Arial, 'Noto Sans', sans-serif;
+        font-size: 1rem;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        background: var(--p-content-background);
+        color: var(--p-text-color);
+      }
+
+      /* Başlıklar ve form öğeleri de aynı yığını kullanmalı; tarayıcı
+         form öğelerine kendi fontunu dayatır. */
+      h1, h2, h3, h4, h5, h6,
+      button, input, select, textarea { font-family: inherit; }
+
+      #app { min-height: 100vh; }
     </style>
   </head>
 
