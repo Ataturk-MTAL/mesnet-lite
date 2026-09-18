@@ -51,6 +51,19 @@
           :aria-label="labels.nav.toggleMenu"
           @click="toggleMenu"
         />
+        <div class="topbar-term">
+          <i class="pi pi-calendar" />
+          <Select
+            :model-value="activeTerm"
+            :options="termOptions"
+            :editable="true"
+            :placeholder="labels.term.placeholder"
+            :aria-label="labels.term.label"
+            class="term-select"
+            @update:model-value="onTermChange"
+          />
+        </div>
+
         <div class="topbar-spacer" />
         <SelectButton
           :model-value="preference"
@@ -72,11 +85,27 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { labels } from '../../i18n/labels'
 import { useTheme } from '../../composables/useTheme'
+import { activeTerm, terms, loadTerms, setActiveTerm } from '../../composables/useTerm'
 
 const { preference, setThemePreference } = useTheme()
+
+// Dönem listesi; seçici serbest metin de kabul eder, böylece yeni bir
+// eğitim-öğretim yılı listede olmadan da açılabilir.
+const termOptions = computed(() => [...terms.value])
+
+async function onTermChange(value: string | null): Promise<void> {
+  const term = (value ?? '').trim()
+  if (term.length === 0) return
+  try {
+    await setActiveTerm(term)
+  } catch {
+    // Ayar yazılamazsa seçici eski değerine döner; hata Toast ile
+    // ekranların kendi yükleme akışında görünür.
+  }
+}
 
 const themeOptions = [
   { value: 'light' as const, label: labels.theme.light, icon: 'pi pi-sun' },
@@ -98,6 +127,9 @@ function updateWidth(): void {
 onMounted(() => {
   updateWidth()
   window.addEventListener('resize', updateWidth)
+  // Dönem listesi bir kez yüklenir; okunamazsa seçici boş kalır ama
+  // uygulama çalışmaya devam eder.
+  void loadTerms().catch(() => undefined)
 })
 
 onUnmounted(() => window.removeEventListener('resize', updateWidth))
@@ -238,6 +270,9 @@ const navGroups: readonly NavGroup[] = [
   background: var(--p-content-background);
 }
 .topbar-spacer { flex: 1; }
+.topbar-term { display: flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; }
+.topbar-term > i { color: var(--p-text-muted-color); }
+.term-select { min-width: 11rem; }
 
 .main > :not(.topbar) {
   flex: 1;

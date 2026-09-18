@@ -30,6 +30,7 @@ pub fn run() {
             commands::company_commands::delete_company,
             commands::company_commands::set_company_location,
             commands::student_commands::list_students,
+            commands::student_commands::list_terms,
             commands::student_commands::create_student,
             commands::student_commands::update_student,
             commands::student_commands::delete_student,

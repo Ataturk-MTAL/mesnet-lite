@@ -39,5 +39,7 @@ export default defineConfig(() => ({
 
   test: {
     environment: "jsdom",
+    // jsdom'da bulunmayan tarayıcı API'leri burada sağlanır.
+    setupFiles: ["./src/test-setup.ts"],
   },
 }));

@@ -1,17 +1,33 @@
-use crate::db::{students, AppState};
+use crate::db::{settings, students, AppState};
 use crate::domain::models::{NewStudent, Student};
 use crate::error::{AppError, AppResult};
 use tauri::State;
 
+/// Aktif eğitim-öğretim yılındaki öğrenciler.
 #[tauri::command]
 pub async fn list_students(state: State<'_, AppState>) -> AppResult<Vec<Student>> {
-    students::list(&state.pool).await
+    let term = settings::get_active_term(&state.pool).await?;
+    students::list_by_term(&state.pool, &term).await
+}
+
+/// Veritabanındaki tüm eğitim-öğretim yılları, en yeniden eskiye.
+#[tauri::command]
+pub async fn list_terms(state: State<'_, AppState>) -> AppResult<Vec<String>> {
+    students::list_terms(&state.pool).await
 }
 
 #[tauri::command]
-pub async fn create_student(state: State<'_, AppState>, input: NewStudent) -> AppResult<Student> {
+pub async fn create_student(
+    state: State<'_, AppState>,
+    input: NewStudent,
+) -> AppResult<Student> {
     validate(&input)?;
-    students::create(&state.pool, &input).await
+    // Dönem boş gelirse aktif döneme yazılır; öğrenci dönemsiz kalamaz.
+    let mut to_create = input;
+    if to_create.term.trim().is_empty() {
+        to_create.term = settings::get_active_term(&state.pool).await?;
+    }
+    students::create(&state.pool, &to_create).await
 }
 
 #[tauri::command]
@@ -55,6 +71,7 @@ mod tests {
             branch: "Elektronik Haberleşme".into(),
             company_id: None,
             submitted_at: None,
+            term: "2026-2027/1".into(),
         }
     }
 

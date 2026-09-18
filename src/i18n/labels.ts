@@ -54,6 +54,7 @@ export const labels = {
     locationDialogTitle: 'İşletme Konumu',
     locationSaved: 'Konum kaydedildi',
     locationRequired: 'Önce haritadan bir konum seçin.',
+    termNote: 'İşletmeler tüm eğitim-öğretim yıllarında ortaktır; dönem değişince silinmez.',
   },
   geocodeStatus: {
     pending: 'Bekliyor',
@@ -104,6 +105,11 @@ export const labels = {
     department: 'Bölüm Şefi',
   },
   employmentType: { tenured: 'Kadrolu', contracted: 'Sözleşmeli' },
+  term: {
+    label: 'Eğitim-Öğretim Yılı',
+    placeholder: 'Dönem seçin',
+    hint: 'Öğrenciler, atamalar ve müsaitlikler seçili döneme aittir. İşletmeler tüm dönemlerde ortaktır.',
+  },
   theme: {
     label: 'Tema',
     light: 'Açık',
@@ -112,6 +118,23 @@ export const labels = {
   },
   dashboard: {
     activeTeachers: 'Aktif Öğretmen',
+    activeTeachersLower: 'aktif öğretmen',
+    studentsThisTerm: 'Bu Yılın Öğrencileri',
+
+    hourBalance: 'Koordinatörlük Saat Dengesi',
+    totalCapacity: 'Dağıtılabilir Azami Saat',
+    totalCapacityNote: 'Aktif öğretmenlerin kapasiteleri toplamı (MADDE 15/2 tavanı eksi şeflik saati).',
+    assignedHours: 'Dağıtılmış Saat',
+    assignedHoursNote: 'Atamalarda takdir edilmiş toplam haftalık saat.',
+    remainingHours: 'Kalan Saat',
+    remainingHoursNote: 'Dağıtılabilir azamiden kalan. Negatifse kapasite aşılmıştır.',
+    usage: 'Kullanım',
+    overCapacityWarning:
+      'Dağıtılmış saat, dağıtılabilir azamiyi aşıyor. Bu mevzuata aykırıdır; takdir edilen saatleri düşürün veya öğretmen ekleyin.',
+    teachersOverCapacity: 'öğretmen kapasitesini aşmış',
+    noActiveTeachers: 'Aktif öğretmen yok. Dağıtım yapılabilmesi için Öğretmenler ekranından öğretmen ekleyin.',
+    companiesWithoutAssignment: 'işletmede öğrenci var ama koordinatör atanmamış',
+
     attentionTitle: 'Dikkat Gerektirenler',
     allClear: 'Eksik kayıt yok.',
     companiesWithoutLocation: 'işletmenin harita konumu yok',
@@ -170,6 +193,7 @@ export const labels = {
     resultUpdated: 'güncellendi',
     resultSkipped: 'atlandı',
     noFile: 'Önce bir CSV dosyası seçin.',
+    termNote: 'İçe aktarılan öğrenciler seçili eğitim-öğretim yılına yazılır. İşletmeler mevcutsa yeniden kullanılır.',
   },
   map: {
     latitude: 'Enlem',

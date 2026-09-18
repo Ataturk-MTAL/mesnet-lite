@@ -92,6 +92,8 @@ export interface NewStudent {
   branch: string
   companyId: number | null
   submittedAt: string | null
+  /** Boş bırakılırsa backend aktif dönemi yazar. */
+  term: string
 }
 
 export interface Student {
@@ -103,6 +105,7 @@ export interface Student {
   branch: string
   companyId: number | null
   submittedAt: string | null
+  term: string
 }
 
 /** `branches` bozuk JSON içerse bile okuma yolu düşmemeli. */

@@ -1,9 +1,14 @@
 <template>
   <div class="page">
     <div class="page-header">
-      <h1 class="page-title">{{ labels.student.title }}</h1>
+      <div class="title-group">
+        <h1 class="page-title">{{ labels.student.title }}</h1>
+        <Tag v-if="activeTerm" :value="activeTerm" severity="secondary" icon="pi pi-calendar" />
+      </div>
       <Button :label="labels.common.add" icon="pi pi-plus" @click="openCreate" />
     </div>
+
+    <Message severity="secondary" :closable="false">{{ labels.term.hint }}</Message>
 
     <DataTable
       :value="students"
@@ -60,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import StudentFormDialog from '../components/student/StudentFormDialog.vue'
@@ -68,6 +73,7 @@ import { studentsApi } from '../api/students'
 import { companiesApi } from '../api/companies'
 import { labels } from '../i18n/labels'
 import type { Company, NewStudent, Student } from '../types/models'
+import { activeTerm } from '../composables/useTerm'
 
 const toast = useToast()
 const confirm = useConfirm()
@@ -150,12 +156,16 @@ function confirmRemove(student: Student): void {
   })
 }
 
+// Üst çubuktan dönem değişince liste yeniden yüklenir.
+watch(activeTerm, load)
+
 onMounted(load)
 </script>
 
 <style scoped>
 .page { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
 .page-header { display: flex; align-items: center; justify-content: space-between; }
+.title-group { display: flex; align-items: center; gap: 0.75rem; }
 .page-title { font-size: 1.5rem; font-weight: 600; margin: 0; }
 .row-actions { display: flex; gap: 0.25rem; }
 </style>

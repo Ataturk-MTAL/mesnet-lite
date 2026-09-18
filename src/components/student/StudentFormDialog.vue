@@ -82,6 +82,8 @@ function emptyForm(): NewStudent {
     branch: '',
     companyId: null,
     submittedAt: null,
+    // Boş bırakılır; backend aktif dönemi yazar.
+    term: '',
   }
 }
 
@@ -117,6 +119,7 @@ watch(
         branch: student.branch,
         companyId: student.companyId,
         submittedAt: student.submittedAt,
+        term: student.term,
       })
       studentNo.value = student.studentNo ?? ''
     } else {

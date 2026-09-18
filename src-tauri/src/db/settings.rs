@@ -49,6 +49,11 @@ pub async fn set_many(pool: &SqlitePool, entries: &BTreeMap<String, String>) -> 
     Ok(())
 }
 
+/// Aktif eğitim-öğretim yılı. Ayar boşsa boş metin döner; uydurma yapılmaz.
+pub async fn get_active_term(pool: &SqlitePool) -> AppResult<String> {
+    Ok(get(pool, "active_term").await?.unwrap_or_default())
+}
+
 /// Okul konumu. İkisi birden dolu değilse None döner.
 /// Bu değer mesafe hesabında KULLANILMAZ; harita odağı ve dağıtım motorunun
 /// kümeleme referansıdır.

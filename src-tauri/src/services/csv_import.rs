@@ -174,6 +174,8 @@ pub fn parse_jotform_csv(content: &str) -> AppResult<ParsedCsv> {
             branch: cell(&record, column::BRANCH),
             company_id: None,
             submitted_at: parse_submission_date(&cell(&record, column::SUBMISSION_DATE)),
+            // Dönem CSV'de yoktur; içe aktarma sırasında aktif dönemle damgalanır.
+            term: String::new(),
         };
 
         parsed.rows.push(ImportRow { company, student });

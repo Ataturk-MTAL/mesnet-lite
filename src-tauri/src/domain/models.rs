@@ -95,6 +95,8 @@ pub struct Student {
     pub branch: String,
     pub company_id: Option<i64>,
     pub submitted_at: Option<String>,
+    /// Eğitim-öğretim yılı. Öğrenci listesi her yıl yenilenir.
+    pub term: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +109,7 @@ pub struct NewStudent {
     pub branch: String,
     pub company_id: Option<i64>,
     pub submitted_at: Option<String>,
+    pub term: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

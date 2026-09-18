@@ -3,18 +3,42 @@ use crate::error::{AppError, AppResult};
 use sqlx::SqlitePool;
 
 const SELECT_COLUMNS: &str =
-    "id, first_name, last_name, student_no, grade, branch, company_id, submitted_at";
+    "id, first_name, last_name, student_no, grade, branch, company_id, submitted_at, term";
 
 fn not_found(id: i64) -> AppError {
     AppError::NotFound(format!("Öğrenci bulunamadı: {id}"))
 }
 
+/// TÜM dönemlerdeki öğrenciler. Ekranlar genelde `list_by_term` kullanır.
 pub async fn list(pool: &SqlitePool) -> AppResult<Vec<Student>> {
     let sql = format!(
         "SELECT {SELECT_COLUMNS} FROM students
-         ORDER BY grade COLLATE NOCASE, last_name COLLATE NOCASE, first_name COLLATE NOCASE"
+         ORDER BY term DESC, grade COLLATE NOCASE, last_name COLLATE NOCASE, \
+                  first_name COLLATE NOCASE"
     );
     Ok(sqlx::query_as::<_, Student>(&sql).fetch_all(pool).await?)
+}
+
+/// Yalnızca verilen eğitim-öğretim yılındaki öğrenciler.
+pub async fn list_by_term(pool: &SqlitePool, term: &str) -> AppResult<Vec<Student>> {
+    let sql = format!(
+        "SELECT {SELECT_COLUMNS} FROM students WHERE term = ?1
+         ORDER BY grade COLLATE NOCASE, last_name COLLATE NOCASE, first_name COLLATE NOCASE"
+    );
+    Ok(sqlx::query_as::<_, Student>(&sql)
+        .bind(term)
+        .fetch_all(pool)
+        .await?)
+}
+
+/// Veritabanındaki tüm dönemler, en yeniden eskiye.
+pub async fn list_terms(pool: &SqlitePool) -> AppResult<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT term FROM students WHERE term <> '' ORDER BY term DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(term,)| term).collect())
 }
 
 pub async fn get(pool: &SqlitePool, id: i64) -> AppResult<Student> {
@@ -25,23 +49,32 @@ pub async fn get(pool: &SqlitePool, id: i64) -> AppResult<Student> {
         .await?)
 }
 
-pub async fn list_by_company(pool: &SqlitePool, company_id: i64) -> AppResult<Vec<Student>> {
+/// Bir işletmedeki öğrenciler — dönem bazlı. İşletme kalıcıdır, öğrenciler değil.
+pub async fn list_by_company(
+    pool: &SqlitePool,
+    company_id: i64,
+    term: &str,
+) -> AppResult<Vec<Student>> {
     let sql = format!(
-        "SELECT {SELECT_COLUMNS} FROM students WHERE company_id = ?1
+        "SELECT {SELECT_COLUMNS} FROM students WHERE company_id = ?1 AND term = ?2
          ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE"
     );
     Ok(sqlx::query_as::<_, Student>(&sql)
         .bind(company_id)
+        .bind(term)
         .fetch_all(pool)
         .await?)
 }
 
-/// İşletme başına öğrenci sayısı. Saat tavanı kuralları bu sayıyı kullanır.
-pub async fn count_by_company(pool: &SqlitePool) -> AppResult<Vec<(i64, i64)>> {
+/// İşletme başına öğrenci sayısı — dönem bazlı.
+/// Saat tavanı kuralları bu sayıyı kullanır, bu yüzden dönem filtresi zorunludur:
+/// geçen yılın öğrencileri bu yılın tavanını yükseltmemelidir.
+pub async fn count_by_company(pool: &SqlitePool, term: &str) -> AppResult<Vec<(i64, i64)>> {
     let rows: Vec<(i64, i64)> = sqlx::query_as(
         "SELECT company_id, COUNT(*) FROM students
-         WHERE company_id IS NOT NULL GROUP BY company_id",
+         WHERE company_id IS NOT NULL AND term = ?1 GROUP BY company_id",
     )
+    .bind(term)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -50,8 +83,8 @@ pub async fn count_by_company(pool: &SqlitePool) -> AppResult<Vec<(i64, i64)>> {
 pub async fn create(pool: &SqlitePool, input: &NewStudent) -> AppResult<Student> {
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO students
-            (first_name, last_name, student_no, grade, branch, company_id, submitted_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            (first_name, last_name, student_no, grade, branch, company_id, submitted_at, term)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          RETURNING id",
     )
     .bind(&input.first_name)
@@ -61,6 +94,7 @@ pub async fn create(pool: &SqlitePool, input: &NewStudent) -> AppResult<Student>
     .bind(&input.branch)
     .bind(input.company_id)
     .bind(&input.submitted_at)
+    .bind(&input.term)
     .fetch_one(pool)
     .await?;
 
@@ -71,8 +105,8 @@ pub async fn update(pool: &SqlitePool, id: i64, input: &NewStudent) -> AppResult
     let affected = sqlx::query(
         "UPDATE students SET
             first_name = ?1, last_name = ?2, student_no = ?3, grade = ?4,
-            branch = ?5, company_id = ?6, submitted_at = ?7
-         WHERE id = ?8",
+            branch = ?5, company_id = ?6, submitted_at = ?7, term = ?8
+         WHERE id = ?9",
     )
     .bind(&input.first_name)
     .bind(&input.last_name)
@@ -81,6 +115,7 @@ pub async fn update(pool: &SqlitePool, id: i64, input: &NewStudent) -> AppResult
     .bind(&input.branch)
     .bind(input.company_id)
     .bind(&input.submitted_at)
+    .bind(&input.term)
     .bind(id)
     .execute(pool)
     .await?
@@ -131,7 +166,9 @@ fn non_empty(value: Option<&String>) -> Option<String> {
 /// Numarası olmayan ve her şeyi aynı olan iki farklı öğrenci hâlâ ayırt edilemez;
 /// bu durumda kullanıcının numara girmesi gerekir.
 pub async fn find_duplicate(pool: &SqlitePool, candidate: &NewStudent) -> AppResult<Option<Student>> {
-    let rows = list(pool).await?;
+    // Mükerrer arama AYNI DÖNEM içinde yapılır: geçen yılın aynı öğrencisi
+    // bu yılın kaydını engellememelidir.
+    let rows = list_by_term(pool, &candidate.term).await?;
 
     if let Some(candidate_no) = non_empty(candidate.student_no.as_ref()) {
         return Ok(rows
@@ -197,6 +234,8 @@ mod tests {
         .id
     }
 
+    const TERM: &str = "2026-2027/1";
+
     fn sample(first: &str, last: &str, grade: &str, company_id: Option<i64>) -> NewStudent {
         NewStudent {
             first_name: first.into(),
@@ -206,6 +245,7 @@ mod tests {
             branch: "Elektronik Haberleşme".into(),
             company_id,
             submitted_at: Some("2026-09-11".into()),
+            term: TERM.into(),
         }
     }
 
@@ -235,8 +275,8 @@ mod tests {
         create(&pool, &sample("Ayşe", "Demir", "12/C", Some(a))).await.unwrap();
         create(&pool, &sample("Mehmet", "Kaya", "12/D", Some(b))).await.unwrap();
 
-        assert_eq!(list_by_company(&pool, a).await.unwrap().len(), 2);
-        assert_eq!(list_by_company(&pool, b).await.unwrap().len(), 1);
+        assert_eq!(list_by_company(&pool, a, TERM).await.unwrap().len(), 2);
+        assert_eq!(list_by_company(&pool, b, TERM).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -249,7 +289,7 @@ mod tests {
         create(&pool, &sample("Ayşe", "Demir", "12/C", Some(a))).await.unwrap();
         create(&pool, &sample("Mehmet", "Kaya", "12/D", Some(b))).await.unwrap();
 
-        let counts = count_by_company(&pool).await.unwrap();
+        let counts = count_by_company(&pool, TERM).await.unwrap();
         assert_eq!(counts.iter().find(|(id, _)| *id == a).unwrap().1, 2);
         assert_eq!(counts.iter().find(|(id, _)| *id == b).unwrap().1, 1);
     }
@@ -292,6 +332,68 @@ mod tests {
             get(&pool, created.id).await.unwrap_err(),
             AppError::NotFound(_)
         ));
+    }
+
+    /// Öğrenci listesi döneme bağlıdır; işletmeler kalıcıdır.
+    #[tokio::test]
+    async fn list_by_term_separates_academic_years() {
+        let (_dir, pool) = test_pool().await;
+
+        create(&pool, &sample("Ahmet", "Yilmaz", "12/C", None)).await.unwrap();
+
+        let mut next_year = sample("Ayse", "Demir", "12/C", None);
+        next_year.term = "2027-2028/1".into();
+        create(&pool, &next_year).await.unwrap();
+
+        assert_eq!(list(&pool).await.unwrap().len(), 2, "tüm dönemler");
+        assert_eq!(list_by_term(&pool, TERM).await.unwrap().len(), 1);
+        assert_eq!(list_by_term(&pool, "2027-2028/1").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_terms_returns_distinct_terms_newest_first() {
+        let (_dir, pool) = test_pool().await;
+        create(&pool, &sample("Ahmet", "Yilmaz", "12/C", None)).await.unwrap();
+
+        let mut next_year = sample("Ayse", "Demir", "12/C", None);
+        next_year.term = "2027-2028/1".into();
+        create(&pool, &next_year).await.unwrap();
+
+        assert_eq!(
+            list_terms(&pool).await.unwrap(),
+            vec!["2027-2028/1".to_string(), TERM.to_string()]
+        );
+    }
+
+    /// Saat tavanı öğrenci sayısına bakar; geçen yılın öğrencileri bu yılın
+    /// sayısını şişirmemelidir.
+    #[tokio::test]
+    async fn count_by_company_is_scoped_to_term() {
+        let (_dir, pool) = test_pool().await;
+        let company_id = a_company(&pool, "Test İşletme A").await;
+
+        create(&pool, &sample("Ahmet", "Yilmaz", "12/C", Some(company_id))).await.unwrap();
+
+        let mut last_year = sample("Eski", "Ogrenci", "12/C", Some(company_id));
+        last_year.term = "2025-2026/1".into();
+        create(&pool, &last_year).await.unwrap();
+
+        let counts = count_by_company(&pool, TERM).await.unwrap();
+        assert_eq!(counts.iter().find(|(id, _)| *id == company_id).unwrap().1, 1);
+    }
+
+    /// Aynı öğrenci ertesi yıl tekrar kaydedilebilmeli.
+    #[tokio::test]
+    async fn same_student_in_a_later_term_is_not_a_duplicate() {
+        let (_dir, pool) = test_pool().await;
+        let mut this_year = sample("Ahmet", "Yilmaz", "12/C", None);
+        this_year.student_no = Some("9101".into());
+        create(&pool, &this_year).await.unwrap();
+
+        let mut next_year = this_year.clone();
+        next_year.term = "2027-2028/1".into();
+
+        assert!(find_duplicate(&pool, &next_year).await.unwrap().is_none());
     }
 
     #[tokio::test]

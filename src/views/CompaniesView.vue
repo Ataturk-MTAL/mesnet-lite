@@ -5,6 +5,8 @@
       <Button :label="labels.common.add" icon="pi pi-plus" @click="openCreate" />
     </div>
 
+    <Message severity="secondary" :closable="false">{{ labels.company.termNote }}</Message>
+
     <DataTable
       :value="companies"
       :loading="isLoading"

@@ -1,4 +1,4 @@
-use crate::db::{companies, students};
+use crate::db::{companies, settings, students};
 use crate::domain::models::{NewCompany, NewStudent};
 use crate::error::AppResult;
 use crate::services::csv_import::{parse_jotform_csv, ImportRow};
@@ -123,6 +123,8 @@ pub async fn apply(
     content: &str,
     policies: &BTreeMap<String, DuplicatePolicy>,
 ) -> AppResult<ImportSummary> {
+    // İçe aktarılan öğrenciler aktif eğitim-öğretim yılına damgalanır.
+    let term = settings::get_active_term(pool).await?;
     let parsed = parse_jotform_csv(content)?;
     let grouped = group_rows(parsed.rows);
 
@@ -160,13 +162,17 @@ pub async fn apply(
         for student in group_students {
             // Aynı öğrenci iki kez içe aktarılmaz. Kimlik önce öğrenci
             // numarasından, yoksa ad + soyad + sınıf + dal dörtlüsünden gelir.
-            if students::find_duplicate(pool, &student).await?.is_some() {
+            // Arama aktif dönem içinde yapılır.
+            let mut candidate = student.clone();
+            candidate.term = term.clone();
+            if students::find_duplicate(pool, &candidate).await?.is_some() {
                 summary.students_skipped += 1;
                 continue;
             }
 
             let mut to_create = student;
             to_create.company_id = Some(company_id);
+            to_create.term = term.clone();
             students::create(pool, &to_create).await?;
             summary.students_created += 1;
         }

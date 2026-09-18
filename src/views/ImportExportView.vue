@@ -1,6 +1,11 @@
 <template>
   <div class="page">
-    <h1 class="page-title">{{ labels.nav.importExport }}</h1>
+    <div class="page-header">
+      <h1 class="page-title">{{ labels.nav.importExport }}</h1>
+      <Tag v-if="activeTerm" :value="activeTerm" severity="secondary" icon="pi pi-calendar" />
+    </div>
+
+    <Message severity="info" :closable="false">{{ labels.importCsv.termNote }}</Message>
 
     <Card>
       <template #title>{{ labels.importCsv.title }}</template>
@@ -123,6 +128,7 @@ import { useToast } from 'openvue/usetoast'
 import { importApi } from '../api/importExport'
 import type { DuplicatePolicy, ImportPreview, ImportSummary } from '../api/importExport'
 import { labels } from '../i18n/labels'
+import { activeTerm } from '../composables/useTerm'
 
 const toast = useToast()
 
@@ -193,6 +199,7 @@ async function applyImport(): Promise<void> {
 
 <style scoped>
 .page { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+.page-header { display: flex; align-items: center; gap: 0.75rem; }
 .page-title { font-size: 1.5rem; font-weight: 600; margin: 0; }
 .file-row { display: flex; align-items: center; gap: 1rem; }
 .file-input { display: none; }
