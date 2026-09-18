@@ -12,6 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AppSidebar: typeof import('./src/components/layout/AppSidebar.vue')['default']
+    AutoComplete: typeof import('openvue/autocomplete')['default']
     Button: typeof import('openvue/button')['default']
     Card: typeof import('openvue/card')['default']
     Checkbox: typeof import('openvue/checkbox')['default']
@@ -25,10 +26,13 @@ declare module 'vue' {
     InputText: typeof import('openvue/inputtext')['default']
     LocationPickerMap: typeof import('./src/components/map/LocationPickerMap.vue')['default']
     Message: typeof import('openvue/message')['default']
+    ProgressBar: typeof import('openvue/progressbar')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     Select: typeof import('openvue/select')['default']
+    StudentFormDialog: typeof import('./src/components/student/StudentFormDialog.vue')['default']
     Tag: typeof import('openvue/tag')['default']
+    TeacherFormDialog: typeof import('./src/components/teacher/TeacherFormDialog.vue')['default']
     Textarea: typeof import('openvue/textarea')['default']
     Toast: typeof import('openvue/toast')['default']
   }

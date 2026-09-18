@@ -70,6 +70,10 @@ export const labels = {
     branch: 'Dal',
     company: 'İşletme',
     submittedAt: 'Başvuru Tarihi',
+    noCompany: 'İşletme atanmamış',
+    empty: 'Kayıtlı öğrenci yok.',
+    searchPlaceholder: 'Ad, soyad, numara, sınıf veya dal ara',
+    studentNoHint: 'Numara öğrencinin kimliğidir; aynı sınıfta aynı ada sahip iki öğrenciyi ayırır.',
   },
   teacher: {
     title: 'Öğretmenler',
@@ -86,6 +90,13 @@ export const labels = {
     chiefHours: 'Şeflik Saati',
     capacity: 'Koordinatörlük Kapasitesi',
     isActive: 'Aktif',
+    empty: 'Kayıtlı öğretmen yok.',
+    branchesHint: 'Öğretmenin koordinatörlük yapabileceği dallar. Yazıp Enter ile ekleyin.',
+    capacityWarning:
+      'Azami ek ders, şeflik saatinden küçük olamaz. Şeflik saati bu tavanın içinden düşer (MADDE 6/4).',
+    totalCapacity: 'Toplam koordinatörlük kapasitesi',
+    activeTeachers: 'aktif öğretmen',
+    deleteConfirm: 'Bu öğretmeni silmek istediğinize emin misiniz? Atamaları da silinir.',
   },
   chiefType: {
     none: 'Şef Değil',
@@ -93,6 +104,18 @@ export const labels = {
     department: 'Bölüm Şefi',
   },
   employmentType: { tenured: 'Kadrolu', contracted: 'Sözleşmeli' },
+  dashboard: {
+    activeTeachers: 'Aktif Öğretmen',
+    attentionTitle: 'Dikkat Gerektirenler',
+    allClear: 'Eksik kayıt yok.',
+    companiesWithoutLocation: 'işletmenin harita konumu yok',
+    studentsWithoutCompany: 'öğrenci hiçbir işletmeye bağlı değil',
+    companiesWithoutStudents: 'işletmede öğrenci yok',
+    gettingStarted: 'Başlarken',
+    step1: '1. İçe/Dışa Aktarım ekranından JotForm CSV dosyanızı yükleyin.',
+    step2: '2. Ayarlar ekranından okul konumunu haritadan işaretleyin.',
+    step3: '3. Öğretmenler ekranından koordinatör öğretmenleri ve şeflik durumlarını girin.',
+  },
   settings: {
     schoolSection: 'Okul Bilgileri',
     schoolName: 'Okul Adı',

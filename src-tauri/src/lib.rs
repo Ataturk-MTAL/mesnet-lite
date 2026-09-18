@@ -34,6 +34,7 @@ pub fn run() {
             commands::student_commands::update_student,
             commands::student_commands::delete_student,
             commands::teacher_commands::list_teachers,
+            commands::teacher_commands::list_teachers_with_capacity,
             commands::teacher_commands::create_teacher,
             commands::teacher_commands::update_teacher,
             commands::teacher_commands::delete_teacher,
@@ -42,6 +43,7 @@ pub fn run() {
             commands::settings_commands::set_school_location,
             commands::import_commands::preview_csv_import,
             commands::import_commands::apply_csv_import,
+            commands::dashboard_commands::get_dashboard_stats,
         ])
         .run(tauri::generate_context!())
         .expect("Uygulama başlatılamadı");
