@@ -111,7 +111,8 @@ npm install --save-dev @openvue/auto-import-resolver unplugin-vue-components @ty
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import Components from 'unplugin-vue-components/vite'
-import { PrimeVueResolver } from '@primevue/auto-import-resolver'
+// Fork export adini korumus: paket @openvue, sembol PrimeVueResolver.
+import { PrimeVueResolver } from '@openvue/auto-import-resolver'
 
 // Tauri geliştirme sunucusu sabit port bekler
 export default defineConfig({
@@ -130,10 +131,11 @@ export default defineConfig({
 ```typescript
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import PrimeVue from 'primevue/config'
-import ToastService from 'primevue/toastservice'
-import ConfirmationService from 'primevue/confirmationservice'
-import Aura from '@primeuix/themes/aura'
+import OpenVue from 'openvue/config'
+import ToastService from 'openvue/toastservice'
+import ConfirmationService from 'openvue/confirmationservice'
+import Aura from '@openvue/themes/aura'
+import 'primeicons/primeicons.css'
 import App from './App.vue'
 import router from './router'
 import 'leaflet/dist/leaflet.css'
@@ -141,21 +143,21 @@ import 'leaflet/dist/leaflet.css'
 const app = createApp(App)
 app.use(createPinia())
 app.use(router)
-// PrimeVue v5 kök font boyutunu 16px varsayar; standart preset kullanılıyor
-app.use(PrimeVue, { theme: { preset: Aura } })
+// OpenVue, PrimeVue 4.5.5'in MIT lisanslı devamıdır; lisans anahtarı gerektirmez.
+app.use(OpenVue, { theme: { preset: Aura } })
 app.use(ToastService)
 app.use(ConfirmationService)
 app.mount('#app')
 ```
 
-- [x] **Step 5: `index.html` kök font boyutunu 16px'e sabitle**
+- [x] **Step 5: `index.html` kök font boyutunu 14px'e sabitle**
 
 `<head>` içine ekle:
 
 ```html
 <style>
-  /* PrimeVue v5 16px kök font varsayar */
-  html { font-size: 16px; }
+  /* OpenVue, PrimeVue 4.5.5 tabanlıdır ve 14px kök font varsayar. */
+  html { font-size: 14px; }
   body { margin: 0; }
 </style>
 ```
@@ -232,7 +234,7 @@ Beklenen: Masaüstü penceresi açılır, hata yok. Pencereyi kapat.
 
 ```bash
 git add -A
-git commit -m "feat: Tauri 2 + Vue 3 + PrimeVue v5 iskeleti ve Türkçe etiket sözlüğü"
+git commit -m "feat: Tauri 2 + Vue 3 + OpenVue iskeleti ve Türkçe etiket sözlüğü"
 ```
 
 ---
@@ -261,9 +263,9 @@ import { labels } from '../../i18n/labels'
 
 describe('AppSidebar', () => {
   it('tüm ana menü başlıklarını Türkçe olarak gösterir', () => {
-    // `RouterLink: true` stub'i slot icerigini BASMAZ; SidebarMenuButton
-    // as-child ile metni RouterLink'e devrettigi icin menu etiketleri kaybolur.
-    // Stub'a template vermek zorunludur.
+    // `RouterLink: true` stub'i slot icerigini BASMAZ; menu etiketleri kaybolur.
+    // Ayrica `to` prop olarak bildirildiginde oznitelik olarak dusmez, bu yuzden
+    // data-to ile yansitilir.
     const wrapper = mount(AppSidebar, {
       global: {
         stubs: {
@@ -334,87 +336,21 @@ Diğer beş dosya birebir aynı yapıda; yalnızca başlık ifadesi değişir:
 
 - [x] **Step 5: `AppSidebar.vue` bileşenini yaz**
 
-```vue
-<template>
-  <SidebarLayout>
-    <SidebarBackdrop v-if="isNarrow && open" />
+OpenVue (PrimeVue 4.5.5 tabanlı) v5'in bileşik `Sidebar` ailesini içermez, bu yüzden
+navigasyon elle kurulur:
 
-    <Sidebar
-      id="app-sidebar"
-      variant="sidebar"
-      side="left"
-      :collapsible="isNarrow ? 'offcanvas' : 'icon'"
-      :overlay="isNarrow"
-      width="16rem"
-      iconWidth="3rem"
-      v-model:open="open"
-    >
-      <SidebarAside>
-        <SidebarPanel>
-          <SidebarHeader>
-            <span class="font-semibold text-lg px-2">{{ labels.app.title }}</span>
-          </SidebarHeader>
+- Geniş ekranda (`>= 900px`) kalıcı bir `<aside class="sidebar">`; `isCollapsed` durumu
+  genişliği `16rem` ↔ `3.5rem` arasında değiştirir ve etiketleri gizler.
+- Dar ekranda aynı menü OpenVue `Drawer` bileşeni içinde `position="left"` ile açılır.
+- Üst çubuktaki `pi pi-bars` `Button`'ı geniş ekranda daraltır, dar ekranda Drawer'ı açar.
+- Menü öğeleri `RouterLink`; aktif rota `.router-link-active` ile vurgulanır.
+- Renkler OpenVue tasarım belirteçlerinden okunur (`--p-content-border-color`,
+  `--p-content-hover-background`, `--p-highlight-background`, `--p-text-muted-color`);
+  sabit renk yazılmaz, böylece tema değişince kenar çubuğu da değişir.
+- İkonlar `primeicons` CSS sınıflarıdır: `pi pi-building`, `pi pi-users`, `pi pi-id-card`,
+  `pi pi-cog`, `pi pi-file-import`.
 
-          <SidebarContent>
-            <SidebarGroup v-for="group in navGroups" :key="group.label">
-              <SidebarGroupLabel>{{ group.label }}</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  <SidebarMenuItem v-for="item in group.items" :key="item.to">
-                    <SidebarMenuButton as-child>
-                      <RouterLink :to="item.to">{{ item.label }}</RouterLink>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          </SidebarContent>
-        </SidebarPanel>
-      </SidebarAside>
-    </Sidebar>
-
-    <SidebarMain>
-      <header class="flex h-12 items-center gap-2 border-b px-4">
-        <SidebarTrigger target="app-sidebar" severity="secondary" :text="true" size="small" />
-      </header>
-      <RouterView />
-    </SidebarMain>
-  </SidebarLayout>
-</template>
-
-<script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { labels } from '../../i18n/labels'
-
-const open = ref(true)
-const isNarrow = ref(false)
-
-// Dar ekranda sidebar offcanvas + overlay moduna geçer
-const NARROW_BREAKPOINT_PX = 900
-const updateWidth = () => { isNarrow.value = window.innerWidth < NARROW_BREAKPOINT_PX }
-onMounted(() => { updateWidth(); window.addEventListener('resize', updateWidth) })
-onUnmounted(() => window.removeEventListener('resize', updateWidth))
-
-// Faz 2 (Planlama) ve Faz 3 (Raporlar) grupları ilgili görünümler eklendiğinde buraya girer.
-const navGroups = [
-  {
-    label: labels.nav.groupRecords,
-    items: [
-      { to: '/companies', label: labels.nav.companies },
-      { to: '/students', label: labels.nav.students },
-      { to: '/teachers', label: labels.nav.teachers },
-    ],
-  },
-  {
-    label: labels.nav.groupAdmin,
-    items: [
-      { to: '/settings', label: labels.nav.settings },
-      { to: '/import-export', label: labels.nav.importExport },
-    ],
-  },
-]
-</script>
-```
+Uygulanan bileşen `src/components/layout/AppSidebar.vue` dosyasında birebir mevcuttur.
 
 - [x] **Step 6: `src/App.vue` içeriğini değiştir**
 
