@@ -139,7 +139,7 @@ Ham değer `one_way_distance_km` olarak saklanır; iki katı **saklanmaz**, kura
 |---|---|---|
 | Kabuk | Tauri 2 | Masaüstü, Rust backend, küçük ikili |
 | Backend | Rust | Hesap mantığı derleme zamanı güvenceli |
-| Veritabanı | SQLite + `sqlx` | Gömülü, tek dosya, `sqlx::migrate!` ile şema sürümleme, derleme zamanı doğrulanan sorgular |
+| Veritabanı | SQLite + `sqlx` | Gömülü, tek dosya, `sqlx::migrate!` ile şema sürümleme |
 | Frontend | Vue 3 + TypeScript + Vite | |
 | UI kütüphanesi | **PrimeVue v5** + `@primeuix/themes/aura` | Navigasyon için v5'in `Sidebar` bileşik bileşeni gerekiyor |
 | Harita | Leaflet + OpenStreetMap raster tile | API anahtarı gerektirmez |
@@ -153,6 +153,8 @@ Ham değer `one_way_distance_km` olarak saklanır; iki katı **saklanmaz**, kura
 - **`Scheduler` PRO bileşenidir.** Öğretmen müsaitlik ızgarası ve atama yerleşimi PRO bileşen kullanmadan, kendi `AvailabilityGrid.vue` bileşenimizle yapılacaktır.
 - v5 kök font boyutunu **16px** varsayar (v4 14px varsayıyordu). Yeni proje olduğumuz için standart preset kullanılır, `-compat` varyantı gerekmez.
 - `PanelMenu` v5'te kullanımdan kaldırılmıştır; çok seviyeli navigasyon `Sidebar` bileşik bileşenleriyle kurulur.
+
+**Sorgu stili:** `sqlx::query!` derleme zamanı makroları **kullanılmaz**; bunlar derleme sırasında canlı bir veritabanı veya `cargo sqlx prepare` ile üretilmiş önbellek gerektirir ve kurulum sürtünmesini artırır. Bunun yerine `sqlx::query_as::<_, T>()` çalışma zamanı sorguları ve `#[derive(sqlx::FromRow)]` kullanılır. Sorgu doğruluğu entegrasyon testleriyle güvence altına alınır (§16).
 
 ### 5.2 Veritabanı konumu
 
@@ -175,7 +177,7 @@ Gün numaralandırması: `1 = Pazartesi … 5 = Cuma`. Saatler tam saat tamsayı
 | `address_text` | TEXT NOT NULL | CSV `Address:` satırı |
 | `latitude`, `longitude` | REAL NULL | |
 | `geocode_status` | TEXT | `pending` / `resolved` / `failed` / `manual` |
-| `one_way_distance_km` | REAL NULL | CSV `Distance:` satırı — **tek yön**; koordinat varsa haversine ile yeniden hesaplanır |
+| `one_way_distance_km` | REAL NULL | CSV `Distance:` satırı — **tek yön yol mesafesi**; yalnızca CSV'den veya elle girilir |
 | `notes` | TEXT | |
 | `created_at`, `updated_at` | TEXT | ISO-8601 |
 
@@ -408,6 +410,8 @@ Saf fonksiyon. Girdi: işletmeler, öğretmenler, müsaitlikler, sınıf günler
 1. **Uygunluk filtresi** — işletmenin dalı öğretmenin `branches` listesinde mi? Değilse "yakın alan" ikinci öncelik olarak değerlendirilir (OÖKY MADDE 88).
 2. **Sıralama** — işletmeler öğrenci sayısına göre azalan, eşitlikte okula uzaklığa göre azalan.
 3. **Yerleştirme** — uygun öğretmenler arasından, kalan kapasitesi `max_hours`'u karşılayan ve mevcut işletmelerinin coğrafi merkezine **en yakın** olanı seç. Bu, MADDE 88'in *"işletmeler arası uzaklık"* kıstasının karşılığıdır ve bir öğretmenin işletmelerinin şehre dağılmasını engeller.
+
+   Buradaki yakınlık yalnızca bir **sıralama sinyalidir**, resmî mesafe değildir: koordinatlar arası düz çizgi farkı, hangi öğretmenin adayı olduğunu seçmek için kullanılır. Saat tavanına giren tek mesafe `one_way_distance_km × 2`'dir (§7.2) ve o değer bu adımdan etkilenmez.
 4. **Dilim yerleştirme** — `eligible_slots` içinden `awarded_hours` kadar dilim seç; aynı güne bitişik saatleri tercih et (ziyaret verimliliği), günlük 8 saati aşma.
 5. **Yerel iyileştirme** — iki öğretmen arasında işletme takası toplam yolu kısaltıyor ve her iki tarafın kapasitesini/dilimlerini bozmuyorsa uygula. Sabit tur sayısında durur.
 
@@ -444,7 +448,9 @@ Saf fonksiyon. Girdi: işletmeler, öğretmenler, müsaitlikler, sınıf günler
 - Sorgulanan metin: CSV'nin `Address:` satırı, `Result:` satırı değil
 - **Hız sınırı: saniyede en fazla 1 istek.** OSM kullanım koşulları gereği zorunludur; ayrıca tanımlayıcı bir `User-Agent` başlığı gönderilir. Uyulmazsa IP engellenir. 28 işletme yaklaşık 30 saniye sürer.
 - Başarısız sonuçlar `geocode_status = failed` işaretlenir; kullanıcı İşletmeler ekranında haritadan işaretleyerek düzeltir, durum `manual` olur.
-- Koordinat varsa `one_way_distance_km` okul konumundan haversine ile yeniden hesaplanır; yoksa CSV'den gelen değer korunur. Haversine **kuş uçuşu tek yön** mesafe verir; gidiş-dönüşe çevirme kural sorgusunda yapılır (§4), burada değil.
+- **Coğrafi kodlama mesafeyi hesaplamaz.** `one_way_distance_km` yalnızca CSV'den gelir veya kullanıcı tarafından elle girilir/düzeltilir. Koordinat bulunması bu değeri **değiştirmez**.
+
+  Gerekçe: CSV'deki `Distance:` değeri formun ürettiği **araç yol mesafesidir**. Koordinatlardan hesaplanabilecek tek şey kuş uçuşu (haversine) mesafedir ve bu, şehir içinde gerçek yol mesafesinden belirgin biçimde kısadır. Gerçek veriyi tahminle ezmek saat tavanını yanlış aralığa düşürür. Koordinatlar yalnızca **harita üzerinde gösterim** ve öneri motorunun kümeleme sinyali için kullanılır (§9).
 
 ---
 
@@ -648,5 +654,5 @@ Toplam talep: `19 × 8 + 4 × 6 + 5 × 4 = 196 saat`. Öğretmen başına tavan 
 - Çok kullanıcılı erişim, sunucu, kimlik doğrulama — tek kullanıcılı masaüstü uygulaması
 - MEBBİS / e-Okul entegrasyonu — veri CSV ile girer, Excel ile çıkar
 - Devamsızlık, beceri sınavı, sözleşme takibi
-- Rota optimizasyonu (gerçek yol mesafesi) — kuş uçuşu mesafe yeterli
+- Rota/mesafe hesaplama servisi (OSRM, Google Directions vb.) — yol mesafesi CSV'den gelir, gerekirse elle düzeltilir
 - Çevrimdışı harita tile önbelleği
