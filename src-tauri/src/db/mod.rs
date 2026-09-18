@@ -4,7 +4,10 @@ use sqlx::SqlitePool;
 use std::path::Path;
 
 pub mod assignments;
+pub mod availability;
+pub mod class_days;
 pub mod companies;
+pub mod hour_rules;
 pub mod settings;
 pub mod students;
 pub mod teachers;
