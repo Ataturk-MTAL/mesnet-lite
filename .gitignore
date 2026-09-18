@@ -6,3 +6,7 @@
 *.db
 *.db-shm
 *.db-wal
+
+# Tauri / Node
+/dist/
+/src-tauri/gen/
