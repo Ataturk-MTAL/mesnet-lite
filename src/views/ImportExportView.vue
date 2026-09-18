@@ -109,6 +109,21 @@
       </template>
     </Card>
 
+    <Card>
+      <template #title>{{ labels.export.title }}</template>
+      <template #content>
+        <Button
+          :label="labels.export.button"
+          icon="pi pi-file-excel"
+          severity="secondary"
+          outlined
+          :loading="isExporting"
+          @click="exportExcel"
+        />
+        <small class="hint">{{ labels.export.note }}</small>
+      </template>
+    </Card>
+
     <Message v-if="summary" severity="success" :closable="false">
       {{ summary.companiesCreated }} {{ labels.importCsv.summaryCompanies }}
       {{ labels.importCsv.resultCreated }},
@@ -129,6 +144,7 @@ import { importApi } from '../api/importExport'
 import type { DuplicatePolicy, ImportPreview, ImportSummary } from '../api/importExport'
 import { labels } from '../i18n/labels'
 import { activeTerm } from '../composables/useTerm'
+import { filesApi } from '../api/files'
 
 const toast = useToast()
 
@@ -138,6 +154,20 @@ const fileContent = ref('')
 const preview = ref<ImportPreview | null>(null)
 const summary = ref<ImportSummary | null>(null)
 const isApplying = ref(false)
+const isExporting = ref(false)
+
+async function exportExcel(): Promise<void> {
+  isExporting.value = true
+  try {
+    const name = `MESNET-${activeTerm.value.replace('/', '-')}.xlsx`
+    const path = await filesApi.exportWorkbook(name)
+    toast.add({ severity: 'success', summary: labels.export.saved, detail: path, life: 8000 })
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isExporting.value = false
+  }
+}
 
 // Yalnızca mevcut kayıtla çakışan gruplar için anlamlıdır; belirtilmeyen
 // çakışmalar Rust tarafında 'merge' sayılır.

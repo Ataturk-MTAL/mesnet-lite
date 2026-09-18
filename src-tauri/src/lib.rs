@@ -46,6 +46,7 @@ pub fn run() {
             commands::import_commands::apply_csv_import,
             commands::dashboard_commands::get_dashboard_stats,
             commands::export_commands::export_workbook,
+            commands::file_commands::save_to_downloads,
             commands::geocoding_commands::geocode_pending_companies,
             commands::hours_commands::get_hours_board,
             commands::hours_commands::save_company_hours,

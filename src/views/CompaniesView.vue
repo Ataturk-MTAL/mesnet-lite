@@ -2,7 +2,18 @@
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">{{ labels.company.title }}</h1>
-      <Button :label="labels.common.add" icon="pi pi-plus" @click="openCreate" />
+      <div class="header-actions">
+        <Button
+          :label="labels.geocoding.button"
+          icon="pi pi-map"
+          severity="secondary"
+          outlined
+          :loading="isGeocoding"
+          v-tooltip.bottom="labels.geocoding.note"
+          @click="runGeocoding"
+        />
+        <Button :label="labels.common.add" icon="pi pi-plus" @click="openCreate" />
+      </div>
     </div>
 
     <Message severity="secondary" :closable="false">{{ labels.company.termNote }}</Message>
@@ -114,6 +125,7 @@ import CompanyFormDialog from '../components/company/CompanyFormDialog.vue'
 import LocationPickerMap from '../components/map/LocationPickerMap.vue'
 import { companiesApi } from '../api/companies'
 import { settingsApi } from '../api/settings'
+import { filesApi } from '../api/files'
 import { labels } from '../i18n/labels'
 import { roundTripDistanceKm } from '../types/models'
 import type { Company, GeocodeStatus, LatLng, NewCompany } from '../types/models'
@@ -123,6 +135,37 @@ const confirm = useConfirm()
 
 const companies = ref<Company[]>([])
 const isLoading = ref(false)
+const isGeocoding = ref(false)
+
+/**
+ * Nominatim kullanım koşulları gereği saniyede bir istek gönderilir;
+ * 28 işletme yaklaşık 30 saniye sürer.
+ */
+async function runGeocoding(): Promise<void> {
+  isGeocoding.value = true
+  try {
+    const summary = await filesApi.geocodePending()
+    const detail = [
+      `${summary.resolved} ${labels.geocoding.resolved}`,
+      `${summary.failed} ${labels.geocoding.failed}`,
+      `${summary.skipped} ${labels.geocoding.skipped}`,
+    ].join(' · ')
+    toast.add({
+      severity: summary.failed > 0 ? 'warn' : 'success',
+      summary: labels.geocoding.done,
+      detail: summary.failed > 0 ? `${detail}. ${labels.geocoding.failedNote}` : detail,
+      life: 10000,
+    })
+    for (const warning of summary.warnings) {
+      toast.add({ severity: 'warn', summary: labels.common.error, detail: warning, life: 8000 })
+    }
+    await load()
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isGeocoding.value = false
+  }
+}
 const isDialogOpen = ref(false)
 const selected = ref<Company | null>(null)
 const filters = ref({ global: { value: null as string | null, matchMode: 'contains' } })
@@ -252,7 +295,8 @@ onMounted(() => {
 
 <style scoped>
 .page { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-.page-header { display: flex; align-items: center; justify-content: space-between; }
+.page-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.header-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .page-title { font-size: 1.5rem; font-weight: 600; margin: 0; }
 .row-actions { display: flex; gap: 0.25rem; }
 </style>
