@@ -50,6 +50,10 @@ export const labels = {
     distanceHint: 'Okuldan işletmeye TEK YÖN yol mesafesi. Saat tavanı bunun iki katına göre hesaplanır.',
     empty: 'Kayıtlı işletme yok.',
     searchPlaceholder: 'İşletme adı veya adres ara',
+    setLocation: 'Konum',
+    locationDialogTitle: 'İşletme Konumu',
+    locationSaved: 'Konum kaydedildi',
+    locationRequired: 'Önce haritadan bir konum seçin.',
   },
   geocodeStatus: {
     pending: 'Bekliyor',

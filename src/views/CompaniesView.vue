@@ -54,6 +54,14 @@
         <template #body="{ data }">
           <div class="row-actions">
             <Button
+              :label="labels.company.setLocation"
+              icon="pi pi-map-marker"
+              severity="secondary"
+              text
+              size="small"
+              @click="openLocation(data)"
+            />
+            <Button
               :label="labels.common.edit"
               severity="secondary"
               text
@@ -73,6 +81,21 @@
     </DataTable>
 
     <CompanyFormDialog v-model:visible="isDialogOpen" :company="selected" @save="handleSave" />
+
+    <Dialog
+      v-model:visible="isLocationDialogOpen"
+      modal
+      :header="locationTarget ? locationTarget.name : labels.company.locationDialogTitle"
+      :style="{ width: '46rem' }"
+    >
+      <LocationPickerMap v-model="editedLocation" :fallback-center="schoolCenter ?? undefined" />
+      <template #footer>
+        <Button :label="labels.common.cancel" severity="secondary" text
+                @click="isLocationDialogOpen = false" />
+        <Button :label="labels.common.save" :disabled="editedLocation === null"
+                @click="saveLocation" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -81,10 +104,12 @@ import { onMounted, ref } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import CompanyFormDialog from '../components/company/CompanyFormDialog.vue'
+import LocationPickerMap from '../components/map/LocationPickerMap.vue'
 import { companiesApi } from '../api/companies'
+import { settingsApi } from '../api/settings'
 import { labels } from '../i18n/labels'
 import { roundTripDistanceKm } from '../types/models'
-import type { Company, GeocodeStatus, NewCompany } from '../types/models'
+import type { Company, GeocodeStatus, LatLng, NewCompany } from '../types/models'
 
 const toast = useToast()
 const confirm = useConfirm()
@@ -94,6 +119,12 @@ const isLoading = ref(false)
 const isDialogOpen = ref(false)
 const selected = ref<Company | null>(null)
 const filters = ref({ global: { value: null as string | null, matchMode: 'contains' } })
+
+const isLocationDialogOpen = ref(false)
+const locationTarget = ref<Company | null>(null)
+const editedLocation = ref<LatLng | null>(null)
+// Konumu olmayan işletme için harita okul konumuna odaklanır.
+const schoolCenter = ref<LatLng | null>(null)
 
 function formatKm(value: number | null): string {
   return value === null ? '—' : value.toFixed(1)
@@ -168,7 +199,48 @@ function confirmRemove(company: Company): void {
   })
 }
 
-onMounted(load)
+function openLocation(company: Company): void {
+  locationTarget.value = company
+  editedLocation.value =
+    company.latitude !== null && company.longitude !== null
+      ? { latitude: company.latitude, longitude: company.longitude }
+      : null
+  isLocationDialogOpen.value = true
+}
+
+async function saveLocation(): Promise<void> {
+  const target = locationTarget.value
+  const point = editedLocation.value
+  if (!target || !point) return
+
+  try {
+    await companiesApi.setLocation(target.id, point.latitude, point.longitude)
+    toast.add({ severity: 'success', summary: labels.company.locationSaved, life: 2500 })
+    isLocationDialogOpen.value = false
+    await load()
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
+async function loadSchoolCenter(): Promise<void> {
+  try {
+    const settings = await settingsApi.get()
+    const latitude = Number.parseFloat(settings.school_latitude ?? '')
+    const longitude = Number.parseFloat(settings.school_longitude ?? '')
+    if (!Number.isNaN(latitude) && !Number.isNaN(longitude)) {
+      schoolCenter.value = { latitude, longitude }
+    }
+  } catch {
+    // Okul konumu okunamazsa harita varsayılan merkeze düşer; bu bir hata değil.
+    schoolCenter.value = null
+  }
+}
+
+onMounted(() => {
+  void load()
+  void loadSchoolCenter()
+})
 </script>
 
 <style scoped>

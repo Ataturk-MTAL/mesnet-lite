@@ -67,6 +67,7 @@ const mapEl = ref<HTMLDivElement | null>(null)
 // proxy'lemesine ve Leaflet'in iç referans karşılaştırmalarının bozulmasına yol
 // açar; bu yüzden shallowRef kullanılır.
 const map = shallowRef<L.Map | null>(null)
+let resizeObserver: ResizeObserver | null = null
 const marker = shallowRef<L.Marker | null>(null)
 
 function currentCenter(): L.LatLngExpression {
@@ -134,9 +135,17 @@ onMounted(() => {
   if (props.modelValue) {
     placeMarker(props.modelValue)
   }
+
+  // Harita, boyutu henüz kesinleşmemiş bir kapsayıcıda (Card içeriği, açılan
+  // diyalog) kurulduğunda kendi ölçüsünü yanlış hesaplar ve karoların bir kısmı
+  // boş kalır. Düzen oturduktan sonra yeniden ölçtürmek gerekir.
+  resizeObserver = new ResizeObserver(() => created.invalidateSize())
+  resizeObserver.observe(mapEl.value)
 })
 
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
   removeMarker()
   map.value?.remove()
   map.value = null
