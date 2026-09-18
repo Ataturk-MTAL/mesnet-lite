@@ -1,6 +1,6 @@
 use crate::domain::scheduling::{days_over_daily_cap, Slot, MAX_HOURS_PER_DAY};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// OÖKY MADDE 88: "Aynı işletmede aynı alanda mesleki eğitim gören
 /// 15 öğrenciye kadar bir koordinatör öğretmen görevlendirilir"
@@ -22,7 +22,7 @@ pub enum ViolationCode {
     DailyCapExceeded,
     SlotNotAvailable,
     SlotNotWorkplaceDay,
-    UnplacedHours,
+    NotPlaced,
     TooManyStudentsPerCoordinator,
     PoolExceeded,
     FieldMismatch,
@@ -40,7 +40,7 @@ impl ViolationCode {
             | ViolationCode::DailyCapExceeded
             | ViolationCode::SlotNotAvailable
             | ViolationCode::SlotNotWorkplaceDay
-            | ViolationCode::UnplacedHours
+            | ViolationCode::NotPlaced
             | ViolationCode::TooManyStudentsPerCoordinator => Severity::Error,
 
             ViolationCode::PoolExceeded
@@ -117,7 +117,8 @@ pub struct AssignmentCheck {
     /// Kural tablosundan gelen tavan; kural bulunamadıysa None.
     pub max_hours: Option<i64>,
     pub is_forced: bool,
-    pub slots: BTreeSet<Slot>,
+    /// Ziyaretin yeri — TEK bir hücre. Atanmamışsa None.
+    pub visit_slot: Option<Slot>,
     /// Öğretmenin bu dönemdeki boş saatleri.
     pub teacher_free_slots: BTreeSet<Slot>,
     /// İşletmedeki öğrencilerin sınıflarının işletme günleri birleşimi.
@@ -161,61 +162,45 @@ pub fn check_assignment(check: &AssignmentCheck) -> Vec<Violation> {
         Some(_) => {}
     }
 
-    if check.slots.len() as i64 != check.awarded_hours {
-        violations.push(
+    match check.visit_slot {
+        None => violations.push(
             Violation::new(
-                ViolationCode::UnplacedHours,
+                ViolationCode::NotPlaced,
                 forced,
-                format!(
-                    "{}: {} saat takdir edildi ama {} dilim yerleştirildi",
-                    check.company_name,
-                    check.awarded_hours,
-                    check.slots.len()
-                ),
+                format!("{}: ziyaret günü ve saati belirlenmemiş", check.company_name),
             )
             .for_company(check.company_id),
-        );
-    }
+        ),
+        Some(slot) => {
+            if !check.teacher_free_slots.contains(&slot) {
+                violations.push(
+                    Violation::new(
+                        ViolationCode::SlotNotAvailable,
+                        forced,
+                        format!(
+                            "{}: seçilen saat öğretmenin boş saatleri arasında değil",
+                            check.company_name
+                        ),
+                    )
+                    .for_company(check.company_id)
+                    .for_teacher(check.teacher_id),
+                );
+            }
 
-    let unavailable: Vec<&Slot> = check
-        .slots
-        .iter()
-        .filter(|slot| !check.teacher_free_slots.contains(slot))
-        .collect();
-    if !unavailable.is_empty() {
-        violations.push(
-            Violation::new(
-                ViolationCode::SlotNotAvailable,
-                forced,
-                format!(
-                    "{}: {} dilim öğretmenin boş saatleri dışında",
-                    check.company_name,
-                    unavailable.len()
-                ),
-            )
-            .for_company(check.company_id)
-            .for_teacher(check.teacher_id),
-        );
-    }
-
-    let wrong_day: Vec<&Slot> = check
-        .slots
-        .iter()
-        .filter(|slot| !check.workplace_days.contains(&slot.day_of_week))
-        .collect();
-    if !wrong_day.is_empty() {
-        violations.push(
-            Violation::new(
-                ViolationCode::SlotNotWorkplaceDay,
-                forced,
-                format!(
-                    "{}: {} dilim öğrencilerin işletmede bulunmadığı güne denk geliyor",
-                    check.company_name,
-                    wrong_day.len()
-                ),
-            )
-            .for_company(check.company_id),
-        );
+            if !check.workplace_days.contains(&slot.day_of_week) {
+                violations.push(
+                    Violation::new(
+                        ViolationCode::SlotNotWorkplaceDay,
+                        forced,
+                        format!(
+                            "{}: seçilen gün öğrencilerin işletmede bulunmadığı bir gün",
+                            check.company_name
+                        ),
+                    )
+                    .for_company(check.company_id),
+                );
+            }
+        }
     }
 
     if check.student_count > MAX_STUDENTS_PER_COORDINATOR {
@@ -282,7 +267,7 @@ pub fn check_teacher_totals(
     teacher_name: &str,
     capacity: i64,
     awarded_total: i64,
-    all_slots: &BTreeSet<Slot>,
+    hours_by_day: &std::collections::BTreeMap<i64, i64>,
     is_forced: bool,
 ) -> Vec<Violation> {
     let mut violations = Vec::new();
@@ -300,7 +285,8 @@ pub fn check_teacher_totals(
         );
     }
 
-    for day in days_over_daily_cap(all_slots) {
+    // Günlük sınır SAAT toplamına bakar; bir hücrede 8 saatlik işletme durabilir.
+    for day in days_over_daily_cap(hours_by_day) {
         violations.push(
             Violation::new(
                 ViolationCode::DailyCapExceeded,
@@ -308,7 +294,7 @@ pub fn check_teacher_totals(
                 format!(
                     "{teacher_name}: {}. günde {} saat, günlük sınır {MAX_HOURS_PER_DAY}",
                     day,
-                    all_slots.iter().filter(|s| s.day_of_week == day).count()
+                    hours_by_day.get(&day).copied().unwrap_or(0)
                 ),
             )
             .for_teacher(teacher_id),
@@ -347,7 +333,7 @@ mod tests {
             awarded_hours: 2,
             max_hours: Some(8),
             is_forced: false,
-            slots: slots(&[(1, 9), (1, 10)]),
+            visit_slot: Some(Slot::new(1, 9)),
             teacher_free_slots: slots(&[(1, 9), (1, 10), (1, 11)]),
             workplace_days: BTreeSet::from([1]),
             student_count: 1,
@@ -370,7 +356,6 @@ mod tests {
     fn awarded_above_max_is_flagged() {
         let mut check = valid_check();
         check.awarded_hours = 9;
-        check.slots = slots(&[(1, 9), (1, 10)]);
 
         let found = codes(&check_assignment(&check));
         assert!(found.contains(&ViolationCode::AwardedExceedsMax));
@@ -384,18 +369,29 @@ mod tests {
         assert!(codes(&check_assignment(&check)).contains(&ViolationCode::RuleNotFound));
     }
 
+    /// Ziyaret hücresi seçilmemiş atama eksiktir.
     #[test]
-    fn slot_count_must_equal_awarded_hours() {
+    fn assignment_without_a_visit_slot_is_flagged() {
         let mut check = valid_check();
-        check.awarded_hours = 3;
+        check.visit_slot = None;
 
-        assert!(codes(&check_assignment(&check)).contains(&ViolationCode::UnplacedHours));
+        assert!(codes(&check_assignment(&check)).contains(&ViolationCode::NotPlaced));
+    }
+
+    /// Saat, hücre sayısına bağlı DEĞİL: 6 saatlik işletme tek hücrede durur.
+    #[test]
+    fn a_single_cell_can_carry_many_hours() {
+        let mut check = valid_check();
+        check.awarded_hours = 6;
+        check.max_hours = Some(8);
+
+        assert!(check_assignment(&check).is_empty());
     }
 
     #[test]
     fn slot_outside_teacher_availability_is_flagged() {
         let mut check = valid_check();
-        check.slots = slots(&[(1, 9), (1, 15)]);
+        check.visit_slot = Some(Slot::new(1, 15));
 
         assert!(codes(&check_assignment(&check)).contains(&ViolationCode::SlotNotAvailable));
     }
@@ -403,8 +399,8 @@ mod tests {
     #[test]
     fn slot_on_a_non_workplace_day_is_flagged() {
         let mut check = valid_check();
-        check.teacher_free_slots = slots(&[(1, 9), (4, 10)]);
-        check.slots = slots(&[(1, 9), (4, 10)]);
+        check.teacher_free_slots = slots(&[(4, 10)]);
+        check.visit_slot = Some(Slot::new(4, 10));
 
         assert!(codes(&check_assignment(&check)).contains(&ViolationCode::SlotNotWorkplaceDay));
     }
@@ -474,7 +470,7 @@ mod tests {
 
     #[test]
     fn weekly_cap_violation_carries_its_legal_basis() {
-        let found = check_teacher_totals(1, "Test", 20, 22, &BTreeSet::new(), false);
+        let found = check_teacher_totals(1, "Test", 20, 22, &BTreeMap::new(), false);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].code, ViolationCode::WeeklyCapExceeded);
         assert_eq!(found[0].legal_basis, Some("MADDE 15/2 + MADDE 6/1-c"));
@@ -482,17 +478,25 @@ mod tests {
 
     #[test]
     fn weekly_total_within_capacity_is_clean() {
-        assert!(check_teacher_totals(1, "Test", 20, 20, &BTreeSet::new(), false).is_empty());
+        assert!(check_teacher_totals(1, "Test", 20, 20, &BTreeMap::new(), false).is_empty());
     }
 
+    /// Günlük sınır o güne düşen SAAT toplamına bakar.
     #[test]
     fn daily_cap_violation_is_reported_per_day() {
-        let nine_hours: Vec<(i64, i64)> = (8..17).map(|h| (2, h)).collect();
-        let found = check_teacher_totals(1, "Test", 20, 9, &slots(&nine_hours), false);
+        let hours_by_day = BTreeMap::from([(2, 9)]);
+        let found = check_teacher_totals(1, "Test", 20, 9, &hours_by_day, false);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].code, ViolationCode::DailyCapExceeded);
         assert_eq!(found[0].legal_basis, Some("OÖKY MADDE 88"));
+    }
+
+    /// Tam 8 saat sınırı aşmaz.
+    #[test]
+    fn exactly_eight_hours_on_a_day_is_allowed() {
+        let hours_by_day = BTreeMap::from([(2, 8)]);
+        assert!(check_teacher_totals(1, "Test", 20, 8, &hours_by_day, false).is_empty());
     }
 
     #[test]

@@ -1,10 +1,14 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// OÖKY MADDE 88: "bir öğretmene aynı gün için 8 saatten fazla ek ders görevi verilmez"
 pub const MAX_HOURS_PER_DAY: i64 = 8;
 
-/// Haftalık tek bir saat dilimi. Gün 1 = Pazartesi … 5 = Cuma.
+/// Haftalık tek bir ders saati hücresi. Gün 1 = Pazartesi … 5 = Cuma.
+///
+/// Bir işletme TEK bir hücreye yerleşir; taşıdığı ek ders saati ayrı bir
+/// büyüklüktür (`company_term_hours.awarded_hours`). Ziyaretin yeri ile
+/// tahakkuk eden saat aynı şey değildir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Slot {
@@ -18,14 +22,14 @@ impl Slot {
     }
 }
 
-/// Bir atamanın yerleştirilebileceği dilimler.
+/// Bir işletmenin yerleştirilebileceği hücreler.
 ///
 /// İki kümenin kesişimidir:
 /// 1. Öğretmenin boş saatleri
 /// 2. İşletmedeki öğrencilerin sınıflarının işletmede bulunduğu günler
 ///
 /// Kesişim boşsa öğretmen o işletmeyi ziyaret edemez; kullanıcı ya başka
-/// öğretmen seçer ya da "zorla ekle" ile kural dışına çıkar.
+/// öğretmen seçer ya da gerekçeyle zorlar.
 pub fn eligible_slots(
     teacher_free_slots: &BTreeSet<Slot>,
     workplace_days: &BTreeSet<i64>,
@@ -37,80 +41,46 @@ pub fn eligible_slots(
         .collect()
 }
 
-/// Aynı gündeki dilimleri sayar.
-pub fn hours_on_day(slots: &BTreeSet<Slot>, day_of_week: i64) -> i64 {
-    slots.iter().filter(|s| s.day_of_week == day_of_week).count() as i64
-}
-
 /// Günlük 8 saat sınırını aşan günler (OÖKY MADDE 88).
-pub fn days_over_daily_cap(slots: &BTreeSet<Slot>) -> Vec<i64> {
-    let days: BTreeSet<i64> = slots.iter().map(|s| s.day_of_week).collect();
-    days.into_iter()
-        .filter(|day| hours_on_day(slots, *day) > MAX_HOURS_PER_DAY)
+///
+/// Girdi, gün → o güne düşen toplam EK DERS SAATİ haritasıdır; hücre sayısı
+/// değil. Tek bir hücrede 8 saatlik bir işletme durabilir.
+pub fn days_over_daily_cap(hours_by_day: &BTreeMap<i64, i64>) -> Vec<i64> {
+    hours_by_day
+        .iter()
+        .filter(|(_, hours)| **hours > MAX_HOURS_PER_DAY)
+        .map(|(day, _)| *day)
         .collect()
 }
 
-/// Uygun dilimler arasından istenen sayıda dilim seçer.
+/// Bir işletme için tek bir ziyaret hücresi seçer.
 ///
-/// Aynı güne bitişik saatler tercih edilir: koordinatör tek gidişte birden çok
-/// saat harcayabilsin diye. Günlük 8 saat sınırı aşılmaz.
+/// Kurallar:
+/// - Hücre uygun olmalı (öğretmen boş + öğrenciler o gün işletmede)
+/// - Hücre başka bir işletmeye verilmemiş olmalı
+/// - O güne eklenecek saat günlük 8 saat sınırını aşmamalı
 ///
-/// `already_used`, öğretmenin başka işletmelerde kullandığı dilimlerdir; aynı
-/// dilim iki işletmeye verilemez ve günlük sayım bu dilimleri de kapsar.
-pub fn pick_slots(
+/// Yükü en az olan gün tercih edilir; böylece saatler haftaya yayılır ve
+/// günlük sınıra çarpma olasılığı düşer. Eşitlikte haftanın erken günü ve
+/// erken ders saati seçilir — sonuç belirlenimcidir.
+pub fn pick_visit_slot(
     eligible: &BTreeSet<Slot>,
-    already_used: &BTreeSet<Slot>,
-    wanted_hours: i64,
-) -> Vec<Slot> {
-    if wanted_hours <= 0 {
-        return Vec::new();
-    }
-
-    let free: Vec<Slot> = eligible.difference(already_used).copied().collect();
-    let days: BTreeSet<i64> = free.iter().map(|s| s.day_of_week).collect();
-
-    // Günleri en uzun bitişik bloğa göre sırala: önce çok saat veren gün.
-    let mut day_order: Vec<i64> = days.into_iter().collect();
-    day_order.sort_by_key(|day| {
-        let count = free.iter().filter(|s| s.day_of_week == *day).count() as i64;
-        // Çoktan aza; eşitlikte haftanın erken günü.
-        (-count, *day)
-    });
-
-    let mut picked: Vec<Slot> = Vec::new();
-    let mut used_per_day: std::collections::BTreeMap<i64, i64> = already_used
+    used_slots: &BTreeSet<Slot>,
+    hours_by_day: &BTreeMap<i64, i64>,
+    awarded_hours: i64,
+) -> Option<Slot> {
+    eligible
         .iter()
-        .fold(std::collections::BTreeMap::new(), |mut acc, slot| {
-            *acc.entry(slot.day_of_week).or_insert(0) += 1;
-            acc
-        });
-
-    for day in day_order {
-        if picked.len() as i64 >= wanted_hours {
-            break;
-        }
-
-        let mut hours_today: Vec<i64> = free
-            .iter()
-            .filter(|s| s.day_of_week == day)
-            .map(|s| s.hour)
-            .collect();
-        hours_today.sort_unstable();
-
-        for hour in hours_today {
-            if picked.len() as i64 >= wanted_hours {
-                break;
-            }
-            let on_day = used_per_day.entry(day).or_insert(0);
-            if *on_day >= MAX_HOURS_PER_DAY {
-                break;
-            }
-            picked.push(Slot::new(day, hour));
-            *on_day += 1;
-        }
-    }
-
-    picked
+        .filter(|slot| !used_slots.contains(slot))
+        .filter(|slot| {
+            let current = hours_by_day.get(&slot.day_of_week).copied().unwrap_or(0);
+            current + awarded_hours <= MAX_HOURS_PER_DAY
+        })
+        .min_by_key(|slot| {
+            let load = hours_by_day.get(&slot.day_of_week).copied().unwrap_or(0);
+            (load, slot.day_of_week, slot.hour)
+        })
+        .copied()
 }
 
 #[cfg(test)]
@@ -121,103 +91,104 @@ mod tests {
         pairs.iter().map(|(d, h)| Slot::new(*d, *h)).collect()
     }
 
+    fn load(pairs: &[(i64, i64)]) -> BTreeMap<i64, i64> {
+        pairs.iter().copied().collect()
+    }
+
     #[test]
     fn eligible_slots_is_intersection_of_availability_and_workplace_days() {
         let free = slots(&[(1, 9), (1, 10), (2, 9), (3, 14)]);
         let workplace_days = BTreeSet::from([1, 3]);
 
-        let eligible = eligible_slots(&free, &workplace_days);
-
-        assert_eq!(eligible, slots(&[(1, 9), (1, 10), (3, 14)]));
+        assert_eq!(
+            eligible_slots(&free, &workplace_days),
+            slots(&[(1, 9), (1, 10), (3, 14)])
+        );
     }
 
     /// Öğretmen boşsa ama sınıf o gün işletmede değilse ziyaret edilemez.
     #[test]
     fn eligible_slots_is_empty_when_days_do_not_overlap() {
         let free = slots(&[(1, 9), (2, 10)]);
-        let workplace_days = BTreeSet::from([4, 5]);
-
-        assert!(eligible_slots(&free, &workplace_days).is_empty());
+        assert!(eligible_slots(&free, &BTreeSet::from([4, 5])).is_empty());
     }
 
+    /// Günlük sınır SAAT toplamına bakar, hücre sayısına değil.
     #[test]
-    fn days_over_daily_cap_flags_only_days_above_eight_hours() {
-        let nine_hours: Vec<(i64, i64)> = (8..17).map(|h| (1, h)).collect();
-        let mut all = slots(&nine_hours);
-        all.extend(slots(&[(2, 9), (2, 10)]));
-
-        assert_eq!(days_over_daily_cap(&all), vec![1]);
+    fn daily_cap_counts_awarded_hours_not_cells() {
+        // Tek hücrede 9 saatlik bir işletme sınırı aşar.
+        assert_eq!(days_over_daily_cap(&load(&[(1, 9)])), vec![1]);
+        // 7 saat aşmaz.
+        assert!(days_over_daily_cap(&load(&[(2, 7)])).is_empty());
     }
 
     #[test]
     fn exactly_eight_hours_is_allowed() {
-        let eight_hours: Vec<(i64, i64)> = (8..16).map(|h| (1, h)).collect();
-        assert!(days_over_daily_cap(&slots(&eight_hours)).is_empty());
+        assert!(days_over_daily_cap(&load(&[(1, MAX_HOURS_PER_DAY)])).is_empty());
     }
 
     #[test]
-    fn pick_slots_returns_requested_count() {
-        let eligible = slots(&[(1, 9), (1, 10), (1, 11), (3, 14)]);
-        let picked = pick_slots(&eligible, &BTreeSet::new(), 2);
+    fn picks_a_slot_when_the_day_has_room() {
+        let eligible = slots(&[(1, 9), (1, 10)]);
+        let picked = pick_visit_slot(&eligible, &BTreeSet::new(), &BTreeMap::new(), 6);
 
-        assert_eq!(picked.len(), 2);
+        assert_eq!(picked, Some(Slot::new(1, 9)), "erken saat tercih edilmeli");
     }
 
-    /// Aynı güne bitişik saatler tercih edilmeli: tek gidişte çok saat.
+    /// Başka işletmeye verilmiş hücre yeniden kullanılamaz.
     #[test]
-    fn pick_slots_prefers_the_day_with_most_free_hours() {
-        let eligible = slots(&[(1, 9), (3, 13), (3, 14), (3, 15)]);
-        let picked = pick_slots(&eligible, &BTreeSet::new(), 3);
-
-        assert_eq!(picked.len(), 3);
-        assert!(
-            picked.iter().all(|s| s.day_of_week == 3),
-            "en çok boş saati olan gün seçilmeliydi: {picked:?}"
-        );
-    }
-
-    /// Başka işletmeye verilmiş dilim yeniden kullanılamaz.
-    #[test]
-    fn pick_slots_skips_already_used_slots() {
+    fn skips_slots_already_used_by_another_company() {
         let eligible = slots(&[(1, 9), (1, 10)]);
         let used = slots(&[(1, 9)]);
 
-        let picked = pick_slots(&eligible, &used, 2);
-
-        assert_eq!(picked, vec![Slot::new(1, 10)], "yalnızca boş dilim kalmıştı");
+        assert_eq!(
+            pick_visit_slot(&eligible, &used, &BTreeMap::new(), 4),
+            Some(Slot::new(1, 10))
+        );
     }
 
-    /// Günlük 8 saat sınırı aşılmamalı; talep karşılanamazsa eksik döner.
+    /// Günlük sınırı aşacak gün elenir.
     #[test]
-    fn pick_slots_respects_the_daily_cap() {
-        let ten_hours: Vec<(i64, i64)> = (8..18).map(|h| (1, h)).collect();
-        let picked = pick_slots(&slots(&ten_hours), &BTreeSet::new(), 10);
+    fn rejects_a_day_that_would_exceed_the_daily_cap() {
+        let eligible = slots(&[(1, 9), (2, 9)]);
+        // 1. gün zaten 6 saat dolu; 4 saatlik işletme oraya sığmaz.
+        let picked = pick_visit_slot(&eligible, &BTreeSet::new(), &load(&[(1, 6)]), 4);
 
-        assert_eq!(picked.len(), MAX_HOURS_PER_DAY as usize);
+        assert_eq!(picked, Some(Slot::new(2, 9)));
     }
 
-    /// Öğretmenin o gün başka işletmede kullandığı saatler de sınıra dahildir.
+    /// Hiçbir gün sığdıramıyorsa None döner; zorlama kullanıcının kararıdır.
     #[test]
-    fn daily_cap_counts_slots_already_used_on_that_day() {
-        let eligible = slots(&[(1, 16), (1, 17)]);
-        let used: Vec<(i64, i64)> = (8..16).map(|h| (1, h)).collect();
+    fn returns_none_when_no_day_can_absorb_the_hours() {
+        let eligible = slots(&[(1, 9), (2, 9)]);
+        let picked = pick_visit_slot(&eligible, &BTreeSet::new(), &load(&[(1, 8), (2, 8)]), 1);
 
-        let picked = pick_slots(&eligible, &slots(&used), 2);
-
-        assert!(picked.is_empty(), "gün zaten 8 saatle dolmuştu");
+        assert_eq!(picked, None);
     }
 
+    /// Yükü en az olan gün tercih edilir; saatler haftaya yayılır.
     #[test]
-    fn pick_slots_returns_empty_for_non_positive_request() {
+    fn prefers_the_least_loaded_day() {
+        let eligible = slots(&[(1, 9), (2, 9), (3, 9)]);
+        let picked = pick_visit_slot(&eligible, &BTreeSet::new(), &load(&[(1, 6), (2, 2)]), 2);
+
+        assert_eq!(picked, Some(Slot::new(3, 9)), "hiç yükü olmayan gün önce");
+    }
+
+    /// Fahri ziyaret 0 saat taşır; dolu bir güne bile yerleşebilir.
+    #[test]
+    fn honorary_visit_fits_even_on_a_full_day() {
         let eligible = slots(&[(1, 9)]);
-        assert!(pick_slots(&eligible, &BTreeSet::new(), 0).is_empty());
-        assert!(pick_slots(&eligible, &BTreeSet::new(), -3).is_empty());
+        let picked = pick_visit_slot(&eligible, &BTreeSet::new(), &load(&[(1, 8)]), 0);
+
+        assert_eq!(picked, Some(Slot::new(1, 9)));
     }
 
-    /// Yeterli dilim yoksa bulunabildiği kadarı döner; sessizce uydurulmaz.
     #[test]
-    fn pick_slots_returns_fewer_when_not_enough_eligible() {
-        let eligible = slots(&[(1, 9)]);
-        assert_eq!(pick_slots(&eligible, &BTreeSet::new(), 5).len(), 1);
+    fn returns_none_when_nothing_is_eligible() {
+        assert_eq!(
+            pick_visit_slot(&BTreeSet::new(), &BTreeSet::new(), &BTreeMap::new(), 2),
+            None
+        );
     }
 }
