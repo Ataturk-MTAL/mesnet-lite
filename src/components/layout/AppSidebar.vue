@@ -51,6 +51,20 @@
           :aria-label="labels.nav.toggleMenu"
           @click="toggleMenu"
         />
+        <div class="topbar-spacer" />
+        <SelectButton
+          :model-value="preference"
+          :options="themeOptions"
+          optionLabel="label"
+          optionValue="value"
+          :allowEmpty="false"
+          :aria-label="labels.theme.label"
+          @update:model-value="setThemePreference"
+        >
+          <template #option="{ option }">
+            <i :class="option.icon" :title="option.label" />
+          </template>
+        </SelectButton>
       </header>
       <RouterView />
     </main>
@@ -60,6 +74,15 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { labels } from '../../i18n/labels'
+import { useTheme } from '../../composables/useTheme'
+
+const { preference, setThemePreference } = useTheme()
+
+const themeOptions = [
+  { value: 'light' as const, label: labels.theme.light, icon: 'pi pi-sun' },
+  { value: 'dark' as const, label: labels.theme.dark, icon: 'pi pi-moon' },
+  { value: 'system' as const, label: labels.theme.system, icon: 'pi pi-desktop' },
+]
 
 const isCollapsed = ref(false)
 const isDrawerOpen = ref(false)
@@ -212,7 +235,9 @@ const navGroups: readonly NavGroup[] = [
   flex-shrink: 0;
   padding-inline: 0.75rem;
   border-bottom: 1px solid var(--p-content-border-color);
+  background: var(--p-content-background);
 }
+.topbar-spacer { flex: 1; }
 
 .main > :not(.topbar) {
   flex: 1;

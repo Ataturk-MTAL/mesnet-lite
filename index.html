@@ -22,9 +22,13 @@
         font-size: 1rem;
         line-height: 1.5;
         -webkit-font-smoothing: antialiased;
-        background: var(--p-content-background);
         color: var(--p-text-color);
+        /* Sayfa zemini kart yüzeyinden bir ton farklı olmalı; aksi hâlde
+           Card ve DataTable arka planla aynı renge düşüp sınırları kaybolur. */
+        background: var(--p-surface-100);
       }
+
+      html.app-dark body { background: var(--p-surface-950); }
 
       /* Başlıklar ve form öğeleri de aynı yığını kullanmalı; tarayıcı
          form öğelerine kendi fontunu dayatır. */

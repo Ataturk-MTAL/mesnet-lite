@@ -491,7 +491,49 @@ Menü grupları:
 - **Raporlar** — Görevlendirme Çizelgesi · Öğretmen Ziyaret Listeleri
 - **Yönetim** — Ayarlar · İçe/Dışa Aktarım
 
-### 12.2 Ekranlar
+### 12.2 Tema — açık / koyu / sistem
+
+OpenVue'nun `darkModeSelector` ayarı varsayılan olarak `'system'` gelir ve
+`@media (prefers-color-scheme: dark)` üretir; bu, kullanıcının uygulama içinden
+tema seçmesine izin vermez. Bu yüzden sınıf tabanlı seçiciye alınır:
+
+```ts
+app.use(OpenVue, {
+  theme: { preset: Aura, options: { darkModeSelector: '.app-dark' } },
+})
+```
+
+Tema durumu `src/composables/useTheme.ts` içinde tutulur:
+
+- Üç tercih: `light`, `dark`, `system`. Varsayılan `system`.
+- Tercih `localStorage` anahtarı `mesnet-lite-theme` ile saklanır; depolama
+  kapalıysa tercih oturumluk kalır ve bu bir hata sayılmaz.
+- `system` seçiliyken işletim sistemi teması değişirse uygulama da değişir
+  (`matchMedia` dinleyicisi).
+- `initTheme()` `app.mount()` öncesinde çağrılır ki açılışta yanıp sönme olmasın.
+- Üst çubuktaki `SelectButton` üç ikonla (güneş / ay / ekran) tercihi değiştirir.
+
+**Sınıf adı iki yerde geçer** — `main.ts` yapılandırması ve `useTheme.ts` sabiti.
+Biri değişirse diğeri de değişmelidir; `useTheme.ts` bunu yorumda belirtir.
+
+**Sayfa zemini:** `body` arka planı kart yüzeyinden bir ton farklı olmalıdır
+(`--p-surface-100` açık, `--p-surface-950` koyu), aksi hâlde `Card` ve `DataTable`
+zeminle aynı renge düşüp sınırlarını kaybeder.
+
+### 12.3 Buton kullanımı
+
+`text` varyantı koyu temada neredeyse görünmezdir ve tablo satırlarında kullanılmaz.
+
+- **Birincil eylemler** (Ekle, Kaydet, İçe Aktar): dolu buton + ikon.
+- **Satır işlemleri** (Düzenle, Sil, Konum): `outlined` + yalnızca ikon
+  (`pi pi-pencil`, `pi pi-trash`, `pi pi-map-marker`), `aria-label` ve
+  `v-tooltip` ile açıklanır.
+- **İkincil eylemler** (Vazgeç, Konumu Temizle): `outlined`.
+
+`v-tooltip` yönergesi `main.ts` içinde `openvue/tooltip` paketinden kaydedilir;
+ikon butonlarının ne yaptığı yalnızca ipucundan anlaşılır.
+
+### 12.4 Ekranlar
 
 | Ekran | İçerik |
 |---|---|
@@ -504,13 +546,13 @@ Menü grupları:
 | **Ayarlar** | Okul bilgisi ve konumu · `institution_type` · `is_metropolitan_district` · aktif dönem · gün başlangıç/bitiş saati · sınıf+dal bazlı haftalık ders saati ve grup sayısı · **Saat Tavanı Kuralları** ızgarası (tam CRUD) |
 | **İçe/Dışa Aktarım** | CSV içe aktarma sihirbazı · Excel/CSV dışa aktarma · rapor bağlantıları |
 
-### 12.3 CSV içe aktarma sihirbazı
+### 12.5 CSV içe aktarma sihirbazı
 
 1. **Dosya seç ve önizle** — ilk 10 satır `DataTable`'da, sütun eşlemesi gösterilir
 2. **Mükerrer kontrolü** — işletme adı Unicode-doğru normalize edilerek (`to_lowercase()` + boşluk sadeleştirme) mevcut kayıtlarla karşılaştırılır; her mükerrer için *atla / güncelle / yeni kayıt* seçimi sunulur. 32 öğrenci → 28 tekil işletme birleştirmesi bu adımda olur.
 3. **İçe aktar ve coğrafi kodla** — kayıtlar yazılır, Nominatim kuyruğu 1 istek/saniye ile çalışır, `ProgressBar` ile ilerleme gösterilir.
 
-### 12.4 Konum seçme — iki kullanım, tek bileşen
+### 12.6 Konum seçme — iki kullanım, tek bileşen
 
 Harita üzerinden konum işaretleme **iki yerde** gerekir ve ikisi de aynı
 `LocationPickerMap.vue` bileşenini kullanır:
@@ -529,9 +571,11 @@ olarak da düzenlenebilir; harita ve girdiler tek yönlü değil, çift yönlü 
 **Okul konumu mesafe hesabında kullanılmaz** (§11). Kullanım amacı harita odağı ve
 dağıtım motorunun kümeleme referansıdır (§9).
 
-### 12.5 Leaflet entegrasyon uyarısı
+### 12.7 Leaflet entegrasyon uyarısı
 
 Leaflet kendi DOM'unu yönetir. Marker nesneleri `ref()` içine konursa Vue onları proxy'ler ve Leaflet'in iç referans karşılaştırmaları bozulur. Marker'lar `shallowRef` içinde veya bileşen dışı bir `Map<id, Marker>` yapısında tutulur.
+
+**Boyut sorunu:** Harita, ölçüsü henüz kesinleşmemiş bir kapsayıcıda (`Card` içeriği, açılan `Dialog`) kurulduğunda kendi boyutunu yanlış hesaplar ve karoların bir kısmı boş kalır. Bileşen bir `ResizeObserver` ile kapsayıcıyı izler ve her değişimde `invalidateSize()` çağırır.
 
 ---
 

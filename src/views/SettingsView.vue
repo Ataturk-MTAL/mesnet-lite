@@ -71,7 +71,7 @@
     </Card>
 
     <div class="actions">
-      <Button :label="labels.common.save" :loading="isSaving" @click="save" />
+      <Button :label="labels.common.save" icon="pi pi-check" :loading="isSaving" @click="save" />
     </div>
   </div>
 </template>

@@ -30,10 +30,14 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     Select: typeof import('openvue/select')['default']
+    SelectButton: typeof import('openvue/selectbutton')['default']
     StudentFormDialog: typeof import('./src/components/student/StudentFormDialog.vue')['default']
     Tag: typeof import('openvue/tag')['default']
     TeacherFormDialog: typeof import('./src/components/teacher/TeacherFormDialog.vue')['default']
     Textarea: typeof import('openvue/textarea')['default']
     Toast: typeof import('openvue/toast')['default']
+  }
+  export interface GlobalDirectives {
+    Tooltip: typeof import('openvue/tooltip')['default']
   }
 }

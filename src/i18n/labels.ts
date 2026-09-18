@@ -104,6 +104,12 @@ export const labels = {
     department: 'Bölüm Şefi',
   },
   employmentType: { tenured: 'Kadrolu', contracted: 'Sözleşmeli' },
+  theme: {
+    label: 'Tema',
+    light: 'Açık',
+    dark: 'Koyu',
+    system: 'Sistem',
+  },
   dashboard: {
     activeTeachers: 'Aktif Öğretmen',
     attentionTitle: 'Dikkat Gerektirenler',

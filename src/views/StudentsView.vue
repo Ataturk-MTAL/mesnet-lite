@@ -2,7 +2,7 @@
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">{{ labels.student.title }}</h1>
-      <Button :label="labels.common.add" @click="openCreate" />
+      <Button :label="labels.common.add" icon="pi pi-plus" @click="openCreate" />
     </div>
 
     <DataTable
@@ -39,9 +39,11 @@
       <Column>
         <template #body="{ data }">
           <div class="row-actions">
-            <Button :label="labels.common.edit" severity="secondary" text size="small"
+            <Button icon="pi pi-pencil" severity="secondary" outlined size="small"
+                    :aria-label="labels.common.edit" v-tooltip.top="labels.common.edit"
                     @click="openEdit(data)" />
-            <Button :label="labels.common.delete" severity="danger" text size="small"
+            <Button icon="pi pi-trash" severity="danger" outlined size="small"
+                    :aria-label="labels.common.delete" v-tooltip.top="labels.common.delete"
                     @click="confirmRemove(data)" />
           </div>
         </template>

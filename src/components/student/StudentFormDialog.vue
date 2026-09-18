@@ -51,7 +51,7 @@
     </div>
 
     <template #footer>
-      <Button :label="labels.common.cancel" severity="secondary" text @click="close" />
+      <Button :label="labels.common.cancel" severity="secondary" outlined @click="close" />
       <Button :label="labels.common.save" :disabled="!isValid" @click="save" />
     </template>
   </Dialog>

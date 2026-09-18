@@ -2,7 +2,7 @@
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">{{ labels.company.title }}</h1>
-      <Button :label="labels.common.add" @click="openCreate" />
+      <Button :label="labels.common.add" icon="pi pi-plus" @click="openCreate" />
     </div>
 
     <DataTable
@@ -54,25 +54,30 @@
         <template #body="{ data }">
           <div class="row-actions">
             <Button
-              :label="labels.company.setLocation"
               icon="pi pi-map-marker"
               severity="secondary"
-              text
+              outlined
               size="small"
+              :aria-label="labels.company.setLocation"
+              v-tooltip.top="labels.company.setLocation"
               @click="openLocation(data)"
             />
             <Button
-              :label="labels.common.edit"
+              icon="pi pi-pencil"
               severity="secondary"
-              text
+              outlined
               size="small"
+              :aria-label="labels.common.edit"
+              v-tooltip.top="labels.common.edit"
               @click="openEdit(data)"
             />
             <Button
-              :label="labels.common.delete"
+              icon="pi pi-trash"
               severity="danger"
-              text
+              outlined
               size="small"
+              :aria-label="labels.common.delete"
+              v-tooltip.top="labels.common.delete"
               @click="confirmRemove(data)"
             />
           </div>
@@ -90,7 +95,7 @@
     >
       <LocationPickerMap v-model="editedLocation" :fallback-center="schoolCenter ?? undefined" />
       <template #footer>
-        <Button :label="labels.common.cancel" severity="secondary" text
+        <Button :label="labels.common.cancel" severity="secondary" outlined
                 @click="isLocationDialogOpen = false" />
         <Button :label="labels.common.save" :disabled="editedLocation === null"
                 @click="saveLocation" />

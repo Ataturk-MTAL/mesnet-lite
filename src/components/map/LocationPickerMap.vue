@@ -29,8 +29,9 @@
       </div>
       <Button
         :label="labels.map.clear"
+        icon="pi pi-times"
         severity="secondary"
-        text
+        outlined
         :disabled="modelValue === null"
         @click="emit('update:modelValue', null)"
       />
