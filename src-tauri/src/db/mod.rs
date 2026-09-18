@@ -7,6 +7,7 @@ pub mod assignments;
 pub mod availability;
 pub mod class_days;
 pub mod companies;
+pub mod company_hours;
 pub mod hour_rules;
 pub mod settings;
 pub mod students;
@@ -54,6 +55,15 @@ mod tests {
 
         let pool = init_pool(&path).await.unwrap();
 
+        // assignment_slots kaldırıldı; bir işletme tek hücreye yerleşir.
+        let removed: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'assignment_slots'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(removed, 0, "assignment_slots tablosu kalmamalı");
+
         // Seed migration 16 satır kural yazmalı
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM company_hour_rules")
             .fetch_one(&pool)
@@ -69,8 +79,10 @@ mod tests {
             "teacher_availability",
             "class_workplace_days",
             "company_hour_rules",
+            // Saat takdiri atamadan ayrıldı (migration 0004):
+            // saat burada, yerleşim assignments tablosunda.
+            "company_term_hours",
             "assignments",
-            "assignment_slots",
             "settings",
         ] {
             let found: i64 = sqlx::query_scalar(

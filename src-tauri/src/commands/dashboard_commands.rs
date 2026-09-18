@@ -95,7 +95,7 @@ pub async fn get_dashboard_stats(state: State<'_, AppState>) -> AppResult<Dashbo
         }
     }
 
-    let assigned_hours = assignments::total_awarded_hours(pool, &term).await?;
+    let assigned_hours = assignments::total_assigned_hours(pool, &term).await?;
 
     Ok(DashboardStats {
         term,
