@@ -116,8 +116,16 @@ Address: <işletmenin gerçek adresi>
 ```
 
 - `Result:` satırı **okulun** adresidir, işletmenin değil — yok sayılır
-- `Distance:` → `companies.distance_km` (`6.8 km` → `6.8`)
+- `Distance:` → `companies.one_way_distance_km` (`6.8 km` → `6.8`) — **tek yön** mesafedir
 - `Address:` → `companies.address_text`; **coğrafi kodlamaya giden metin budur**
+
+**Gidiş-dönüş dönüşümü:** CSV'deki `Distance:` değeri okuldan işletmeye **tek yön** mesafedir. Koordinatörlük ziyareti gidiş ve dönüş içerdiğinden saat tavanı kurallarında kullanılan mesafe iki katıdır:
+
+```
+round_trip_distance_km = one_way_distance_km × 2
+```
+
+Ham değer `one_way_distance_km` olarak saklanır; iki katı **saklanmaz**, kural sorgusunda türetilir. Böylece kaynak veri tek ve tartışmasız kalır.
 
 **Veri kalitesi (doğrulanmış):** 32/32 satırda `Distance:` ve `Address:` ayrıştırılabiliyor · `E-posta` 32/32 boş · `Öğrenci No` 1 satırda boş · Enlem/boylam **yok**.
 
@@ -167,7 +175,7 @@ Gün numaralandırması: `1 = Pazartesi … 5 = Cuma`. Saatler tam saat tamsayı
 | `address_text` | TEXT NOT NULL | CSV `Address:` satırı |
 | `latitude`, `longitude` | REAL NULL | |
 | `geocode_status` | TEXT | `pending` / `resolved` / `failed` / `manual` |
-| `distance_km` | REAL NULL | CSV `Distance:` satırı; koordinat varsa yeniden hesaplanır |
+| `one_way_distance_km` | REAL NULL | CSV `Distance:` satırı — **tek yön**; koordinat varsa haversine ile yeniden hesaplanır |
 | `notes` | TEXT | |
 | `created_at`, `updated_at` | TEXT | ISO-8601 |
 
@@ -233,13 +241,15 @@ Bir satır = o sınıfın o gün işletmede olduğu. Farklı sınıflar farklı 
 | Sütun | Tip | Not |
 |---|---|---|
 | `id` | INTEGER PK | |
-| `min_distance_km` | REAL NOT NULL | dahil |
+| `min_distance_km` | REAL NOT NULL | dahil — **gidiş-dönüş** km |
 | `max_distance_km` | REAL NULL | hariç; `NULL` = üst sınırsız |
 | `min_students` | INTEGER NOT NULL | dahil |
 | `max_students` | INTEGER NULL | dahil; `NULL` = üst sınırsız |
 | `max_hours` | INTEGER NOT NULL | tam saat |
 
-Aralık tanımı: `min_distance_km <= distance_km < max_distance_km` ve `min_students <= student_count <= max_students`.
+Aralık tanımı: `min_distance_km <= round_trip_distance_km < max_distance_km` ve `min_students <= student_count <= max_students`.
+
+**Mesafe eşikleri gidiş-dönüş km cinsindendir** (§4). Tüm sütunlar arayüzden düzenlenebilir: km eşikleri, öğrenci sayısı eşikleri ve saatler değiştirilebilir, satır eklenip silinebilir.
 
 Bir işletme birden fazla kurala uyarsa **en dar aralıklı** kural seçilir. "En dar" sıralaması kesin olarak şudur:
 
@@ -336,8 +346,10 @@ Bu okul için (`other`, büyükşehir ilçesi, `max_extra_hours = 24`, `other_ex
 ### 7.2 İşletme saat tavanı
 
 ```
+round_trip_distance_km = company.one_way_distance_km × 2
+
 max_hours_for(company) =
-    company_hour_rules içinde company.distance_km ve company.student_count
+    company_hour_rules içinde round_trip_distance_km ve company.student_count
     değerlerine uyan en dar kuralın max_hours değeri
 ```
 
@@ -432,7 +444,7 @@ Saf fonksiyon. Girdi: işletmeler, öğretmenler, müsaitlikler, sınıf günler
 - Sorgulanan metin: CSV'nin `Address:` satırı, `Result:` satırı değil
 - **Hız sınırı: saniyede en fazla 1 istek.** OSM kullanım koşulları gereği zorunludur; ayrıca tanımlayıcı bir `User-Agent` başlığı gönderilir. Uyulmazsa IP engellenir. 28 işletme yaklaşık 30 saniye sürer.
 - Başarısız sonuçlar `geocode_status = failed` işaretlenir; kullanıcı İşletmeler ekranında haritadan işaretleyerek düzeltir, durum `manual` olur.
-- Koordinat varsa `distance_km` okul konumundan haversine ile yeniden hesaplanır; yoksa CSV'den gelen değer korunur.
+- Koordinat varsa `one_way_distance_km` okul konumundan haversine ile yeniden hesaplanır; yoksa CSV'den gelen değer korunur. Haversine **kuş uçuşu tek yön** mesafe verir; gidiş-dönüşe çevirme kural sorgusunda yapılır (§4), burada değil.
 
 ---
 
@@ -596,9 +608,37 @@ Entegrasyon testleri `db/` katmanı için geçici SQLite dosyası üzerinde çal
 
 ---
 
-## 17. Bekleyen kurulum verisi (tasarım boşluğu değil)
+## 17. Kurulum verisi — `company_hour_rules` seed
 
-`company_hour_rules` seed rakamları (km aralıkları × öğrenci sayısı aralıkları → azamî saat) kullanıcı tarafından verilecek ve `migrations/0002_seed_hour_rules.sql` içine yazılacaktır. Kural tablosu boşken uygulama çalışır; atamalar `RuleNotFound` uyarısı üretir ve tavan `0` kalır.
+`migrations/0002_seed_hour_rules.sql` içine yazılacak başlangıç tablosu. **Satır eksenindeki km değerleri gidiş-dönüş mesafesidir** (tek yönün iki katı, §4).
+
+| Gidiş-dönüş km | 1–2 öğrenci | 3–4 öğrenci | 5–6 öğrenci | 6+ öğrenci |
+|---|---|---|---|---|
+| 0 – 1 km | 2 | 3 | 4 | 5 |
+| 1 – 3 km | 4 | 5 | 6 | 7 |
+| 3 – 5 km | 6 | 7 | 8 | 9 |
+| 5 km + | 8 | 9 | 10 | 11 |
+
+16 satır olarak seed edilir. Son km satırında `max_distance_km = NULL`, son öğrenci sütununda `max_students = NULL`.
+
+**`5-6` ve `6+` sütunları 6 öğrencide çakışır.** §6'daki "en dar kural" sıralaması bunu belirlenimci şekilde çözer: `5-6` aralığı daha dar olduğu için 6 öğrencili işletme `5-6` sütununu alır. Kullanıcı bunu `7+` yapmak isterse tek satırlık `UPDATE` yeterlidir.
+
+Tüm değerler (km eşikleri, öğrenci eşikleri, saatler) Ayarlar ekranından değiştirilebilir; seed yalnızca başlangıç durumudur.
+
+### 17.1 Mevcut veri üzerindeki etkisi
+
+CSV'deki 28 işletme için gidiş-dönüş dönüşümü sonrası dağılım:
+
+| Aralık | Tek yön | Gidiş-dönüş |
+|---|---|---|
+| 0 – 1 km | 3 | **0** |
+| 1 – 3 km | 7 | 5 |
+| 3 – 5 km | 4 | 4 |
+| 5 km + | 14 | **19** |
+
+Öğrenci sayısı: 24 işletme 1 öğrencili, 4 işletme 2 öğrencili — **hepsi `1–2 öğrenci` sütununda**. Bu veri setinde öğrenci ekseni devreye girmiyor.
+
+Toplam talep: `19 × 8 + 4 × 6 + 5 × 4 = 196 saat`. Öğretmen başına tavan 20 saat olduğundan bu dağıtım **en az 10 koordinatör öğretmen** gerektirir; şeflik görevi olanlarda kapasite 14–18 saate düştüğü için pratikte daha fazlası gerekir. Öğretmen sayısı yetersizse ilk dağıtımda `PoolExceeded` ve `WeeklyCapExceeded` ihlalleri toplu halde çıkar — bu beklenen davranıştır, hata değildir.
 
 ---
 
