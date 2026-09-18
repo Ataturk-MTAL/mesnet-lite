@@ -158,16 +158,9 @@ pub async fn apply(
         };
 
         for student in group_students {
-            // Aynı öğrenci iki kez içe aktarılmaz.
-            let already_there = students::exists_with_name_and_grade(
-                pool,
-                &student.first_name,
-                &student.last_name,
-                &student.grade,
-            )
-            .await?;
-
-            if already_there {
+            // Aynı öğrenci iki kez içe aktarılmaz. Kimlik önce öğrenci
+            // numarasından, yoksa ad + soyad + sınıf + dal dörtlüsünden gelir.
+            if students::find_duplicate(pool, &student).await?.is_some() {
                 summary.students_skipped += 1;
                 continue;
             }
@@ -377,6 +370,64 @@ mod tests {
         assert_eq!(summary.students_created, 0);
         assert_eq!(summary.students_skipped, 1);
         assert_eq!(students::list(&pool).await.unwrap().len(), 1);
+    }
+
+    /// Gerçek JotForm dışa aktarımını baştan sona içe aktarır.
+    /// Dosya depoda yoksa test atlanır, böylece CSV olmadan da `cargo test` yeşil kalır.
+    #[tokio::test]
+    async fn imports_the_real_jotform_export_end_to_end() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+
+        let Some(csv_path) = std::fs::read_dir(&root).ok().and_then(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| p.extension().is_some_and(|e| e == "csv"))
+        }) else {
+            return;
+        };
+
+        let content = std::fs::read_to_string(&csv_path).unwrap();
+        let (_dir, pool) = test_pool().await;
+
+        // Önizleme: 28 tekil işletme, 32 öğrenci, hiçbiri mevcut değil.
+        let preview = preview(&pool, &content).await.unwrap();
+        assert!(preview.errors.is_empty(), "ayrıştırma hataları: {:?}", preview.errors);
+        assert_eq!(preview.groups.len(), 28, "beklenen 28 tekil işletme");
+        assert_eq!(preview.total_students, 32, "beklenen 32 öğrenci");
+        assert_eq!(preview.duplicate_count, 0, "boş veritabanında çakışma olmamalı");
+
+        // 4 işletme iki öğrencili olmalı.
+        let with_two = preview.groups.iter().filter(|g| g.student_count == 2).count();
+        assert_eq!(with_two, 4, "beklenen 4 adet iki öğrencili işletme");
+
+        // Her grupta gidiş-dönüş mesafe tek yönün iki katı olmalı.
+        for group in &preview.groups {
+            let one_way = group.one_way_distance_km.expect("mesafe okunamadı");
+            let round_trip = group.round_trip_distance_km.expect("gidiş-dönüş yok");
+            assert!((round_trip - one_way * 2.0).abs() < 1e-9);
+        }
+
+        // Uygulama
+        let summary = apply(&pool, &content, &BTreeMap::new()).await.unwrap();
+        assert_eq!(summary.companies_created, 28);
+        assert_eq!(summary.students_created, 32);
+        assert!(summary.errors.is_empty());
+
+        assert_eq!(companies::list(&pool).await.unwrap().len(), 28);
+        assert_eq!(students::list(&pool).await.unwrap().len(), 32);
+
+        // İkinci kez uygulamak hiçbir şey eklememeli.
+        let again = apply(&pool, &content, &BTreeMap::new()).await.unwrap();
+        assert_eq!(again.companies_created, 0);
+        assert_eq!(again.companies_matched, 28);
+        assert_eq!(again.students_created, 0);
+        assert_eq!(again.students_skipped, 32);
+        assert_eq!(companies::list(&pool).await.unwrap().len(), 28);
+        assert_eq!(students::list(&pool).await.unwrap().len(), 32);
     }
 
     /// Ayrıştırılamayan satır özet içinde raporlanmalı, sessizce yutulmamalı.

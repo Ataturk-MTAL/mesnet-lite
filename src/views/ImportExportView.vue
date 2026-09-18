@@ -1,14 +1,206 @@
 <template>
   <div class="page">
     <h1 class="page-title">{{ labels.nav.importExport }}</h1>
+
+    <Card>
+      <template #title>{{ labels.importCsv.title }}</template>
+      <template #content>
+        <div class="file-row">
+          <!-- Dosya webview tarafında okunup metin olarak gönderilir; ayrı bir
+               dosya sistemi eklentisine ve izin tanımına gerek kalmaz. -->
+          <input
+            ref="fileInput"
+            type="file"
+            accept=".csv,text/csv"
+            class="file-input"
+            @change="onFileChange"
+          />
+          <Button
+            :label="labels.importCsv.chooseFile"
+            icon="pi pi-file-import"
+            severity="secondary"
+            @click="fileInput?.click()"
+          />
+          <span v-if="fileName" class="file-name">{{ fileName }}</span>
+        </div>
+        <small class="hint">{{ labels.importCsv.fileHint }}</small>
+      </template>
+    </Card>
+
+    <Card v-if="preview">
+      <template #title>
+        {{ labels.importCsv.previewTitle }} —
+        {{ preview.groups.length }} {{ labels.importCsv.summaryCompanies }},
+        {{ preview.totalStudents }} {{ labels.importCsv.summaryStudents }}
+      </template>
+      <template #content>
+        <DataTable :value="preview.groups" dataKey="key" paginator :rows="15" stripedRows>
+          <Column field="companyName" :header="labels.importCsv.companyName" />
+          <Column field="addressText" :header="labels.importCsv.address" />
+
+          <Column :header="labels.importCsv.oneWay">
+            <template #body="{ data }">{{ formatKm(data.oneWayDistanceKm) }}</template>
+          </Column>
+          <Column :header="labels.importCsv.roundTrip">
+            <template #body="{ data }">{{ formatKm(data.roundTripDistanceKm) }}</template>
+          </Column>
+
+          <Column :header="labels.importCsv.students">
+            <template #body="{ data }">
+              <span :title="data.studentNames.join(', ')">
+                {{ data.studentCount }} — {{ data.studentNames.join(', ') }}
+              </span>
+            </template>
+          </Column>
+
+          <Column :header="labels.importCsv.status">
+            <template #body="{ data }">
+              <Tag
+                :value="data.existingCompanyId === null
+                  ? labels.importCsv.statusNew
+                  : labels.importCsv.statusExisting"
+                :severity="data.existingCompanyId === null ? 'success' : 'warn'"
+              />
+            </template>
+          </Column>
+
+          <Column :header="labels.importCsv.policy">
+            <template #body="{ data }">
+              <Select
+                v-if="data.existingCompanyId !== null"
+                :model-value="policies[data.key] ?? 'merge'"
+                :options="policyOptions"
+                optionLabel="label"
+                optionValue="value"
+                class="policy-select"
+                @update:model-value="(value: DuplicatePolicy) => (policies[data.key] = value)"
+              />
+              <span v-else class="muted">—</span>
+            </template>
+          </Column>
+        </DataTable>
+
+        <Message
+          v-if="preview.errors.length > 0"
+          severity="warn"
+          :closable="false"
+          class="errors"
+        >
+          <strong>{{ labels.importCsv.errorsTitle }} ({{ preview.errors.length }})</strong>
+          <ul>
+            <li v-for="(error, index) in preview.errors" :key="index">{{ error }}</li>
+          </ul>
+        </Message>
+      </template>
+      <template #footer>
+        <div class="actions">
+          <Button
+            :label="labels.importCsv.apply"
+            icon="pi pi-check"
+            :loading="isApplying"
+            @click="applyImport"
+          />
+        </div>
+      </template>
+    </Card>
+
+    <Message v-if="summary" severity="success" :closable="false">
+      {{ summary.companiesCreated }} {{ labels.importCsv.summaryCompanies }}
+      {{ labels.importCsv.resultCreated }},
+      {{ summary.companiesMatched }} {{ labels.importCsv.resultMatched }},
+      {{ summary.companiesUpdated }} {{ labels.importCsv.resultUpdated }},
+      {{ summary.companiesSkipped }} {{ labels.importCsv.resultSkipped }} ·
+      {{ summary.studentsCreated }} {{ labels.importCsv.summaryStudents }}
+      {{ labels.importCsv.resultCreated }},
+      {{ summary.studentsSkipped }} {{ labels.importCsv.resultSkipped }}
+    </Message>
   </div>
 </template>
 
 <script setup lang="ts">
+import { reactive, ref } from 'vue'
+import { useToast } from 'openvue/usetoast'
+import { importApi } from '../api/importExport'
+import type { DuplicatePolicy, ImportPreview, ImportSummary } from '../api/importExport'
 import { labels } from '../i18n/labels'
+
+const toast = useToast()
+
+const fileInput = ref<HTMLInputElement | null>(null)
+const fileName = ref('')
+const fileContent = ref('')
+const preview = ref<ImportPreview | null>(null)
+const summary = ref<ImportSummary | null>(null)
+const isApplying = ref(false)
+
+// Yalnızca mevcut kayıtla çakışan gruplar için anlamlıdır; belirtilmeyen
+// çakışmalar Rust tarafında 'merge' sayılır.
+const policies = reactive<Record<string, DuplicatePolicy>>({})
+
+const policyOptions = [
+  { value: 'merge' as const, label: labels.importCsv.policyMerge },
+  { value: 'update' as const, label: labels.importCsv.policyUpdate },
+  { value: 'skip' as const, label: labels.importCsv.policySkip },
+]
+
+function formatKm(value: number | null): string {
+  return value === null ? '—' : value.toFixed(1)
+}
+
+function showError(error: unknown): void {
+  const detail = error instanceof Error ? error.message : labels.common.error
+  toast.add({ severity: 'error', summary: labels.common.error, detail, life: 8000 })
+}
+
+async function onFileChange(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  fileName.value = file.name
+  summary.value = null
+  Object.keys(policies).forEach((key) => delete policies[key])
+
+  try {
+    // JotForm dosyası UTF-8; BOM Rust tarafında kırpılır.
+    fileContent.value = await file.text()
+    preview.value = await importApi.preview(fileContent.value)
+  } catch (error: unknown) {
+    preview.value = null
+    showError(error)
+  }
+}
+
+async function applyImport(): Promise<void> {
+  if (!fileContent.value) {
+    toast.add({ severity: 'warn', summary: labels.importCsv.noFile, life: 4000 })
+    return
+  }
+
+  isApplying.value = true
+  try {
+    summary.value = await importApi.apply(fileContent.value, { ...policies })
+    toast.add({ severity: 'success', summary: labels.importCsv.applied, life: 4000 })
+    // Önizleme artık eskidir; yeniden çalıştırıp güncel durumu göster.
+    preview.value = await importApi.preview(fileContent.value)
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isApplying.value = false
+  }
+}
 </script>
 
 <style scoped>
-.page { padding: 1.5rem; }
+.page { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
 .page-title { font-size: 1.5rem; font-weight: 600; margin: 0; }
+.file-row { display: flex; align-items: center; gap: 1rem; }
+.file-input { display: none; }
+.file-name { font-size: 0.875rem; color: var(--p-text-muted-color); }
+.hint { display: block; margin-top: 0.5rem; color: var(--p-text-muted-color); font-size: 0.75rem; }
+.policy-select { min-width: 12rem; }
+.muted { color: var(--p-text-muted-color); }
+.errors { margin-top: 1rem; }
+.errors ul { margin: 0.5rem 0 0; padding-left: 1.25rem; }
+.actions { display: flex; justify-content: flex-end; }
 </style>

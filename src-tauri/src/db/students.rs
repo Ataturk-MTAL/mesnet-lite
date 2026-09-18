@@ -105,34 +105,62 @@ pub async fn remove(pool: &SqlitePool, id: i64) -> AppResult<()> {
     Ok(())
 }
 
-/// Aynı öğrencinin iki kez içe aktarılmasını önlemek için kullanılır.
-/// Ad, soyad ve sınıf üçlüsü Unicode-doğru normalize edilerek karşılaştırılır.
-pub async fn exists_with_name_and_grade(
-    pool: &SqlitePool,
-    first_name: &str,
-    last_name: &str,
-    grade: &str,
-) -> AppResult<bool> {
-    let key = normalize_person_key(first_name, last_name, grade);
-    let rows = list(pool).await?;
-    Ok(rows
-        .iter()
-        .any(|s| normalize_person_key(&s.first_name, &s.last_name, &s.grade) == key))
+fn normalize(value: &str) -> String {
+    value
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
-fn normalize_person_key(first_name: &str, last_name: &str, grade: &str) -> String {
-    let normalize = |value: &str| {
-        value
-            .to_lowercase()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
+fn non_empty(value: Option<&String>) -> Option<String> {
+    value
+        .map(|v| normalize(v))
+        .filter(|v| !v.is_empty())
+}
+
+/// Aynı öğrencinin iki kez içe aktarılmasını önlemek için kullanılır.
+///
+/// Kimlik önce ÖĞRENCİ NUMARASINDAN gelir; numara gerçek kimliktir ve tekildir.
+/// Numara yoksa ad + soyad + sınıf + DAL dörtlüsüne düşülür.
+///
+/// Dal'ın anahtara dahil olması zorunludur: gerçek veride aynı sınıfta aynı ad
+/// ve soyada sahip iki farklı öğrenci bulunmaktadır (farklı numara, farklı dal,
+/// farklı işletme). Dal olmadan biri sessizce kaybolur.
+///
+/// Numarası olmayan ve her şeyi aynı olan iki farklı öğrenci hâlâ ayırt edilemez;
+/// bu durumda kullanıcının numara girmesi gerekir.
+pub async fn find_duplicate(pool: &SqlitePool, candidate: &NewStudent) -> AppResult<Option<Student>> {
+    let rows = list(pool).await?;
+
+    if let Some(candidate_no) = non_empty(candidate.student_no.as_ref()) {
+        return Ok(rows
+            .into_iter()
+            .find(|s| non_empty(s.student_no.as_ref()).as_deref() == Some(candidate_no.as_str())));
+    }
+
+    let key = fallback_key(
+        &candidate.first_name,
+        &candidate.last_name,
+        &candidate.grade,
+        &candidate.branch,
+    );
+
+    Ok(rows.into_iter().find(|s| {
+        // Numarası olan bir kayıt, numarasız bir adayla ad üzerinden eşleşmez;
+        // aksi hâlde numarası girilmemiş yeni bir öğrenci yanlışlıkla yutulur.
+        non_empty(s.student_no.as_ref()).is_none()
+            && fallback_key(&s.first_name, &s.last_name, &s.grade, &s.branch) == key
+    }))
+}
+
+fn fallback_key(first_name: &str, last_name: &str, grade: &str, branch: &str) -> String {
     format!(
-        "{}|{}|{}",
+        "{}|{}|{}|{}",
         normalize(first_name),
         normalize(last_name),
-        normalize(grade)
+        normalize(grade),
+        normalize(branch)
     )
 }
 
@@ -267,24 +295,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exists_with_name_and_grade_is_case_and_space_insensitive() {
+    async fn find_duplicate_matches_on_student_no_first() {
+        let (_dir, pool) = test_pool().await;
+        let mut existing = sample("Ahmet", "Yilmaz", "12/C", None);
+        existing.student_no = Some("9101".into());
+        create(&pool, &existing).await.unwrap();
+
+        // Aynı numara, tamamen farklı ad: yine de aynı öğrencidir.
+        let mut candidate = sample("Bambaska", "Isim", "12/D", None);
+        candidate.student_no = Some("9101".into());
+        assert!(find_duplicate(&pool, &candidate).await.unwrap().is_some());
+
+        // Farklı numara: farklı öğrenci.
+        let mut other = sample("Ahmet", "Yilmaz", "12/C", None);
+        other.student_no = Some("9102".into());
+        assert!(find_duplicate(&pool, &other).await.unwrap().is_none());
+    }
+
+    /// Gerçek veride aynı sınıfta aynı ad ve soyada sahip iki farklı öğrenci var
+    /// (Kurgusal Kişi, 12/D — numaraları 9101 ve 9102, dalları farklı).
+    /// Bunlar ayrı kayıt olarak durmalı.
+    #[tokio::test]
+    async fn two_students_with_same_name_and_grade_are_distinct() {
+        let (_dir, pool) = test_pool().await;
+
+        let mut first = sample("Mehmet", "Yildiz", "12/D", None);
+        first.student_no = Some("9101".into());
+        first.branch = "Elektrik Tesisatları ve Pano Montörlüğü".into();
+        create(&pool, &first).await.unwrap();
+
+        let mut second = sample("Mehmet", "Yildiz", "12/D", None);
+        second.student_no = Some("9102".into());
+        second.branch = "Endüstriyel Bakım Onarım".into();
+
+        assert!(
+            find_duplicate(&pool, &second).await.unwrap().is_none(),
+            "farklı numaralı iki öğrenci aynı sayılmamalı"
+        );
+    }
+
+    /// Numara yoksa ad + soyad + sınıf + DAL dörtlüsüne düşülür.
+    #[tokio::test]
+    async fn find_duplicate_falls_back_to_name_grade_and_branch() {
         let (_dir, pool) = test_pool().await;
         create(&pool, &sample("AHMET", "YILMAZ", "12/C", None)).await.unwrap();
 
-        // Büyük/küçük harf ve baştaki/sondaki boşluklar eşleşmeyi bozmamalı.
-        assert!(exists_with_name_and_grade(&pool, "  ahmet  ", "YILMAZ", "12/C")
-            .await
-            .unwrap());
-        assert!(exists_with_name_and_grade(&pool, "Ahmet", "Yilmaz", " 12/c ")
-            .await
-            .unwrap());
+        // Büyük/küçük harf ve boşluk farkı eşleşmeyi bozmamalı.
+        let candidate = sample("  ahmet  ", "yilmaz", " 12/c ", None);
+        assert!(find_duplicate(&pool, &candidate).await.unwrap().is_some());
 
-        // Farklı sınıf farklı öğrencidir; aynı ad soyad eşleşme saymaz.
-        assert!(!exists_with_name_and_grade(&pool, "Ahmet", "Yilmaz", "12/D")
+        // Farklı sınıf farklı öğrencidir.
+        assert!(find_duplicate(&pool, &sample("Ahmet", "Yilmaz", "12/D", None))
             .await
-            .unwrap());
-        assert!(!exists_with_name_and_grade(&pool, "Mehmet", "Yilmaz", "12/C")
-            .await
-            .unwrap());
+            .unwrap()
+            .is_none());
+
+        // Farklı dal farklı öğrencidir.
+        let mut other_branch = sample("Ahmet", "Yilmaz", "12/C", None);
+        other_branch.branch = "Endüstriyel Bakım Onarım".into();
+        assert!(find_duplicate(&pool, &other_branch).await.unwrap().is_none());
+    }
+
+    /// Numarası olan bir kayıt, numarasız bir adayı yutmamalı.
+    #[tokio::test]
+    async fn numbered_record_does_not_swallow_unnumbered_candidate() {
+        let (_dir, pool) = test_pool().await;
+        let mut existing = sample("Ahmet", "Yilmaz", "12/C", None);
+        existing.student_no = Some("9101".into());
+        create(&pool, &existing).await.unwrap();
+
+        let candidate = sample("Ahmet", "Yilmaz", "12/C", None);
+        assert!(find_duplicate(&pool, &candidate).await.unwrap().is_none());
     }
 }
