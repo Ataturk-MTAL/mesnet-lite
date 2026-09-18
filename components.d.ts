@@ -12,7 +12,14 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AppSidebar: typeof import('./src/components/layout/AppSidebar.vue')['default']
+    Button: typeof import('primevue/button')['default']
+    Column: typeof import('primevue/column')['default']
+    CompanyFormDialog: typeof import('./src/components/company/CompanyFormDialog.vue')['default']
     ConfirmDialog: typeof import('primevue/confirmdialog')['default']
+    DataTable: typeof import('primevue/datatable')['default']
+    Dialog: typeof import('primevue/dialog')['default']
+    InputNumber: typeof import('primevue/inputnumber')['default']
+    InputText: typeof import('primevue/inputtext')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     Sidebar: typeof import('primevue/sidebar')['default']
@@ -30,6 +37,8 @@ declare module 'vue' {
     SidebarMenuItem: typeof import('primevue/sidebarmenuitem')['default']
     SidebarPanel: typeof import('primevue/sidebarpanel')['default']
     SidebarTrigger: typeof import('primevue/sidebartrigger')['default']
+    Tag: typeof import('primevue/tag')['default']
+    Textarea: typeof import('primevue/textarea')['default']
     Toast: typeof import('primevue/toast')['default']
   }
 }

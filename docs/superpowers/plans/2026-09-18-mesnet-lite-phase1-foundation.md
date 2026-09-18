@@ -1131,6 +1131,90 @@ git commit -m "feat: alan modelleri, şeflik saati ve gidiş-dönüş mesafe tü
 
 ---
 
+### Task 5: `db/companies.rs` deposu
+
+**Files:**
+- Modify: `src-tauri/src/db/companies.rs` (Task 3'te boş oluşturuldu)
+- Test: aynı dosyadaki `#[cfg(test)]` modülü
+
+**Interfaces:**
+- Consumes: `Company`, `NewCompany` (Task 4), `AppResult` (Task 3)
+- Produces:
+  - `pub async fn list(pool: &SqlitePool) -> AppResult<Vec<Company>>`
+  - `pub async fn get(pool: &SqlitePool, id: i64) -> AppResult<Company>`
+  - `pub async fn create(pool: &SqlitePool, input: &NewCompany) -> AppResult<Company>`
+  - `pub async fn update(pool: &SqlitePool, id: i64, input: &NewCompany) -> AppResult<Company>`
+  - `pub async fn delete(pool: &SqlitePool, id: i64) -> AppResult<()>`
+  - `pub async fn set_location(pool: &SqlitePool, id: i64, latitude: f64, longitude: f64, status: &str) -> AppResult<Company>`
+  - `pub async fn find_by_normalized_name(pool: &SqlitePool, name: &str) -> AppResult<Option<Company>>`
+  - `pub fn normalize_name(name: &str) -> String`
+
+Kod içeriği uygulanan dosyada birebir mevcuttur (`src-tauri/src/db/companies.rs`).
+Testler: create/get, sıralı list, update, delete, set_location, `normalize_name` Unicode
+davranışı ve `find_by_normalized_name` büyük/küçük harf + boşluk toleransı.
+
+`normalize_name` testindeki beklenti kasıtlıdır: Rust'ın `to_lowercase()` fonksiyonu
+`İ` (U+0130) harfini iki kod noktasına (`i` + U+0307) çevirir. Test bu gerçek davranışı
+sabitler; karşılaştırmanın iki tarafı da aynı fonksiyondan geçtiği için sorun değildir.
+
+- [ ] **Step 1: Testleri yaz** — yedi test (yukarıdaki liste)
+- [ ] **Step 2: `cargo test db::companies` — FAIL bekle**
+- [ ] **Step 3: Depoyu yaz**
+- [ ] **Step 4: `cargo test db::companies` — PASS bekle**
+- [ ] **Step 5: Commit** — `feat: işletme deposu ve Unicode-doğru mükerrer tespiti`
+
+---
+
+### Task 6: İşletme komutları ve tipli frontend API
+
+**Files:**
+- Create: `src-tauri/src/commands/company_commands.rs`, `src/api/client.ts`, `src/api/companies.ts`, `src/types/models.ts`
+- Modify: `src-tauri/src/commands/mod.rs`, `src-tauri/src/lib.rs`
+
+**Interfaces:**
+- Consumes: `db::companies` (Task 5), `AppState` (Task 3)
+- Produces: Tauri komutları `list_companies`, `get_company`, `create_company`,
+  `update_company`, `delete_company`, `set_company_location`; TypeScript `Company`,
+  `NewCompany` arayüzleri ve `companiesApi` nesnesi
+
+Komut katmanı incedir: yalnızca sınır doğrulaması yapar, iş mantığı `db/` ve `domain/`
+içindedir. Doğrulama kuralları: ad boş olamaz, adres boş olamaz, mesafe negatif olamaz,
+enlem -90..90, boylam -180..180.
+
+- [ ] **Step 1: Komut katmanını ve dört doğrulama testini yaz**
+- [ ] **Step 2: Komutları `invoke_handler` içinde kaydet**
+- [ ] **Step 3: `cargo test` — PASS bekle**
+- [ ] **Step 4: `src/types/models.ts` yaz** (serde camelCase karşılığı)
+- [ ] **Step 5: `src/api/client.ts` ve `src/api/companies.ts` yaz**
+- [ ] **Step 6: `npm run build` — tip hatası olmamalı**
+- [ ] **Step 7: Commit** — `feat: işletme Tauri komutları, sınır doğrulaması ve tipli frontend API`
+
+---
+
+### Task 7: `CompaniesView` — DataTable tam CRUD
+
+**Files:**
+- Modify: `src/views/CompaniesView.vue`, `src/i18n/labels.ts`
+- Create: `src/components/company/CompanyFormDialog.vue`
+
+**Interfaces:**
+- Consumes: `companiesApi` (Task 6), `labels` (Task 1)
+- Produces: İşletme listeleme / ekleme / düzenleme / silme ekranı
+
+Tablo sütunları: ad (sıralanabilir), adres, telefon, tek yön mesafe, **gidiş-dönüş
+mesafe (türetilmiş, iki katı)**, konum durumu (renkli `Tag`), satır işlemleri.
+Global arama ad ve adres üzerinde çalışır. Silme `useConfirm` ile onaylanır.
+Hata `useToast` ile Türkçe gösterilir, sessizce yutulmaz.
+
+- [ ] **Step 1: `CompanyFormDialog.vue` yaz**
+- [ ] **Step 2: Etiket sözlüğüne `distanceHint`, `empty`, `searchPlaceholder` ekle**
+- [ ] **Step 3: `CompaniesView.vue` yaz**
+- [ ] **Step 4: `npm run build` — tip hatası olmamalı**
+- [ ] **Step 5: Uygulamada elle doğrula** — Ekle, listede gör, Düzenle, Sil (onay diyaloğu), gidiş-dönüş sütunu tek yönün iki katı mı
+- [ ] **Step 6: Commit** — `feat: işletme CRUD ekranı, filtre ve gidiş-dönüş sütunu`
+
+---
+
 ## Kalan görevler
 
 Bu plan dosyası sonraki turlarda aşağıdaki görevlerle tamamlanacaktır. Her biri aynı yapıda (Files / Interfaces / TDD adımları / commit) yazılacaktır.

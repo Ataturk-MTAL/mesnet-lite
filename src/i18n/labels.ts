@@ -46,6 +46,9 @@ export const labels = {
     geocodeStatus: 'Konum Durumu',
     notes: 'Notlar',
     studentCount: 'Öğrenci Sayısı',
+    distanceHint: 'Okuldan işletmeye TEK YÖN yol mesafesi. Saat tavanı bunun iki katına göre hesaplanır.',
+    empty: 'Kayıtlı işletme yok.',
+    searchPlaceholder: 'İşletme adı veya adres ara',
   },
   geocodeStatus: {
     pending: 'Bekliyor',

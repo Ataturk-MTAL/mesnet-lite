@@ -22,6 +22,14 @@ pub fn run() {
             app.manage(AppState { pool });
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            commands::company_commands::list_companies,
+            commands::company_commands::get_company,
+            commands::company_commands::create_company,
+            commands::company_commands::update_company,
+            commands::company_commands::delete_company,
+            commands::company_commands::set_company_location,
+        ])
         .run(tauri::generate_context!())
         .expect("Uygulama başlatılamadı");
 }
