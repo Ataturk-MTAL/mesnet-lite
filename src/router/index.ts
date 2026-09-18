@@ -7,6 +7,16 @@ const router = createRouter({
     { path: '/companies', name: 'companies', component: () => import('../views/CompaniesView.vue') },
     { path: '/students', name: 'students', component: () => import('../views/StudentsView.vue') },
     { path: '/teachers', name: 'teachers', component: () => import('../views/TeachersView.vue') },
+    {
+      path: '/company-hours',
+      name: 'companyHours',
+      component: () => import('../views/CompanyHoursView.vue'),
+    },
+    {
+      path: '/allocation',
+      name: 'allocation',
+      component: () => import('../views/AllocationView.vue'),
+    },
     { path: '/settings', name: 'settings', component: () => import('../views/SettingsView.vue') },
     { path: '/import-export', name: 'importExport', component: () => import('../views/ImportExportView.vue') },
   ],

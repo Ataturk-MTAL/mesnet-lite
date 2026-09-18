@@ -36,6 +36,7 @@ declare module 'vue' {
     TeacherFormDialog: typeof import('./src/components/teacher/TeacherFormDialog.vue')['default']
     Textarea: typeof import('openvue/textarea')['default']
     Toast: typeof import('openvue/toast')['default']
+    ToggleSwitch: typeof import('openvue/toggleswitch')['default']
   }
   export interface GlobalDirectives {
     Tooltip: typeof import('openvue/tooltip')['default']

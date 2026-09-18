@@ -173,6 +173,14 @@ const navGroups: readonly NavGroup[] = [
     ],
   },
   {
+    key: 'planning',
+    label: labels.nav.groupPlanning,
+    items: [
+      { to: '/company-hours', label: labels.nav.companyHours, icon: 'pi pi-clock' },
+      { to: '/allocation', label: labels.nav.allocation, icon: 'pi pi-share-alt' },
+    ],
+  },
+  {
     key: 'admin',
     label: labels.nav.groupAdmin,
     items: [
