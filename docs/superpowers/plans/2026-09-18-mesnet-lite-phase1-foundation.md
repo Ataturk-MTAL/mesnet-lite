@@ -6,16 +6,19 @@
 
 **Architecture:** Rust backend `db/` (depo katmanı), `domain/` (saf tipler ve hesap), `services/` (CSV, coğrafi kodlama) ve `commands/` (ince Tauri sarmalayıcıları) olarak katmanlanır; `commands/` iş mantığı içermez. Frontend Vue 3 + TypeScript, PrimeVue v5 bileşik `Sidebar` kabuğu içinde router görünümleri barındırır ve backend'e yalnızca `src/api/` altındaki tipli `invoke` sarmalayıcıları üzerinden erişir.
 
-**Tech Stack:** Tauri 2 · Rust · `sqlx` 0.8 (SQLite) · `thiserror` · `serde` · `reqwest` · Vue 3.5 · TypeScript · Vite · PrimeVue 5.0.0 + `@primeuix/themes` 3.0.0 · Pinia · Leaflet 1.9 · Vitest
+**Tech Stack:** Tauri 2 · Rust · `sqlx` 0.8 (SQLite) · `thiserror` · `serde` · `reqwest` · Vue 3.5 · TypeScript · Vite · OpenVue 1.0.0 + `@openvue/themes` 1.0.0 · Pinia · Leaflet 1.9 · Vitest
 
 ## Global Constraints
 
 Bu bölüm her görevin gereksinimlerine örtük olarak dahildir.
 
 - **Dil kuralı:** Dosya adları, tablo/sütun adları, tip/fonksiyon/değişken adları ve enum değerleri **İngilizce**. Kod içi yorumlar, dokümantasyon, arayüz metinleri ve hata mesajları **Türkçe**. Arayüz etiketleri yalnızca `src/i18n/labels.ts` içinde tanımlanır.
-- **Paket sürümleri kesindir:** `primevue@5.0.0`, `@primeuix/themes@3.0.0`. PrimeVue v5 kök font boyutunu **16px** varsayar; standart (`-compat` olmayan) Aura preset'i kullanılır.
-- **PrimeVue `Scheduler` PRO bileşenidir, kullanılmaz.** Faz 2'deki müsaitlik ızgarası elle yazılır.
-- **Bileşen içe aktarma:** `unplugin-vue-components` + `@primevue/auto-import-resolver` kullanılır. `Sidebar` bileşik ailesinin (`SidebarLayout`, `SidebarMain`, `SidebarAside`, `SidebarPanel`, `SidebarHeader`, `SidebarContent`, `SidebarGroup`, `SidebarGroupLabel`, `SidebarGroupContent`, `SidebarMenu`, `SidebarMenuItem`, `SidebarMenuButton`, `SidebarTrigger`, `SidebarBackdrop`, `SidebarSpacer`) tek tek import yolu yazılmaz.
+- **Paket sürümleri kesindir:** `openvue@1.0.0`, `@openvue/themes@1.0.0`, `primeicons`. **PrimeVue KULLANILMAZ:** v5 çalışma zamanında lisans anahtarı doğrular ve anahtarsız çalıştırıldığında tüm stiller kaybolup `Invalid PrimeUI License` rozeti çıkar. OpenVue, PrimeVue 4.5.5'in MIT forkudur ve anahtar istemez.
+- **Kök font boyutu 14px'tir** (OpenVue, PrimeVue v4 tabanlı).
+- **Hazır takvim/zamanlama bileşeni yoktur.** Faz 2'deki müsaitlik ızgarası elle yazılır.
+- **Bileşen içe aktarma:** `unplugin-vue-components` + `@openvue/auto-import-resolver`. **Dışa aktarılan sembolün adı fork'ta korunmuştur: `PrimeVueResolver`**, `OpenVueResolver` değil.
+- **Composable yolları:** `openvue/usetoast`, `openvue/useconfirm`. Yapılandırma: `openvue/config`, tema: `@openvue/themes/aura`.
+- **v5'in bileşik `Sidebar` ailesi yoktur.** Navigasyon düz CSS kenar çubuğu + dar ekranda `Drawer` ile kurulur.
 - **`sqlx::query!` derleme zamanı makroları kullanılmaz.** Yalnızca `sqlx::query_as::<_, T>()` ve `sqlx::query()` çalışma zamanı sorguları, `#[derive(sqlx::FromRow)]` ile.
 - **Mesafe:** `companies.one_way_distance_km` **tek yön yol mesafesidir** ve yalnızca CSV'den gelir ya da elle girilir. Saat tavanı kurallarında kullanılan değer `round_trip_distance_km = one_way_distance_km * 2`'dir ve **saklanmaz**, sorguda türetilir.
 - **Mesafe hesaplanmaz.** Haversine veya benzeri kuş uçuşu hesap **hiçbir yerde kullanılmaz**; şehir içinde gerçek araç yol mesafesinden belirgin biçimde kısadır ve saat tavanını yanlış aralığa düşürür. Koordinatlar yalnızca harita gösterimi içindir.

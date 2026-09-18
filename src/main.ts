@@ -1,18 +1,19 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import PrimeVue from 'primevue/config'
-import ToastService from 'primevue/toastservice'
-import ConfirmationService from 'primevue/confirmationservice'
-import Aura from '@primeuix/themes/aura'
+import OpenVue from 'openvue/config'
+import ToastService from 'openvue/toastservice'
+import ConfirmationService from 'openvue/confirmationservice'
+import Aura from '@openvue/themes/aura'
 import App from './App.vue'
 import router from './router'
+import 'primeicons/primeicons.css'
 import 'leaflet/dist/leaflet.css'
 
 const app = createApp(App)
 app.use(createPinia())
 app.use(router)
-// PrimeVue v5 kök font boyutunu 16px varsayar; standart (compat olmayan) preset kullanılıyor.
-app.use(PrimeVue, { theme: { preset: Aura } })
+// OpenVue, PrimeVue 4.5.5'in MIT lisanslı devamıdır; lisans anahtarı gerektirmez.
+app.use(OpenVue, { theme: { preset: Aura } })
 app.use(ToastService)
 app.use(ConfirmationService)
 app.mount('#app')

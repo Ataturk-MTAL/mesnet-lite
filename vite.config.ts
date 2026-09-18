@@ -1,7 +1,8 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import Components from "unplugin-vue-components/vite";
-import { PrimeVueResolver } from "@primevue/auto-import-resolver";
+// OpenVue fork'u export adını korumuş: paket @openvue olsa da sembol PrimeVueResolver.
+import { PrimeVueResolver } from "@openvue/auto-import-resolver";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
@@ -10,8 +11,7 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(() => ({
   plugins: [
     vue(),
-    // PrimeVue bileşenleri otomatik çözümlenir; Sidebar bileşik ailesinin
-    // yirmiden fazla alt bileşeni için tek tek import yolu yazılmaz.
+    // OpenVue bileşenleri otomatik çözümlenir; tek tek import yolu yazılmaz.
     Components({ resolvers: [PrimeVueResolver()] }),
   ],
 

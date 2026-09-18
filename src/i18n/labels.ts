@@ -16,6 +16,7 @@ export const labels = {
     visitLists: 'Öğretmen Ziyaret Listeleri',
     settings: 'Ayarlar',
     importExport: 'İçe/Dışa Aktarım',
+    toggleMenu: 'Menüyü aç/kapat',
   },
   common: {
     add: 'Ekle',

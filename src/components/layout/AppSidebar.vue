@@ -1,58 +1,71 @@
 <template>
-  <SidebarLayout>
-    <SidebarBackdrop v-if="isNarrow && open" />
+  <div class="shell">
+    <!-- Geniş ekranda kalıcı kenar çubuğu. OpenVue (PrimeVue 4.5.5) v5'in bileşik
+         Sidebar ailesini içermediği için navigasyon elle kuruluyor. -->
+    <aside v-if="!isNarrow" class="sidebar" :class="{ 'sidebar--collapsed': isCollapsed }">
+      <div class="sidebar-header">
+        <span v-if="!isCollapsed" class="brand">{{ labels.app.title }}</span>
+      </div>
+      <nav class="sidebar-nav">
+        <div v-for="group in navGroups" :key="group.label" class="nav-group">
+          <div v-if="!isCollapsed" class="nav-group-label">{{ group.label }}</div>
+          <RouterLink
+            v-for="item in group.items"
+            :key="item.to"
+            :to="item.to"
+            class="nav-item"
+            :title="item.label"
+          >
+            <i :class="item.icon" />
+            <span v-if="!isCollapsed" class="nav-item-label">{{ item.label }}</span>
+          </RouterLink>
+        </div>
+      </nav>
+    </aside>
 
-    <Sidebar
-      id="app-sidebar"
-      variant="sidebar"
-      side="left"
-      :collapsible="isNarrow ? 'offcanvas' : 'icon'"
-      :overlay="isNarrow"
-      width="16rem"
-      iconWidth="3rem"
-      v-model:open="open"
-    >
-      <SidebarAside>
-        <SidebarPanel>
-          <SidebarHeader>
-            <span class="brand">{{ labels.app.title }}</span>
-          </SidebarHeader>
+    <!-- Dar ekranda aynı navigasyon Drawer içinde açılır. -->
+    <Drawer v-model:visible="isDrawerOpen" position="left" :header="labels.app.title">
+      <nav class="sidebar-nav">
+        <div v-for="group in navGroups" :key="group.label" class="nav-group">
+          <div class="nav-group-label">{{ group.label }}</div>
+          <RouterLink
+            v-for="item in group.items"
+            :key="item.to"
+            :to="item.to"
+            class="nav-item"
+            @click="isDrawerOpen = false"
+          >
+            <i :class="item.icon" />
+            <span class="nav-item-label">{{ item.label }}</span>
+          </RouterLink>
+        </div>
+      </nav>
+    </Drawer>
 
-          <SidebarContent>
-            <SidebarGroup v-for="group in navGroups" :key="group.label">
-              <SidebarGroupLabel>{{ group.label }}</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  <SidebarMenuItem v-for="item in group.items" :key="item.to">
-                    <SidebarMenuButton as-child>
-                      <RouterLink :to="item.to">{{ item.label }}</RouterLink>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          </SidebarContent>
-        </SidebarPanel>
-      </SidebarAside>
-    </Sidebar>
-
-    <SidebarMain>
+    <main class="main">
       <header class="topbar">
-        <SidebarTrigger target="app-sidebar" severity="secondary" :text="true" size="small" />
+        <Button
+          icon="pi pi-bars"
+          severity="secondary"
+          text
+          :aria-label="labels.nav.toggleMenu"
+          @click="toggleMenu"
+        />
       </header>
       <RouterView />
-    </SidebarMain>
-  </SidebarLayout>
+    </main>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { labels } from '../../i18n/labels'
 
-const open = ref(true)
+const isCollapsed = ref(false)
+const isDrawerOpen = ref(false)
 const isNarrow = ref(false)
 
-// Dar ekranda sidebar offcanvas + overlay moduna geçer.
+// Dar ekranda kalıcı çubuk yerine Drawer kullanılır.
 const NARROW_BREAKPOINT_PX = 900
 
 function updateWidth(): void {
@@ -66,9 +79,18 @@ onMounted(() => {
 
 onUnmounted(() => window.removeEventListener('resize', updateWidth))
 
+function toggleMenu(): void {
+  if (isNarrow.value) {
+    isDrawerOpen.value = !isDrawerOpen.value
+  } else {
+    isCollapsed.value = !isCollapsed.value
+  }
+}
+
 interface NavItem {
   to: string
   label: string
+  icon: string
 }
 
 interface NavGroup {
@@ -81,29 +103,119 @@ const navGroups: readonly NavGroup[] = [
   {
     label: labels.nav.groupRecords,
     items: [
-      { to: '/companies', label: labels.nav.companies },
-      { to: '/students', label: labels.nav.students },
-      { to: '/teachers', label: labels.nav.teachers },
+      { to: '/companies', label: labels.nav.companies, icon: 'pi pi-building' },
+      { to: '/students', label: labels.nav.students, icon: 'pi pi-users' },
+      { to: '/teachers', label: labels.nav.teachers, icon: 'pi pi-id-card' },
     ],
   },
   {
     label: labels.nav.groupAdmin,
     items: [
-      { to: '/settings', label: labels.nav.settings },
-      { to: '/import-export', label: labels.nav.importExport },
+      { to: '/settings', label: labels.nav.settings, icon: 'pi pi-cog' },
+      { to: '/import-export', label: labels.nav.importExport, icon: 'pi pi-file-import' },
     ],
   },
 ]
 </script>
 
 <style scoped>
-.brand { font-weight: 600; font-size: 1.125rem; padding-inline: 0.5rem; }
+.shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sidebar {
+  width: 16rem;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--p-content-border-color);
+  background: var(--p-content-background);
+  transition: width 0.2s ease;
+}
+
+.sidebar--collapsed {
+  width: 3.5rem;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  height: 3.5rem;
+  padding-inline: 1rem;
+  border-bottom: 1px solid var(--p-content-border-color);
+}
+
+.brand {
+  font-weight: 600;
+  font-size: 1.125rem;
+  white-space: nowrap;
+}
+
+.sidebar-nav {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 0.5rem;
+}
+
+.nav-group + .nav-group {
+  margin-top: 1rem;
+}
+
+.nav-group-label {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--p-text-muted-color);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--p-content-border-radius);
+  color: var(--p-text-color);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.nav-item:hover {
+  background: var(--p-content-hover-background);
+}
+
+.nav-item.router-link-active {
+  background: var(--p-highlight-background);
+  color: var(--p-highlight-color);
+  font-weight: 500;
+}
+
+.nav-item-label {
+  font-size: 0.875rem;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .topbar {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  height: 3rem;
-  padding-inline: 1rem;
+  height: 3.5rem;
+  flex-shrink: 0;
+  padding-inline: 0.75rem;
   border-bottom: 1px solid var(--p-content-border-color);
+}
+
+.main > :not(.topbar) {
+  flex: 1;
+  overflow-y: auto;
 }
 </style>

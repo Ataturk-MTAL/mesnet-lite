@@ -141,18 +141,36 @@ Ham değer `one_way_distance_km` olarak saklanır; iki katı **saklanmaz**, kura
 | Backend | Rust | Hesap mantığı derleme zamanı güvenceli |
 | Veritabanı | SQLite + `sqlx` | Gömülü, tek dosya, `sqlx::migrate!` ile şema sürümleme |
 | Frontend | Vue 3 + TypeScript + Vite | |
-| UI kütüphanesi | **PrimeVue v5** + `@primeuix/themes/aura` | Navigasyon için v5'in `Sidebar` bileşik bileşeni gerekiyor |
+| UI kütüphanesi | **OpenVue 1.0.0** + `@openvue/themes/aura` | PrimeVue 4.5.5'in MIT lisanslı devamı; lisans anahtarı gerektirmez |
 | Harita | Leaflet + OpenStreetMap raster tile | API anahtarı gerektirmez |
 | Durum yönetimi | Pinia | |
 | Excel çıktısı | `rust_xlsxwriter` | |
 | PDF çıktısı | Webview yazdırma (`@media print` + `window.print()`) | Ek bağımlılık yok, Türkçe font sorunu yok |
 
-### 5.1 PrimeVue v5 notları
+### 5.1 UI kütüphanesi kararı — neden OpenVue
 
-- v5, PrimeUI çatısı altında **dual Community/Commercial** lisans modeline geçmiştir. Kullanacağımız `Sidebar` Community listesindedir.
-- **`Scheduler` PRO bileşenidir.** Öğretmen müsaitlik ızgarası ve atama yerleşimi PRO bileşen kullanmadan, kendi `AvailabilityGrid.vue` bileşenimizle yapılacaktır.
-- v5 kök font boyutunu **16px** varsayar (v4 14px varsayıyordu). Yeni proje olduğumuz için standart preset kullanılır, `-compat` varyantı gerekmez.
-- `PanelMenu` v5'te kullanımdan kaldırılmıştır; çok seviyeli navigasyon `Sidebar` bileşik bileşenleriyle kurulur.
+Proje önce **PrimeVue v5** ile kuruldu ve çalışmadı: v5, PrimeUI çatısı altında dual
+Community/Commercial lisans modeline geçmiş ve **çalışma zamanında lisans anahtarı
+doğruluyor**. Anahtarsız çalıştırıldığında uygulama tüm stillerini kaybetti ve pencerede
+`Invalid PrimeUI License` rozeti göründü. Derleme ve testler yeşil olduğu için bu ancak
+uygulamanın ekran görüntüsüne bakınca fark edildi.
+
+**OpenVue 1.0.0** seçildi: PrimeVue **4.5.5** forku — *"the last release published under an
+open source license"* — MIT lisanslı, *"no paid tiers or locked features"*, lisans anahtarı
+istemiyor. API, temalar ve pass-through PrimeVue v4 ile aynı.
+
+Sonuçları:
+
+- **v5'in bileşik `Sidebar` ailesi yoktur** (`SidebarLayout`, `SidebarAside`,
+  `SidebarMenuButton` …). Navigasyon düz CSS kenar çubuğu olarak yazılır; dar ekranda
+  `Drawer` kullanılır, ikon moduna daraltma elle yapılır.
+- Kök font boyutu **14px**'tir (v5 16px varsayıyordu).
+- Otomatik içe aktarma paketi `@openvue/auto-import-resolver`, ancak **dışa aktardığı
+  sembolün adı fork'ta korunmuştur: `PrimeVueResolver`** (`OpenVueResolver` değil).
+- Composable'lar `openvue/usetoast`, `openvue/useconfirm` yolundan gelir.
+- İkonlar `primeicons` paketinden CSS sınıflarıyla kullanılır (`pi pi-building` gibi).
+- Zamanlama/takvim için hazır bileşen yoktur; müsaitlik ızgarası kendi
+  `AvailabilityGrid.vue` bileşenimizle yazılır.
 
 **Sorgu stili:** `sqlx::query!` derleme zamanı makroları **kullanılmaz**; bunlar derleme sırasında canlı bir veritabanı veya `cargo sqlx prepare` ile üretilmiş önbellek gerektirir ve kurulum sürtünmesini artırır. Bunun yerine `sqlx::query_as::<_, T>()` çalışma zamanı sorguları ve `#[derive(sqlx::FromRow)]` kullanılır. Sorgu doğruluğu entegrasyon testleriyle güvence altına alınır (§16).
 
@@ -456,13 +474,15 @@ Saf fonksiyon. Girdi: işletmeler, öğretmenler, müsaitlikler, sınıf günler
 
 ## 12. Arayüz
 
-### 12.1 Navigasyon — PrimeVue v5 `Sidebar`
+### 12.1 Navigasyon — kenar çubuğu ve `Drawer`
 
 Uygulama kabuğu `SidebarLayout` > (`Sidebar` + `SidebarMain`) şeklinde kurulur.
 
-`Sidebar` ayarları: `variant="sidebar"`, `collapsible="icon"`, `side="left"`, `width="16rem"`, `iconWidth="3rem"`, `v-model:open`. Dar ekranda `collapsible="offcanvas"` ve `overlay` etkinleşir. `SidebarMain` içindeki başlıkta `SidebarTrigger` bulunur; `SidebarBackdrop` overlay modunda kullanılır.
-
-Menü `SidebarContent` > `SidebarGroup` > `SidebarGroupLabel` + `SidebarGroupContent` > `SidebarMenu` > `SidebarMenuItem` > `SidebarMenuButton` zinciriyle kurulur. Vue Router bağlantısı `SidebarMenuButton` üzerinde `as` / `asChild` ile yapılır.
+Geniş ekranda kalıcı bir `<aside>` kenar çubuğu, dar ekranda (`< 900px`) OpenVue `Drawer`
+bileşeni kullanılır. Üst çubuktaki `pi pi-bars` düğmesi geniş ekranda çubuğu ikon moduna
+daraltır, dar ekranda Drawer'ı açar. Menü öğeleri `RouterLink` olup aktif rota
+`.router-link-active` sınıfıyla vurgulanır. Renkler OpenVue tasarım belirteçlerinden
+(`--p-content-border-color`, `--p-highlight-background` …) okunur, sabit renk yazılmaz.
 
 Menü grupları:
 
@@ -479,7 +499,7 @@ Menü grupları:
 | **İşletmeler** | `Splitter`: solda `DataTable` (filtre, sıralama, sayfalama), sağda Leaflet haritası. Satır seçimi marker'ı vurgular, marker tıklaması satırı seçer. `geocode_status` renkli `Tag`. Tam CRUD, toplu coğrafi kodlama butonu, haritadan elle konum düzeltme. |
 | **Öğrenciler** | `DataTable` tam CRUD; işletme ve dal `Select` ile bağlanır; sınıf ve dal filtresi. |
 | **Öğretmenler** | `DataTable` tam CRUD; kapasite çubuğu (`awarded / capacity`); `chief_type` `Select`, türetilen şeflik saati salt-okunur gösterilir. |
-| **Müsaitlik Takvimi** | Öğretmen seçilir, gün × saat ızgarasında boş saatler işaretlenir (tıkla veya sürükle). Aynı ekranda sınıfların işletme günleri (`class_workplace_days`) düzenlenir. Kendi `AvailabilityGrid.vue` bileşenimiz kullanılır — PrimeVue `Scheduler` PRO olduğu için kullanılmaz. |
+| **Müsaitlik Takvimi** | Öğretmen seçilir, gün × saat ızgarasında boş saatler işaretlenir (tıkla veya sürükle). Aynı ekranda sınıfların işletme günleri (`class_workplace_days`) düzenlenir. Kendi `AvailabilityGrid.vue` bileşenimiz kullanılır; OpenVue'da hazır takvim/zamanlama bileşeni yoktur. |
 | **Dağıtım** | Ana ekran. Solda öğretmen kartları (kapasite çubuğu, atanmış işletmeler, haftalık dilim ızgarası), sağda harita (marker rengi = atanan öğretmen, gri = atanmamış). "Öneri Üret" butonu motoru çalıştırır. Kart ↔ kart sürükle-bırak ile işletme taşınır. Her atama satırında `Tavan 6 sa. · Takdir [4]` `InputNumber` ve dilim yerleştirme ızgarası. İhlaller anında `Tag` olarak görünür; "Zorla ekle" anahtarı ve gerekçe alanı satır içindedir. |
 | **Ayarlar** | Okul bilgisi ve konumu · `institution_type` · `is_metropolitan_district` · aktif dönem · gün başlangıç/bitiş saati · sınıf+dal bazlı haftalık ders saati ve grup sayısı · **Saat Tavanı Kuralları** ızgarası (tam CRUD) |
 | **İçe/Dışa Aktarım** | CSV içe aktarma sihirbazı · Excel/CSV dışa aktarma · rapor bağlantıları |

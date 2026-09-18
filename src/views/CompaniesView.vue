@@ -78,8 +78,8 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { useToast } from 'primevue/usetoast'
-import { useConfirm } from 'primevue/useconfirm'
+import { useToast } from 'openvue/usetoast'
+import { useConfirm } from 'openvue/useconfirm'
 import CompanyFormDialog from '../components/company/CompanyFormDialog.vue'
 import { companiesApi } from '../api/companies'
 import { labels } from '../i18n/labels'

@@ -11,18 +11,18 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@primeicons/vue": "^8.0.1",
-    "@primeuix/themes": "^3.0.0",
+    "@openvue/themes": "^1.0.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "leaflet": "^1.9.4",
+    "openvue": "^1.0.0",
     "pinia": "^4.0.3",
-    "primevue": "^5.0.0",
+    "primeicons": "^8.0.1",
     "vue": "^3.5.13",
     "vue-router": "^4.6.4"
   },
   "devDependencies": {
-    "@primevue/auto-import-resolver": "^5.0.1",
+    "@openvue/auto-import-resolver": "^1.0.0",
     "@tauri-apps/cli": "^2",
     "@types/leaflet": "^1.9.22",
     "@vitejs/plugin-vue": "^6.0.7",
