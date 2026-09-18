@@ -7,8 +7,8 @@
         <span v-if="!isCollapsed" class="brand">{{ labels.app.title }}</span>
       </div>
       <nav class="sidebar-nav">
-        <div v-for="group in navGroups" :key="group.label" class="nav-group">
-          <div v-if="!isCollapsed" class="nav-group-label">{{ group.label }}</div>
+        <div v-for="group in navGroups" :key="group.key" class="nav-group">
+          <div v-if="!isCollapsed && group.label" class="nav-group-label">{{ group.label }}</div>
           <RouterLink
             v-for="item in group.items"
             :key="item.to"
@@ -26,8 +26,8 @@
     <!-- Dar ekranda aynı navigasyon Drawer içinde açılır. -->
     <Drawer v-model:visible="isDrawerOpen" position="left" :header="labels.app.title">
       <nav class="sidebar-nav">
-        <div v-for="group in navGroups" :key="group.label" class="nav-group">
-          <div class="nav-group-label">{{ group.label }}</div>
+        <div v-for="group in navGroups" :key="group.key" class="nav-group">
+          <div v-if="group.label" class="nav-group-label">{{ group.label }}</div>
           <RouterLink
             v-for="item in group.items"
             :key="item.to"
@@ -149,6 +149,8 @@ interface NavItem {
 }
 
 interface NavGroup {
+  /** v-for anahtarı; etiket boş olabildiği için ayrı tutulur. */
+  key: string
   label: string
   items: readonly NavItem[]
 }
@@ -156,6 +158,13 @@ interface NavGroup {
 // Faz 2 (Planlama) ve Faz 3 (Raporlar) grupları ilgili görünümler eklendiğinde buraya girer.
 const navGroups: readonly NavGroup[] = [
   {
+    // Genel Bakış tek başına durur; bir gruba girmesi onu gömüyordu.
+    key: 'overview',
+    label: '',
+    items: [{ to: '/', label: labels.nav.dashboard, icon: 'pi pi-home' }],
+  },
+  {
+    key: 'records',
     label: labels.nav.groupRecords,
     items: [
       { to: '/companies', label: labels.nav.companies, icon: 'pi pi-building' },
@@ -164,6 +173,7 @@ const navGroups: readonly NavGroup[] = [
     ],
   },
   {
+    key: 'admin',
     label: labels.nav.groupAdmin,
     items: [
       { to: '/settings', label: labels.nav.settings, icon: 'pi pi-cog' },
@@ -242,7 +252,9 @@ const navGroups: readonly NavGroup[] = [
   background: var(--p-content-hover-background);
 }
 
-.nav-item.router-link-active {
+/* '/' rotası tüm yolların önekidir; router-link-active kullanılsaydı
+   Genel Bakış her sayfada vurgulu kalırdı. */
+.nav-item.router-link-exact-active {
   background: var(--p-highlight-background);
   color: var(--p-highlight-color);
   font-weight: 500;
