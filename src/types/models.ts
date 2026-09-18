@@ -1,5 +1,11 @@
 // Rust tarafındaki serde camelCase çıktısının birebir karşılığı.
 
+/** Harita üzerinde bir nokta. */
+export interface LatLng {
+  latitude: number
+  longitude: number
+}
+
 export type GeocodeStatus = 'pending' | 'resolved' | 'failed' | 'manual'
 export type ChiefType = 'none' | 'workshop_lab' | 'department'
 export type EmploymentType = 'tenured' | 'contracted'

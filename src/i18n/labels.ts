@@ -89,4 +89,31 @@ export const labels = {
     department: 'Bölüm Şefi',
   },
   employmentType: { tenured: 'Kadrolu', contracted: 'Sözleşmeli' },
+  settings: {
+    schoolSection: 'Okul Bilgileri',
+    schoolName: 'Okul Adı',
+    activeTerm: 'Aktif Dönem',
+    institutionType: 'Kurum Tipi',
+    isMetropolitanDistrict: 'Büyükşehir belediyesi sınırları içindeki ilçe',
+    statutoryCap: 'Haftalık koordinatörlük tavanı',
+    hoursPerWeek: 'saat',
+    schoolLocationNote:
+      'Okul konumu mesafe hesabında kullanılmaz; harita odağı ve dağıtım önerisinde kümeleme referansıdır.',
+    dayRangeSection: 'Gün Aralığı',
+    dayStartHour: 'Gün Başlangıç Saati',
+    dayEndHour: 'Gün Bitiş Saati',
+    dayRangeInvalid: 'Bitiş saati başlangıç saatinden büyük olmalı.',
+  },
+  institutionType: {
+    other: 'Diğer okul ve kurumlar',
+    vocational_center: 'Meslekî eğitim merkezi',
+  },
+  map: {
+    latitude: 'Enlem',
+    longitude: 'Boylam',
+    clear: 'Konumu Temizle',
+    hint: 'Haritaya tıklayarak veya işareti sürükleyerek konum seçin.',
+    schoolLocation: 'Okul Konumu',
+    companyLocation: 'İşletme Konumu',
+  },
 } as const
