@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Tauri 2 masaüstü uygulamasının çalışan iskeletini, kalıcı SQLite veri katmanını, PrimeVue v5 Sidebar navigasyonunu ve İşletme / Öğrenci / Öğretmen kayıtlarının tam CRUD'unu, CSV içe aktarma ve harita üzerinde konum düzeltme ile birlikte kurmak.
+**Goal:** Tauri 2 masaüstü uygulamasının çalışan iskeletini, kalıcı SQLite veri katmanını, OpenVue tabanlı kenar çubuğu navigasyonunu ve İşletme / Öğrenci / Öğretmen kayıtlarının tam CRUD'unu, CSV içe aktarma ve harita üzerinde konum düzeltme ile birlikte kurmak.
 
-**Architecture:** Rust backend `db/` (depo katmanı), `domain/` (saf tipler ve hesap), `services/` (CSV, coğrafi kodlama) ve `commands/` (ince Tauri sarmalayıcıları) olarak katmanlanır; `commands/` iş mantığı içermez. Frontend Vue 3 + TypeScript, PrimeVue v5 bileşik `Sidebar` kabuğu içinde router görünümleri barındırır ve backend'e yalnızca `src/api/` altındaki tipli `invoke` sarmalayıcıları üzerinden erişir.
+**Architecture:** Rust backend `db/` (depo katmanı), `domain/` (saf tipler ve hesap), `services/` (CSV, coğrafi kodlama) ve `commands/` (ince Tauri sarmalayıcıları) olarak katmanlanır; `commands/` iş mantığı içermez. Frontend Vue 3 + TypeScript, kenar çubuğu kabuğu içinde router görünümleri barındırır ve backend'e yalnızca `src/api/` altındaki tipli `invoke` sarmalayıcıları üzerinden erişir.
 
 **Tech Stack:** Tauri 2 · Rust · `sqlx` 0.8 (SQLite) · `thiserror` · `serde` · `reqwest` · Vue 3.5 · TypeScript · Vite · OpenVue 1.0.0 + `@openvue/themes` 1.0.0 · Pinia · Leaflet 1.9 · Vitest
 
@@ -49,13 +49,13 @@ Bu bölüm her görevin gereksinimlerine örtük olarak dahildir.
 | `src-tauri/migrations/0002_seed_hour_rules.sql` | 16 satırlık saat tavanı tablosu |
 | `src/i18n/labels.ts` | Türkçe etiket sözlüğü |
 | `src/api/*.ts` | Tipli `invoke` sarmalayıcıları |
-| `src/components/layout/AppSidebar.vue` | PrimeVue v5 Sidebar navigasyon kabuğu |
+| `src/components/layout/AppSidebar.vue` | Kenar çubuğu navigasyon kabuğu (geniş ekran `<aside>`, dar ekran `Drawer`) |
 | `src/components/map/CompanyMap.vue` | Leaflet haritası |
 | `src/views/*.vue` | Ekranlar |
 
 ---
 
-### Task 1: Proje iskeleti ve PrimeVue v5 kurulumu
+### Task 1: Proje iskeleti ve OpenVue kurulumu
 
 **Files:**
 - Create: `package.json`, `vite.config.ts`, `tsconfig.json`, `index.html`, `src/main.ts`, `src/App.vue`
@@ -101,8 +101,8 @@ Atlanırsa `cargo test` ve `npm run build` çalışır ama üretilen uygulama is
 - [x] **Step 2: Paketleri kur**
 
 ```bash
-npm install primevue@5.0.0 @primeuix/themes@3.0.0 @primeicons/vue vue-router@4 pinia leaflet
-npm install --save-dev @primevue/auto-import-resolver unplugin-vue-components @types/leaflet vitest @vue/test-utils jsdom
+npm install openvue@1.0.0 @openvue/themes@1.0.0 primeicons vue-router@4 pinia leaflet
+npm install --save-dev @openvue/auto-import-resolver unplugin-vue-components @types/leaflet vitest @vue/test-utils jsdom
 ```
 
 - [x] **Step 3: `vite.config.ts` içine otomatik bileşen çözümleyiciyi ekle**
@@ -125,7 +125,7 @@ export default defineConfig({
 })
 ```
 
-- [x] **Step 4: `src/main.ts` içinde PrimeVue'yu Aura preset'i ile kur**
+- [x] **Step 4: `src/main.ts` içinde OpenVue'yu Aura preset'i ile kur**
 
 ```typescript
 import { createApp } from 'vue'
@@ -237,7 +237,7 @@ git commit -m "feat: Tauri 2 + Vue 3 + PrimeVue v5 iskeleti ve Türkçe etiket s
 
 ---
 
-### Task 2: Yönlendirme ve PrimeVue v5 Sidebar navigasyon kabuğu
+### Task 2: Yönlendirme ve kenar çubuğu navigasyon kabuğu
 
 **Files:**
 - Create: `src/router/index.ts`, `src/components/layout/AppSidebar.vue`
