@@ -45,6 +45,13 @@ pub fn run() {
             commands::import_commands::preview_csv_import,
             commands::import_commands::apply_csv_import,
             commands::dashboard_commands::get_dashboard_stats,
+            commands::hours_commands::get_hours_board,
+            commands::hours_commands::save_company_hours,
+            commands::hours_commands::auto_distribute_hours,
+            commands::assignment_commands::get_assignment_board,
+            commands::assignment_commands::assign_company,
+            commands::assignment_commands::unassign_company,
+            commands::assignment_commands::clear_assignments,
         ])
         .run(tauri::generate_context!())
         .expect("Uygulama başlatılamadı");
