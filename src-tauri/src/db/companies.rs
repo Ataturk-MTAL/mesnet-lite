@@ -1,6 +1,6 @@
 use crate::domain::models::{Company, NewCompany};
 use crate::error::{AppError, AppResult};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
 const SELECT_COLUMNS: &str = "id, name, contact_first_name, contact_last_name, phone, email, \
      address_text, latitude, longitude, geocode_status, one_way_distance_km, notes, \
@@ -71,6 +71,57 @@ pub async fn create(pool: &SqlitePool, input: &NewCompany) -> AppResult<Company>
     .await?;
 
     get(pool, id).await
+}
+
+/// `change_service::execute_in` (R4) yerinde oluşturma adımı içindir
+/// (spec §5 adım 2, "Yerinde oluşturma"): `decide`'dan ÖNCE, AYNI
+/// transaction'daki bağlantı üzerinden çağrılır — havuzdan yeni bir
+/// bağlantı ALINMAZ (plan "Genel Kısıtlar": transaction içinde havuz
+/// kullanmak yasaktır).
+pub async fn create_in(conn: &mut SqliteConnection, input: &NewCompany) -> AppResult<Company> {
+    let now = now_iso();
+    let status = if input.latitude.is_some() && input.longitude.is_some() { "manual" } else { "pending" };
+    let sql = format!(
+        "INSERT INTO companies
+            (name, contact_first_name, contact_last_name, phone, email, address_text,
+             latitude, longitude, geocode_status, one_way_distance_km, notes,
+             created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         RETURNING {SELECT_COLUMNS}"
+    );
+    Ok(sqlx::query_as::<_, Company>(&sql)
+        .bind(&input.name)
+        .bind(&input.contact_first_name)
+        .bind(&input.contact_last_name)
+        .bind(&input.phone)
+        .bind(&input.email)
+        .bind(&input.address_text)
+        .bind(input.latitude)
+        .bind(input.longitude)
+        .bind(status)
+        .bind(input.one_way_distance_km)
+        .bind(&input.notes)
+        .bind(&now)
+        .bind(&now)
+        .fetch_one(&mut *conn)
+        .await?)
+}
+
+/// Yumuşak silme: geçmişi olan bir işletme veritabanından SİLİNEMEZ
+/// (spec §5.4), yerine pasif yapılır (`companies.is_active`, `0006`).
+pub async fn set_active_in(conn: &mut SqliteConnection, id: i64, is_active: bool) -> AppResult<()> {
+    let affected = sqlx::query("UPDATE companies SET is_active = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(i64::from(is_active))
+        .bind(now_iso())
+        .bind(id)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+
+    if affected == 0 {
+        return Err(not_found(id));
+    }
+    Ok(())
 }
 
 pub async fn update(pool: &SqlitePool, id: i64, input: &NewCompany) -> AppResult<Company> {
@@ -256,6 +307,47 @@ mod tests {
         assert_eq!(located.latitude, Some(36.8));
         assert_eq!(located.longitude, Some(34.6));
         assert_eq!(located.geocode_status, "manual");
+    }
+
+    #[tokio::test]
+    async fn create_in_writes_through_the_given_connection() {
+        let (_dir, pool) = test_pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+
+        let created = create_in(&mut conn, &sample_input("Bağlantı Testi A.Ş.")).await.unwrap();
+        let fetched = get(&pool, created.id).await.unwrap();
+        assert_eq!(fetched.name, "Bağlantı Testi A.Ş.");
+    }
+
+    #[tokio::test]
+    async fn set_active_in_toggles_the_flag() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Pasifleşecek A.Ş.")).await.unwrap();
+
+        let active_before: i64 = sqlx::query_scalar("SELECT is_active FROM companies WHERE id = ?1")
+            .bind(created.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(active_before, 1, "yeni işletme aktif başlamalı");
+
+        let mut conn = pool.acquire().await.unwrap();
+        set_active_in(&mut conn, created.id, false).await.unwrap();
+
+        let active_after: i64 = sqlx::query_scalar("SELECT is_active FROM companies WHERE id = ?1")
+            .bind(created.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(active_after, 0);
+    }
+
+    #[tokio::test]
+    async fn set_active_in_missing_company_returns_not_found() {
+        let (_dir, pool) = test_pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+        let err = set_active_in(&mut conn, 999, false).await.unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
     }
 
     #[tokio::test]

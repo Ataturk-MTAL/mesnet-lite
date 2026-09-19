@@ -1,6 +1,6 @@
 use crate::domain::models::{NewStudent, Student};
 use crate::error::{AppError, AppResult};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
 const SELECT_COLUMNS: &str =
     "id, first_name, last_name, student_no, grade, branch, company_id, submitted_at, term";
@@ -99,6 +99,45 @@ pub async fn create(pool: &SqlitePool, input: &NewStudent) -> AppResult<Student>
     .await?;
 
     get(pool, id).await
+}
+
+/// `change_service::execute_in` (R4) yerinde oluşturma adımı içindir
+/// (spec §5 adım 2) — `createStudent` komutu, `decide`'dan ÖNCE, aynı
+/// transaction'daki bağlantı üzerinden bu satırı açar.
+pub async fn create_in(conn: &mut SqliteConnection, input: &NewStudent) -> AppResult<Student> {
+    let sql = format!(
+        "INSERT INTO students
+            (first_name, last_name, student_no, grade, branch, company_id, submitted_at, term)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         RETURNING {SELECT_COLUMNS}"
+    );
+    Ok(sqlx::query_as::<_, Student>(&sql)
+        .bind(&input.first_name)
+        .bind(&input.last_name)
+        .bind(&input.student_no)
+        .bind(&input.grade)
+        .bind(&input.branch)
+        .bind(input.company_id)
+        .bind(&input.submitted_at)
+        .bind(&input.term)
+        .fetch_one(&mut *conn)
+        .await?)
+}
+
+/// `deleteStudent` — yalnız açılış dışında geçmişi olmayan bir öğrenci için
+/// çağrılır (`decide::student::delete_student`in `HasHistory` denetiminden
+/// SONRA); satırın kendisi burada silinir, olay günlüğüne dokunmaz.
+pub async fn remove_in(conn: &mut SqliteConnection, id: i64) -> AppResult<()> {
+    let affected = sqlx::query("DELETE FROM students WHERE id = ?1")
+        .bind(id)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+
+    if affected == 0 {
+        return Err(not_found(id));
+    }
+    Ok(())
 }
 
 pub async fn update(pool: &SqlitePool, id: i64, input: &NewStudent) -> AppResult<Student> {
@@ -306,6 +345,26 @@ mod tests {
         companies::remove(&pool, company_id).await.unwrap();
 
         assert_eq!(get(&pool, student.id).await.unwrap().company_id, None);
+    }
+
+    #[tokio::test]
+    async fn create_in_writes_through_the_given_connection() {
+        let (_dir, pool) = test_pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+
+        let created = create_in(&mut conn, &sample("Bağlantı", "Testi", "12/C", None)).await.unwrap();
+        assert_eq!(get(&pool, created.id).await.unwrap().first_name, "Bağlantı");
+    }
+
+    #[tokio::test]
+    async fn remove_in_deletes_the_row() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample("Ahmet", "Yılmaz", "12/C", None)).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        remove_in(&mut conn, created.id).await.unwrap();
+
+        assert!(matches!(get(&pool, created.id).await.unwrap_err(), AppError::NotFound(_)));
     }
 
     #[tokio::test]

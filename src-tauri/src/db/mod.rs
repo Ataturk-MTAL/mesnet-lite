@@ -5,14 +5,18 @@ use std::path::Path;
 
 pub mod assignments;
 pub mod availability;
+pub mod change_log;
 pub mod class_days;
 pub mod companies;
 pub mod company_hours;
+pub mod history_context;
 pub mod hour_rules;
+pub mod projection;
 pub mod settings;
 pub mod students;
 pub mod teachers;
 pub mod teaching_load;
+pub mod terms;
 
 /// Tauri yönetilen durumu. Komutlar veritabanı havuzuna buradan erişir.
 pub struct AppState {
@@ -86,6 +90,15 @@ mod tests {
             "assignments",
             "settings",
             "term_branch_hours",
+            // 0006: olay günlüğü + beş tarih aralıklı projeksiyon (spec §4.1).
+            "terms",
+            "change_sets",
+            "change_events",
+            "student_placements",
+            "company_hour_periods",
+            "coordination_periods",
+            "teacher_load_periods",
+            "teacher_schedule_periods",
         ] {
             let found: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",

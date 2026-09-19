@@ -1,6 +1,6 @@
 use crate::domain::models::{ChiefType, NewTeacher, Teacher};
 use crate::error::{AppError, AppResult};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
 const SELECT_COLUMNS: &str = "id, first_name, last_name, registry_no, field, branches, \
      employment_type, base_hours, max_extra_hours, other_extra_hours, chief_type, is_active";
@@ -77,6 +77,48 @@ pub async fn create(pool: &SqlitePool, input: &NewTeacher) -> AppResult<Teacher>
     .await?;
 
     get(pool, id).await
+}
+
+/// `change_service::execute_in` (R4) yerinde oluşturma adımı içindir
+/// (spec §5 adım 2) — `createTeacher` komutu bu satırı `decide`'dan ÖNCE,
+/// aynı transaction'daki bağlantı üzerinden açar.
+pub async fn create_in(conn: &mut SqliteConnection, input: &NewTeacher) -> AppResult<Teacher> {
+    let sql = format!(
+        "INSERT INTO teachers
+            (first_name, last_name, registry_no, field, branches, employment_type,
+             base_hours, max_extra_hours, other_extra_hours, chief_type, is_active)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         RETURNING {SELECT_COLUMNS}"
+    );
+    Ok(sqlx::query_as::<_, Teacher>(&sql)
+        .bind(&input.first_name)
+        .bind(&input.last_name)
+        .bind(&input.registry_no)
+        .bind(&input.field)
+        .bind(encode_branches(&input.branches)?)
+        .bind(&input.employment_type)
+        .bind(input.base_hours)
+        .bind(input.max_extra_hours)
+        .bind(input.other_extra_hours)
+        .bind(&input.chief_type)
+        .bind(i64::from(input.is_active))
+        .fetch_one(&mut *conn)
+        .await?)
+}
+
+/// `deleteTeacher` — `decide::teacher::delete_teacher`in `HasHistory`
+/// denetiminden SONRA çağrılır; olay günlüğüne dokunmaz.
+pub async fn remove_in(conn: &mut SqliteConnection, id: i64) -> AppResult<()> {
+    let affected = sqlx::query("DELETE FROM teachers WHERE id = ?1")
+        .bind(id)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+
+    if affected == 0 {
+        return Err(not_found(id));
+    }
+    Ok(())
 }
 
 pub async fn update(pool: &SqlitePool, id: i64, input: &NewTeacher) -> AppResult<Teacher> {
@@ -229,6 +271,26 @@ mod tests {
             get(&pool, created.id).await.unwrap_err(),
             AppError::NotFound(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn create_in_writes_through_the_given_connection() {
+        let (_dir, pool) = test_pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+
+        let created = create_in(&mut conn, &sample("Bağlantı", "none")).await.unwrap();
+        assert_eq!(get(&pool, created.id).await.unwrap().last_name, "Bağlantı");
+    }
+
+    #[tokio::test]
+    async fn remove_in_deletes_the_row() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample("Yılmaz", "none")).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        remove_in(&mut conn, created.id).await.unwrap();
+
+        assert!(matches!(get(&pool, created.id).await.unwrap_err(), AppError::NotFound(_)));
     }
 
     /// Bozuk JSON okuma yolunu düşürmemeli.
