@@ -52,10 +52,26 @@ pub fn coordinator_capacity(
     statutory_cap.min(remaining_budget).max(0)
 }
 
+/// Bir öğretmenin ek ders tavanı, dönemin o günkü `TeacherLoad` durumundan.
+///
+/// `teacher_commands.rs`, `assignment_commands.rs` ve `dashboard_commands.rs`
+/// bu türetmeyi bugüne kadar ayrı ayrı yapıyordu (spec §5.3, "Kapasite
+/// hesabının tek yeri"). Tarihçe eklenmeden önce tek bir yerde birleşir;
+/// R2/R4'te üç komut dosyası da buraya yönlendirilecek.
+pub fn teacher_capacity(load: &crate::domain::history::events::TeacherLoad, statutory_cap: i64) -> i64 {
+    coordinator_capacity(
+        load.max_extra_hours,
+        load.chief_type.weekly_hours(),
+        load.other_extra_hours,
+        statutory_cap,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::models::ChiefType;
+    use crate::domain::history::events::TeacherLoad;
+    use crate::domain::models::{ChiefType, EmploymentType};
 
     #[test]
     fn statutory_cap_covers_all_four_cases_of_madde_15_2() {
@@ -107,6 +123,22 @@ mod tests {
         let cap = statutory_cap(InstitutionType::Other, true);
         assert_eq!(coordinator_capacity(24, 0, 6, cap), 18);
         assert_eq!(coordinator_capacity(24, 10, 4, cap), 10);
+    }
+
+    /// `teacher_capacity`, `TeacherLoad`'dan `coordinator_capacity`'nin dört
+    /// bağımsız argümanını doğru türetmeli: 24/10/4/20 → 10.
+    #[test]
+    fn teacher_capacity_matches_coordinator_capacity() {
+        let cap = statutory_cap(InstitutionType::Other, true);
+        assert_eq!(cap, 20);
+        let load = TeacherLoad {
+            base_hours: 15,
+            max_extra_hours: 24,
+            other_extra_hours: 4,
+            chief_type: ChiefType::Department,
+            employment_type: EmploymentType::Tenured,
+        };
+        assert_eq!(teacher_capacity(&load, cap), 10);
     }
 
     /// Bütçe tükendiğinde kapasite sıfırdır, negatif olmaz.
