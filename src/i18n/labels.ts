@@ -19,6 +19,7 @@ export const labels = {
     settings: 'Ayarlar',
     termManagement: 'Dönem Yönetimi',
     importExport: 'İçe/Dışa Aktarım',
+    history: 'Tarihçe',
     toggleMenu: 'Menüyü aç/kapat',
   },
   common: {

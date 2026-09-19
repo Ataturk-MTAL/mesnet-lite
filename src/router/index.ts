@@ -34,6 +34,7 @@ const router = createRouter({
       component: () => import('../views/TermManagementView.vue'),
     },
     { path: '/import-export', name: 'importExport', component: () => import('../views/ImportExportView.vue') },
+    { path: '/history', name: 'history', component: () => import('../views/HistoryView.vue') },
   ],
 })
 

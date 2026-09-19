@@ -6,6 +6,9 @@
       <div class="sidebar-header">
         <span v-if="!isCollapsed" class="brand">{{ labels.app.title }}</span>
       </div>
+      <div v-if="!isCollapsed" class="sidebar-as-of-date">
+        <AsOfDatePicker />
+      </div>
       <nav class="sidebar-nav">
         <div v-for="group in navGroups" :key="group.key" class="nav-group">
           <div v-if="!isCollapsed && group.label" class="nav-group-label">{{ group.label }}</div>
@@ -25,6 +28,9 @@
 
     <!-- Dar ekranda aynı navigasyon Drawer içinde açılır. -->
     <Drawer v-model:visible="isDrawerOpen" position="left" :header="labels.app.title">
+      <div class="sidebar-as-of-date">
+        <AsOfDatePicker />
+      </div>
       <nav class="sidebar-nav">
         <div v-for="group in navGroups" :key="group.key" class="nav-group">
           <div v-if="group.label" class="nav-group-label">{{ group.label }}</div>
@@ -89,6 +95,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { labels } from '../../i18n/labels'
 import { useTheme } from '../../composables/useTheme'
 import { activeTerm, terms, loadTerms, setActiveTerm } from '../../composables/useTerm'
+import AsOfDatePicker from '../history/AsOfDatePicker.vue'
 
 const { preference, setThemePreference } = useTheme()
 
@@ -189,6 +196,7 @@ const navGroups: readonly NavGroup[] = [
       { to: '/settings', label: labels.nav.settings, icon: 'pi pi-cog' },
       { to: '/term-management', label: labels.nav.termManagement, icon: 'pi pi-calendar-plus' },
       { to: '/import-export', label: labels.nav.importExport, icon: 'pi pi-file-import' },
+      { to: '/history', label: labels.nav.history, icon: 'pi pi-history' },
     ],
   },
 ]
@@ -227,6 +235,11 @@ const navGroups: readonly NavGroup[] = [
   font-weight: 600;
   font-size: 1.125rem;
   white-space: nowrap;
+}
+
+.sidebar-as-of-date {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--p-content-border-color);
 }
 
 .sidebar-nav {
