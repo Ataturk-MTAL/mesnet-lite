@@ -76,6 +76,10 @@
             <Button icon="pi pi-pencil" severity="secondary" outlined size="small"
                     :aria-label="labels.common.edit" v-tooltip.top="labels.common.edit"
                     @click="openEdit(data)" />
+            <Button icon="pi pi-sliders-h" severity="secondary" outlined size="small"
+                    :aria-label="labels.teacherLoadChange.title" v-tooltip.top="labels.teacherLoadChange.title"
+                    :disabled="!term"
+                    @click="openLoadChange(data)" />
             <Button icon="pi pi-trash" severity="danger" outlined size="small"
                     :aria-label="labels.common.delete" v-tooltip.top="labels.common.delete"
                     @click="confirmRemove(data)" />
@@ -90,6 +94,14 @@
       :known-branches="knownBranches"
       @save="handleSave"
     />
+
+    <TeacherLoadDialog
+      v-if="term"
+      v-model:visible="isLoadDialogOpen"
+      :teacher="loadSelected"
+      :term="term"
+      @saved="handleLoadSaved"
+    />
   </div>
 </template>
 
@@ -98,11 +110,14 @@ import { computed, onMounted, ref } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import TeacherFormDialog from '../components/teacher/TeacherFormDialog.vue'
+import TeacherLoadDialog from '../components/teacher/TeacherLoadDialog.vue'
 import { teachersApi } from '../api/teachers'
 import { studentsApi } from '../api/students'
+import { listTermsWithDates } from '../api/terms'
 import { labels } from '../i18n/labels'
+import { activeTerm } from '../composables/useTerm'
 import { parseBranches } from '../types/models'
-import type { ChiefType, NewTeacher, TeacherWithCapacity } from '../types/models'
+import type { ChiefType, NewTeacher, TeacherWithCapacity, TermWithDates } from '../types/models'
 
 const toast = useToast()
 const confirm = useConfirm()
@@ -112,6 +127,11 @@ const knownBranches = ref<string[]>([])
 const isLoading = ref(false)
 const isDialogOpen = ref(false)
 const selected = ref<TeacherWithCapacity | null>(null)
+
+/** Aktif dönemin tarihleri; "Yük değişikliği" penceresi bu olmadan açılamaz. */
+const term = ref<TermWithDates | null>(null)
+const isLoadDialogOpen = ref(false)
+const loadSelected = ref<TeacherWithCapacity | null>(null)
 
 const activeCount = computed(() => teachers.value.filter((t) => t.isActive === 1).length)
 
@@ -181,6 +201,27 @@ async function handleSave(input: NewTeacher): Promise<void> {
   }
 }
 
+/** Aktif dönemin tarihlerini yükler; "Yük değişikliği" penceresi buna göre açılır. */
+async function loadTerm(): Promise<void> {
+  try {
+    const allTerms = await listTermsWithDates()
+    term.value = allTerms.find((t) => t.term === activeTerm.value) ?? null
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
+function openLoadChange(teacher: TeacherWithCapacity): void {
+  if (!term.value) return
+  loadSelected.value = teacher
+  isLoadDialogOpen.value = true
+}
+
+async function handleLoadSaved(): Promise<void> {
+  toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
+  await load()
+}
+
 function confirmRemove(teacher: TeacherWithCapacity): void {
   confirm.require({
     message: labels.teacher.deleteConfirm,
@@ -203,6 +244,7 @@ function confirmRemove(teacher: TeacherWithCapacity): void {
 onMounted(async () => {
   await load()
   await loadKnownBranches()
+  await loadTerm()
 })
 </script>
 

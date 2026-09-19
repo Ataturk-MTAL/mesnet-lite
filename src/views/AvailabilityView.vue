@@ -62,10 +62,29 @@
             <Button
               :label="labels.availability.saveTeacher"
               icon="pi pi-check"
-              :disabled="!selectedTeacher || !teacherDirty"
+              :disabled="!selectedTeacher || !teacherDirty || !canSaveTeacherSchedule"
               :loading="isSavingTeacher"
+              data-testid="availability-save-teacher-button"
               @click="saveTeacher"
             />
+          </div>
+
+          <!-- Dönem başladıysa program değişikliği tarihçeye yazılır; yürürlük
+               tarihi ve gerekçe istenir. EffectiveDateField planlamada zaten gizlenir. -->
+          <div v-if="term && !term.isPlanning" class="schedule-change-fields">
+            <EffectiveDateField v-model="scheduleEffectiveDate" :label="labels.effectiveDateField.generic" :term="term" />
+            <div class="field">
+              <label for="availability-reason">{{ labels.history.reason }}</label>
+              <Textarea
+                id="availability-reason"
+                v-model="scheduleReason"
+                rows="2"
+                :placeholder="labels.history.reasonPlaceholder"
+              />
+              <small v-if="scheduleReason.trim().length === 0" class="field-error">
+                {{ labels.history.reasonRequired }}
+              </small>
+            </div>
           </div>
 
           <small class="hint">{{ labels.availability.toggleHint }}</small>
@@ -166,6 +185,8 @@
         <small class="hint">{{ labels.availability.copyHint }}</small>
       </template>
     </Card>
+
+    <ImpactDialog :change="scheduleChange" @cancel="onScheduleChangeCancel" />
   </div>
 </template>
 
@@ -176,6 +197,11 @@ import { availabilityApi } from '../api/availability'
 import type { AvailabilityBoard, ClassDays, SlotInput } from '../api/availability'
 import { labels } from '../i18n/labels'
 import { activeTerm } from '../composables/useTerm'
+import { listTermsWithDates } from '../api/terms'
+import { useChange } from '../composables/useChange'
+import EffectiveDateField from '../components/history/EffectiveDateField.vue'
+import ImpactDialog from '../components/history/ImpactDialog.vue'
+import type { ChangeRequest, TermWithDates } from '../types/models'
 
 const DAYS = [1, 2, 3, 4, 5] as const
 
@@ -185,6 +211,12 @@ const board = ref<AvailabilityBoard | null>(null)
 const selectedTeacherId = ref<number | null>(null)
 const isSavingTeacher = ref(false)
 const copySourceTerm = ref<string | null>(null)
+
+/** Aktif dönemin tarihleri; dönem başladıysa program kaydı tarihçe üzerinden gider. */
+const term = ref<TermWithDates | null>(null)
+const scheduleChange = useChange()
+const scheduleEffectiveDate = ref<string | null>(null)
+const scheduleReason = ref('')
 
 /** Izgarada düzenlenen boş saatler; kaydedilene kadar sunucuya gitmez. */
 const draftSlots = ref<Set<string>>(new Set())
@@ -216,6 +248,17 @@ const teacherDirty = computed(() => {
     if (!saved.has(entry)) return true
   }
   return false
+})
+
+/**
+ * Dönem başlamadıysa doğrudan kaydetme serbesttir. Başladıysa yürürlük tarihi
+ * ve gerekçe zorunludur; `EffectiveDateField` planlamada zaten gizlenir, ama
+ * `term` henüz yüklenmediyse kaydetmeyi bekletiriz.
+ */
+const canSaveTeacherSchedule = computed(() => {
+  if (!term.value) return false
+  if (term.value.isPlanning) return true
+  return scheduleEffectiveDate.value !== null && scheduleReason.value.trim().length > 0
 })
 
 function slotKey(day: number, hour: number): string {
@@ -299,23 +342,52 @@ async function load(): Promise<void> {
   }
 }
 
-async function saveTeacher(): Promise<void> {
-  const teacherId = selectedTeacherId.value
-  if (teacherId === null) return
+function draftSlotsAsInput(): SlotInput[] {
+  return [...draftSlots.value].map((entry) => {
+    const [day, hour] = entry.split('-').map(Number)
+    return { dayOfWeek: day, hour }
+  })
+}
 
+/** Planlama evresinde: doğrudan kaydeder, tarihçeye yazmaz. */
+async function saveTeacherDirectly(teacherId: number): Promise<void> {
   isSavingTeacher.value = true
   try {
-    const slots: SlotInput[] = [...draftSlots.value].map((entry) => {
-      const [day, hour] = entry.split('-').map(Number)
-      return { dayOfWeek: day, hour }
-    })
-    applyBoard(await availabilityApi.saveTeacher(teacherId, slots))
+    applyBoard(await availabilityApi.saveTeacher(teacherId, draftSlotsAsInput()))
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
   } catch (error: unknown) {
     showError(error)
   } finally {
     isSavingTeacher.value = false
   }
+}
+
+/** Dönem başladıysa: `setTeacherSchedule` önizlenir, etki penceresinde onaylanır. */
+async function saveTeacherViaChange(teacherId: number): Promise<void> {
+  if (!term.value) return
+  const request: ChangeRequest = {
+    term: term.value.term,
+    effectiveDate: scheduleEffectiveDate.value,
+    documentDate: null,
+    reason: scheduleReason.value.trim(),
+    command: { type: 'setTeacherSchedule', teacherId, slots: draftSlotsAsInput() },
+  }
+  await scheduleChange.preview(request)
+}
+
+async function saveTeacher(): Promise<void> {
+  const teacherId = selectedTeacherId.value
+  if (teacherId === null || !canSaveTeacherSchedule.value) return
+
+  if (term.value?.isPlanning) {
+    await saveTeacherDirectly(teacherId)
+  } else {
+    await saveTeacherViaChange(teacherId)
+  }
+}
+
+function onScheduleChangeCancel(): void {
+  // Etki penceresi kapatıldı; kullanıcı ızgaraya dönüp tekrar dener.
 }
 
 function setClassDays(grade: string, days: number[]): void {
@@ -360,12 +432,41 @@ async function copyFromTerm(): Promise<void> {
   }
 }
 
+/** Aktif dönemin tarihlerini yükler; bulunamazsa (henüz tanımlanmamış dönem) `null` kalır. */
+async function loadTerm(): Promise<void> {
+  try {
+    const allTerms = await listTermsWithDates()
+    term.value = allTerms.find((t) => t.term === activeTerm.value) ?? null
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
+// Program değişikliği kaydedilince ızgara tazelenir ve tarih/gerekçe sıfırlanır.
+watch(
+  () => scheduleChange.status.value,
+  async (status) => {
+    if (status !== 'committed') return
+    toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
+    scheduleEffectiveDate.value = null
+    scheduleReason.value = ''
+    scheduleChange.reset()
+    await load()
+  },
+)
+
 // Öğretmen değişince ızgara o öğretmenin kayıtlı saatlerini gösterir.
 watch(selectedTeacherId, syncDraftFromBoard)
 
-watch(activeTerm, load)
+watch(activeTerm, () => {
+  void load()
+  void loadTerm()
+})
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  await loadTerm()
+})
 </script>
 
 <style scoped>
@@ -379,6 +480,11 @@ onMounted(load)
 .teacher-select { min-width: 16rem; }
 .hint { display: block; margin-top: 0.5rem; color: var(--p-text-muted-color); font-size: 0.75rem; }
 .empty { color: var(--p-text-muted-color); }
+
+.schedule-change-fields { display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.field { display: flex; flex-direction: column; gap: 0.375rem; min-width: 16rem; }
+.field label { font-size: 0.875rem; font-weight: 500; }
+.field-error { color: var(--p-red-500); font-size: 0.75rem; }
 
 .grid-scroll { overflow-x: auto; margin-top: 1rem; }
 .grid { width: 100%; border-collapse: collapse; user-select: none; }

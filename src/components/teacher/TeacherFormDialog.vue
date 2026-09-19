@@ -55,47 +55,51 @@
         <small class="hint">{{ labels.teacher.branchesHint }}</small>
       </div>
 
-      <div class="field-row">
-        <div class="field">
-          <label for="teacher-chief">{{ labels.teacher.chiefType }}</label>
-          <Select
-            id="teacher-chief"
-            v-model="form.chiefType"
-            :options="chiefOptions"
-            optionLabel="label"
-            optionValue="value"
-          />
-          <small class="hint">
-            {{ labels.teacher.chiefHours }}: {{ chiefHours }} — MADDE 6/4
-          </small>
+      <!-- Yük alanları yalnız YENİ öğretmen oluşturulurken burada girilir; mevcut
+           bir öğretmenin yükü artık tarihçeye yazan TeacherLoadDialog'dan değişir. -->
+      <template v-if="!isEdit">
+        <div class="field-row">
+          <div class="field">
+            <label for="teacher-chief">{{ labels.teacher.chiefType }}</label>
+            <Select
+              id="teacher-chief"
+              v-model="form.chiefType"
+              :options="chiefOptions"
+              optionLabel="label"
+              optionValue="value"
+            />
+            <small class="hint">
+              {{ labels.teacher.chiefHours }}: {{ chiefHours }} — MADDE 6/4
+            </small>
+          </div>
+          <div class="field">
+            <label for="teacher-max-extra">{{ labels.teacher.maxExtraHours }}</label>
+            <InputNumber id="teacher-max-extra" v-model="form.maxExtraHours" :min="0" :max="60" />
+            <small class="hint">MADDE 6/1-c</small>
+          </div>
         </div>
-        <div class="field">
-          <label for="teacher-max-extra">{{ labels.teacher.maxExtraHours }}</label>
-          <InputNumber id="teacher-max-extra" v-model="form.maxExtraHours" :min="0" :max="60" />
-          <small class="hint">MADDE 6/1-c</small>
-        </div>
-      </div>
 
-      <div class="field-row">
-        <div class="field">
-          <label for="teacher-base">{{ labels.teacher.baseHours }}</label>
-          <InputNumber id="teacher-base" v-model="form.baseHours" :min="0" :max="40" />
-          <small class="hint">MADDE 5/1-ç</small>
+        <div class="field-row">
+          <div class="field">
+            <label for="teacher-base">{{ labels.teacher.baseHours }}</label>
+            <InputNumber id="teacher-base" v-model="form.baseHours" :min="0" :max="40" />
+            <small class="hint">MADDE 5/1-ç</small>
+          </div>
+          <div class="field">
+            <label for="teacher-other">{{ labels.teacher.otherExtraHours }}</label>
+            <InputNumber id="teacher-other" v-model="form.otherExtraHours" :min="0" :max="40" />
+          </div>
         </div>
-        <div class="field">
-          <label for="teacher-other">{{ labels.teacher.otherExtraHours }}</label>
-          <InputNumber id="teacher-other" v-model="form.otherExtraHours" :min="0" :max="40" />
-        </div>
-      </div>
+
+        <Message v-if="capacityWarning" severity="warn" :closable="false">
+          {{ capacityWarning }}
+        </Message>
+      </template>
 
       <div class="field field--inline">
         <Checkbox inputId="teacher-active" v-model="form.isActive" :binary="true" />
         <label for="teacher-active">{{ labels.teacher.isActive }}</label>
       </div>
-
-      <Message v-if="capacityWarning" severity="warn" :closable="false">
-        {{ capacityWarning }}
-      </Message>
     </div>
 
     <template #footer>
