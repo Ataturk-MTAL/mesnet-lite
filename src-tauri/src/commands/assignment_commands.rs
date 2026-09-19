@@ -1,7 +1,7 @@
 use crate::db::assignments::NewAssignment;
 use crate::db::{
     assignments, availability, class_days, companies, company_hours, settings, students, teachers,
-    AppState,
+    teaching_load, AppState,
 };
 use crate::domain::allocation::{
     propose, AllocationProposal, CompanyInput, TeacherInput,
@@ -121,26 +121,6 @@ fn violation_to_warning(violation: &Violation) -> String {
     }
 }
 
-fn pool_from_settings(all: &BTreeMap<String, String>) -> i64 {
-    let hours: BTreeMap<String, i64> = serde_json::from_str(
-        all.get("branch_weekly_hours")
-            .map(String::as_str)
-            .unwrap_or("{}"),
-    )
-    .unwrap_or_default();
-    let groups: BTreeMap<String, i64> = serde_json::from_str(
-        all.get("branch_group_counts")
-            .map(String::as_str)
-            .unwrap_or("{}"),
-    )
-    .unwrap_or_default();
-
-    hours
-        .iter()
-        .filter_map(|(key, weekly)| groups.get(key).map(|count| weekly * count))
-        .sum()
-}
-
 async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
     let pool = &state.pool;
     let all_settings = settings::get_all(pool).await?;
@@ -158,11 +138,15 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
         .unwrap_or(false);
     let cap = statutory_cap(institution_type, is_metropolitan);
 
+    // Havuz artık `settings` ayarlarından değil, döneme bağlı
+    // `term_branch_hours` tablosundan hesaplanır (bkz. migration 0005).
+    let pool_hours = teaching_load::pool_hours_for_term(pool, &term).await?;
+
     let mut board = AssignmentBoard {
         term: term.clone(),
         day_start_hour: parse_hour_setting(&all_settings, "day_start_hour", 8),
         day_end_hour: parse_hour_setting(&all_settings, "day_end_hour", 17),
-        pool_hours: pool_from_settings(&all_settings),
+        pool_hours,
         ..Default::default()
     };
 
@@ -522,21 +506,6 @@ mod tests {
         assert_eq!(parse_hour_setting(&all, "day_start_hour", 8), 9);
         assert_eq!(parse_hour_setting(&all, "day_end_hour", 17), 17);
         assert_eq!(parse_hour_setting(&all, "yok", 5), 5);
-    }
-
-    #[test]
-    fn pool_is_computed_from_the_two_settings_maps() {
-        let all = settings_map(&[
-            ("branch_weekly_hours", r#"{"12/C|Dal": 24}"#),
-            ("branch_group_counts", r#"{"12/C|Dal": 2}"#),
-        ]);
-
-        assert_eq!(pool_from_settings(&all), 48);
-    }
-
-    #[test]
-    fn pool_is_zero_when_settings_are_absent() {
-        assert_eq!(pool_from_settings(&BTreeMap::new()), 0);
     }
 
     #[test]

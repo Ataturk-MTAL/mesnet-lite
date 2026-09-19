@@ -1,10 +1,11 @@
 use crate::db::company_hours::HoursInput;
 use crate::db::hour_rules::select_narrowest;
+use crate::db::teaching_load::{self, TermBranchHoursInput};
 use crate::db::{companies, company_hours, hour_rules, settings, students, AppState};
 use crate::domain::hour_distribution::{distribute, DistributionCandidate, DistributionOutcome};
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tauri::State;
 
 /// Takdir ekranındaki tek bir satır.
@@ -51,41 +52,13 @@ pub struct HoursBoard {
     pub warnings: Vec<String>,
 }
 
-/// Okulun ders yükü havuzu: Σ (sınıf+dal haftalık ders saati × grup sayısı).
-///
-/// Ayarlar JSON olarak `{"12/C|Elektronik Haberleşme": 24}` biçiminde tutulur.
-/// Anahtarlar iki JSON arasında eşleşmelidir; eşleşmeyen anahtar yok sayılır —
-/// eksik grup sayısını 1 varsaymak havuzu sessizce şişirirdi.
-fn compute_pool_hours(branch_weekly_hours: &str, branch_group_counts: &str) -> i64 {
-    let hours: BTreeMap<String, i64> =
-        serde_json::from_str(branch_weekly_hours).unwrap_or_default();
-    let groups: BTreeMap<String, i64> =
-        serde_json::from_str(branch_group_counts).unwrap_or_default();
-
-    hours
-        .iter()
-        .filter_map(|(key, weekly)| groups.get(key).map(|count| weekly * count))
-        .sum()
-}
-
-fn pool_from_settings(all_settings: &BTreeMap<String, String>) -> i64 {
-    compute_pool_hours(
-        all_settings
-            .get("branch_weekly_hours")
-            .map(String::as_str)
-            .unwrap_or("{}"),
-        all_settings
-            .get("branch_group_counts")
-            .map(String::as_str)
-            .unwrap_or("{}"),
-    )
-}
-
 async fn load_board(state: &AppState) -> AppResult<HoursBoard> {
     let pool = &state.pool;
     let all_settings = settings::get_all(pool).await?;
     let term = all_settings.get("active_term").cloned().unwrap_or_default();
-    let pool_hours = pool_from_settings(&all_settings);
+    // Havuz artık `settings` ayarlarından değil, döneme bağlı
+    // `term_branch_hours` tablosundan hesaplanır (bkz. migration 0005).
+    let pool_hours = teaching_load::pool_hours_for_term(pool, &term).await?;
 
     let all_companies = companies::list(pool).await?;
     let rules = hour_rules::list(pool).await?;
@@ -141,8 +114,8 @@ async fn load_board(state: &AppState) -> AppResult<HoursBoard> {
 
     if board.pool_hours == 0 {
         board.warnings.push(
-            "Bu okul için ders yükü havuzu tanımlanmamış. Takdir edilen saatler bir üst sınırla \
-             karşılaştırılamıyor. Önce Ayarlar ekranından dal ve grup saatlerini girin."
+            "Bu dönem için ders yükü havuzu tanımlanmamış. Takdir edilen saatler bir üst sınırla \
+             karşılaştırılamıyor. Önce Ders Yükü ekranından bu dönemin sınıf/dal saatlerini girin."
                 .into(),
         );
     } else if board.total_awarded > board.pool_hours {
@@ -195,8 +168,8 @@ pub async fn auto_distribute_hours(
     state: State<'_, AppState>,
     rows: Vec<AutoDistributeRow>,
 ) -> AppResult<DistributionOutcome> {
-    let all_settings = settings::get_all(&state.pool).await?;
-    let pool_hours = pool_from_settings(&all_settings);
+    let term = settings::get_active_term(&state.pool).await?;
+    let pool_hours = teaching_load::pool_hours_for_term(&state.pool, &term).await?;
 
     let candidates: Vec<DistributionCandidate> = rows
         .into_iter()
@@ -213,38 +186,174 @@ pub async fn auto_distribute_hours(
     Ok(distribute(&candidates, pool_hours))
 }
 
+/// Ders yükü ekranındaki tek bir satır — ister kayıtlı, ister öneri.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeachingLoadRow {
+    /// Kayıtlı satırın kimliği. Öneri satırında yoktur.
+    pub id: Option<i64>,
+    pub grade: String,
+    pub branch: String,
+    pub weekly_hours: i64,
+    pub group_count: i64,
+    /// Bu satır öğrenci kayıtlarından türetilen bir ÖNERİDİR, henüz
+    /// kaydedilmedi — ekran kullanıcıya boru işaretli anahtarı elle
+    /// yazdırmamak için bunu önceden doldurur.
+    pub is_suggested: bool,
+}
+
+/// Ders yükü ekranının tamamı: satırlar + o dönemin havuzu.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TeachingLoadBoard {
+    pub term: String,
+    pub rows: Vec<TeachingLoadRow>,
+    /// Σ (haftalık ders saati × grup sayısı) — yalnızca KAYITLI satırlardan;
+    /// öneri satırları henüz kaydedilmediği için havuza katkı vermez.
+    pub pool_hours: i64,
+}
+
+/// Kayıtlı satırlarla öğrenci kayıtlarından türeyen öneri satırlarını
+/// birleştirir. Zaten kayıtlı bir (sınıf, dal) çifti için öneri EKLENMEZ.
+fn merge_with_suggestions(
+    existing: Vec<teaching_load::TermBranchHours>,
+    student_pairs: Vec<(String, String)>,
+) -> Vec<TeachingLoadRow> {
+    let mut known: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut rows: Vec<TeachingLoadRow> = existing
+        .into_iter()
+        .map(|saved| {
+            known.insert((saved.grade.clone(), saved.branch.clone()));
+            TeachingLoadRow {
+                id: Some(saved.id),
+                grade: saved.grade,
+                branch: saved.branch,
+                weekly_hours: saved.weekly_hours,
+                group_count: saved.group_count,
+                is_suggested: false,
+            }
+        })
+        .collect();
+
+    for (grade, branch) in student_pairs {
+        if known.contains(&(grade.clone(), branch.clone())) {
+            continue;
+        }
+        rows.push(TeachingLoadRow {
+            id: None,
+            grade,
+            branch,
+            weekly_hours: 0,
+            group_count: 0,
+            is_suggested: true,
+        });
+    }
+
+    rows.sort_by(|a, b| a.grade.cmp(&b.grade).then_with(|| a.branch.cmp(&b.branch)));
+    rows
+}
+
+async fn build_teaching_load_board(
+    pool: &sqlx::SqlitePool,
+    term: &str,
+) -> AppResult<TeachingLoadBoard> {
+    let existing = teaching_load::list_for_term(pool, term).await?;
+    let student_pairs = teaching_load::distinct_branches_from_students(pool, term).await?;
+    let pool_hours = teaching_load::pool_hours_for_term(pool, term).await?;
+
+    Ok(TeachingLoadBoard {
+        term: term.to_string(),
+        rows: merge_with_suggestions(existing, student_pairs),
+        pool_hours,
+    })
+}
+
+/// Aktif dönemin ders yükü satırlarını getirir; henüz satırı olmayan ama
+/// öğrencisi olan (sınıf, dal) çiftleri öneri satırı olarak eklenir.
+#[tauri::command]
+pub async fn get_teaching_load_board(state: State<'_, AppState>) -> AppResult<TeachingLoadBoard> {
+    let term = settings::get_active_term(&state.pool).await?;
+    build_teaching_load_board(&state.pool, &term).await
+}
+
+/// Aktif dönemin ders yükü satırlarını TAMAMEN değiştirir (kısmi güncelleme yok).
+#[tauri::command]
+pub async fn save_teaching_load(
+    state: State<'_, AppState>,
+    rows: Vec<TermBranchHoursInput>,
+) -> AppResult<TeachingLoadBoard> {
+    let term = settings::get_active_term(&state.pool).await?;
+    teaching_load::replace_for_term(&state.pool, &term, &rows).await?;
+    build_teaching_load_board(&state.pool, &term).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use teaching_load::TermBranchHours;
 
-    #[test]
-    fn pool_is_sum_of_weekly_hours_times_group_counts() {
-        let hours = r#"{"12/C|Elektronik Haberleşme": 24, "12/D|Endüstriyel Bakım Onarım": 24}"#;
-        let groups = r#"{"12/C|Elektronik Haberleşme": 2, "12/D|Endüstriyel Bakım Onarım": 1}"#;
-
-        assert_eq!(compute_pool_hours(hours, groups), 24 * 2 + 24);
+    fn saved(id: i64, grade: &str, branch: &str, weekly: i64, groups: i64) -> TermBranchHours {
+        TermBranchHours {
+            id,
+            term: "2026-2027/1".into(),
+            grade: grade.into(),
+            branch: branch.into(),
+            weekly_hours: weekly,
+            group_count: groups,
+            created_at: "2026-09-01T00:00:00Z".into(),
+            updated_at: "2026-09-01T00:00:00Z".into(),
+        }
     }
 
-    /// Bir tarafta olup diğerinde olmayan anahtar yok sayılır;
-    /// eksik grup sayısı sessizce 1 varsayılmaz.
     #[test]
-    fn keys_missing_from_either_side_are_ignored() {
-        let hours = r#"{"12/C|Dal": 24, "12/D|Dal": 24}"#;
-        let groups = r#"{"12/C|Dal": 2}"#;
+    fn merge_marks_saved_rows_as_not_suggested() {
+        let existing = vec![saved(1, "12/C", "Elektronik Haberleşme", 24, 2)];
+        let rows = merge_with_suggestions(existing, vec![]);
 
-        assert_eq!(compute_pool_hours(hours, groups), 48);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, Some(1));
+        assert!(!rows[0].is_suggested);
     }
 
-    /// Ayar girilmemişse havuz 0'dır; bu "sınırsız" değil "bilinmiyor" demektir.
+    /// Öğrencisi olup henüz satırı olmayan çift öneri olarak eklenir.
     #[test]
-    fn empty_settings_produce_zero_pool() {
-        assert_eq!(compute_pool_hours("{}", "{}"), 0);
+    fn merge_adds_suggestion_for_branch_without_a_saved_row() {
+        let rows = merge_with_suggestions(
+            vec![],
+            vec![("12/D".to_string(), "Endüstriyel Bakım Onarım".to_string())],
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, None);
+        assert!(rows[0].is_suggested);
+        assert_eq!(rows[0].weekly_hours, 0);
+        assert_eq!(rows[0].group_count, 0);
     }
 
-    /// Bozuk JSON okuma yolunu düşürmemeli.
+    /// Zaten kayıtlı bir (sınıf, dal) için ikinci bir öneri satırı EKLENMEZ.
     #[test]
-    fn invalid_json_is_treated_as_empty() {
-        assert_eq!(compute_pool_hours("bozuk", "{}"), 0);
-        assert_eq!(compute_pool_hours(r#"{"a": 1}"#, "bozuk"), 0);
+    fn merge_does_not_duplicate_a_branch_that_already_has_a_saved_row() {
+        let existing = vec![saved(1, "12/C", "Elektronik Haberleşme", 24, 2)];
+        let rows = merge_with_suggestions(
+            existing,
+            vec![("12/C".to_string(), "Elektronik Haberleşme".to_string())],
+        );
+
+        assert_eq!(rows.len(), 1, "aynı çift için ikinci satır eklenmemeli");
+        assert!(!rows[0].is_suggested);
+    }
+
+    #[test]
+    fn merge_sorts_rows_by_grade_then_branch() {
+        let rows = merge_with_suggestions(
+            vec![],
+            vec![
+                ("12/D".to_string(), "Dal B".to_string()),
+                ("12/C".to_string(), "Dal A".to_string()),
+            ],
+        );
+
+        assert_eq!(rows[0].grade, "12/C");
+        assert_eq!(rows[1].grade, "12/D");
     }
 }

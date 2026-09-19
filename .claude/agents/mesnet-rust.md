@@ -74,6 +74,13 @@ Yalnızca kendi testleri tarafından çağrılan bir fonksiyon bıraktıysan bun
 raporunda belirt — bu projede daha önce çağrılmayan mevzuat kontrolleri
 yüzünden kurallar fiilen uygulanmadı.
 
+Tek istisna: brief `lib.rs`'i sana kapatmışsa, yeni `#[tauri::command]`
+fonksiyonların `generate_handler!` listesine girmediği için "never used"
+görünür. Bu gerçek ölü kod DEĞİL ve senin düzeltebileceğin bir şey değil.
+Peşine düşme, uydurma bir çağıran ekleme, `#[allow(dead_code)]` ile
+susturma. Uyarıları raporunda listele; orkestratör komutları kaydedince
+hepsi kendiliğinden kaybolur.
+
 **DRY.** Aynı kuralı iki yere yazma. Bir kuralın hem domain'de hem komut
 katmanında kopyası varsa, çalışan kopya testi olmayan kopya olur.
 

@@ -12,6 +12,7 @@ pub mod hour_rules;
 pub mod settings;
 pub mod students;
 pub mod teachers;
+pub mod teaching_load;
 
 /// Tauri yönetilen durumu. Komutlar veritabanı havuzuna buradan erişir.
 pub struct AppState {
@@ -84,6 +85,7 @@ mod tests {
             "company_term_hours",
             "assignments",
             "settings",
+            "term_branch_hours",
         ] {
             let found: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",

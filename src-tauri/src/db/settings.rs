@@ -80,6 +80,28 @@ pub async fn set_school_location(pool: &SqlitePool, latitude: f64, longitude: f6
     set_many(pool, &entries).await
 }
 
+/// Bilinen tüm dönemler: döneme bağlı her tablonun birleşimi + aktif dönem.
+///
+/// Yalnızca `students` tablosuna bakmak (MESNET'in eski `listTerms` davranışı)
+/// henüz öğrencisi girilmemiş yeni bir eğitim-öğretim yılını gizler — dönem
+/// yönetimi ekranı bu yüzden bunun yerine bu fonksiyonu kullanmalıdır.
+/// En yeniden eskiye sıralı, tekrarsız.
+pub async fn known_terms(pool: &SqlitePool) -> AppResult<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT term FROM students WHERE term <> ''
+         UNION SELECT term FROM teacher_availability WHERE term <> ''
+         UNION SELECT term FROM class_workplace_days WHERE term <> ''
+         UNION SELECT term FROM company_term_hours WHERE term <> ''
+         UNION SELECT term FROM assignments WHERE term <> ''
+         UNION SELECT term FROM term_branch_hours WHERE term <> ''
+         UNION SELECT value FROM settings WHERE key = 'active_term' AND value <> ''
+         ORDER BY term DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(term,)| term).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +179,77 @@ mod tests {
         let all = get_all(&pool).await.unwrap();
         assert_eq!(all.get("school_name").map(String::as_str), Some("Test Lisesi"));
         assert_eq!(all.get("active_term").map(String::as_str), Some("2026-2027/2"));
+    }
+
+    #[tokio::test]
+    async fn known_terms_includes_the_seeded_active_term_by_default() {
+        let (_dir, pool) = test_pool().await;
+        assert_eq!(known_terms(&pool).await.unwrap(), vec!["2026-2027/1".to_string()]);
+    }
+
+    /// Asıl kusur buradaydı: yeni bir eğitim-öğretim yılının henüz öğrencisi
+    /// olmayabilir; yalnızca `students` tablosuna bakmak (eski
+    /// `studentsApi.listTerms()` davranışı) o dönemi tamamen gizlerdi.
+    /// Ders yükü satırı gibi başka herhangi bir döneme bağlı veri bile
+    /// dönemin listede görünmesi için yeterli olmalı.
+    #[tokio::test]
+    async fn known_terms_includes_a_term_that_only_has_teaching_load_rows() {
+        let (_dir, pool) = test_pool().await;
+        crate::db::teaching_load::replace_for_term(
+            &pool,
+            "2027-2028/1",
+            &[crate::db::teaching_load::TermBranchHoursInput {
+                grade: "12/C".into(),
+                branch: "Elektronik Haberleşme".into(),
+                weekly_hours: 24,
+                group_count: 2,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let terms = known_terms(&pool).await.unwrap();
+        assert!(terms.contains(&"2027-2028/1".to_string()));
+        assert!(
+            terms.contains(&"2026-2027/1".to_string()),
+            "seed'deki aktif dönem de görünmeye devam etmeli"
+        );
+    }
+
+    #[tokio::test]
+    async fn known_terms_are_deduplicated_and_sorted_newest_first() {
+        let (_dir, pool) = test_pool().await;
+        set(&pool, "active_term", "2025-2026/1").await.unwrap();
+        crate::db::teaching_load::replace_for_term(
+            &pool,
+            "2025-2026/1",
+            &[crate::db::teaching_load::TermBranchHoursInput {
+                grade: "12/C".into(),
+                branch: "Dal".into(),
+                weekly_hours: 20,
+                group_count: 1,
+            }],
+        )
+        .await
+        .unwrap();
+        crate::db::teaching_load::replace_for_term(
+            &pool,
+            "2027-2028/1",
+            &[crate::db::teaching_load::TermBranchHoursInput {
+                grade: "12/D".into(),
+                branch: "Dal 2".into(),
+                weekly_hours: 20,
+                group_count: 1,
+            }],
+        )
+        .await
+        .unwrap();
+
+        // "2025-2026/1" hem active_term hem de ders yükü satırından geliyor;
+        // bir kez görünmeli.
+        assert_eq!(
+            known_terms(&pool).await.unwrap(),
+            vec!["2027-2028/1".to_string(), "2025-2026/1".to_string()]
+        );
     }
 }
