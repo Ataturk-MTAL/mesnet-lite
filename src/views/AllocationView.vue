@@ -5,14 +5,24 @@
         <h1 class="page-title">{{ labels.allocation.title }}</h1>
         <Tag v-if="board?.term" :value="board.term" severity="secondary" icon="pi pi-calendar" />
       </div>
-      <Button
-        :label="labels.allocation.clearAll"
-        icon="pi pi-trash"
-        severity="danger"
-        outlined
-        :disabled="(board?.assignedCompanyCount ?? 0) === 0"
-        @click="confirmClear"
-      />
+      <div class="header-actions">
+        <Button
+          :label="labels.allocation.propose"
+          icon="pi pi-bolt"
+          outlined
+          :loading="isProposing"
+          v-tooltip.top="labels.allocation.proposeTooltip"
+          @click="openProposalDialog"
+        />
+        <Button
+          :label="labels.allocation.clearAll"
+          icon="pi pi-trash"
+          severity="danger"
+          outlined
+          :disabled="(board?.assignedCompanyCount ?? 0) === 0"
+          @click="confirmClear"
+        />
+      </div>
     </div>
 
     <Message severity="secondary" :closable="false">{{ labels.allocation.subtitle }}</Message>
@@ -300,6 +310,86 @@
         />
       </template>
     </Dialog>
+
+    <!-- Öneri diyaloğu -->
+    <Dialog
+      v-model:visible="isProposalDialogOpen"
+      modal
+      :header="labels.allocation.proposalTitle"
+      :style="{ width: '36rem' }"
+      @hide="closeProposalDialog"
+    >
+      <div v-if="!proposal || proposal.assignments.length === 0" class="empty">
+        {{ labels.allocation.proposalEmpty }}
+      </div>
+
+      <template v-else>
+        <div
+          v-for="item in proposal.assignments"
+          :key="item.companyId"
+          class="proposal-row"
+          :class="{
+            'proposal-row--success': proposalResultFor(item.companyId)?.success === true,
+            'proposal-row--failed': proposalResultFor(item.companyId)?.success === false,
+          }"
+        >
+          <div class="proposal-row-info">
+            <div class="company-name">{{ item.companyName }}</div>
+            <div class="company-meta">
+              <Tag :value="item.teacherName" severity="secondary" />
+              <span class="muted">{{ proposalSlotLabel(item) }}</span>
+              <Tag
+                v-if="!item.exactBranchMatch"
+                :value="labels.allocation.nearField"
+                severity="warn"
+              />
+            </div>
+            <div v-if="proposalResultFor(item.companyId)?.success === false" class="proposal-error">
+              {{ proposalResultFor(item.companyId)?.errorMessage }}
+            </div>
+          </div>
+          <i
+            v-if="proposalResultFor(item.companyId)?.success === true"
+            class="pi pi-check proposal-icon proposal-icon--success"
+          />
+          <i
+            v-else-if="proposalResultFor(item.companyId)?.success === false"
+            class="pi pi-times proposal-icon proposal-icon--failed"
+          />
+        </div>
+      </template>
+
+      <Panel
+        v-if="proposal && proposal.unassigned.length > 0"
+        :header="`${labels.allocation.proposalUnassigned} (${proposal.unassigned.length})`"
+        toggleable
+        class="proposal-unassigned-panel"
+      >
+        <div
+          v-for="item in proposal.unassigned"
+          :key="item.companyId"
+          class="proposal-unassigned-row"
+        >
+          <span class="company-name">{{ item.companyName }}</span>
+          <span class="muted">{{ item.reason }}</span>
+        </div>
+      </Panel>
+
+      <template #footer>
+        <Button
+          :label="labels.common.cancel"
+          severity="secondary"
+          outlined
+          @click="closeProposalDialog"
+        />
+        <Button
+          :label="labels.allocation.proposalApply"
+          :loading="isApplyingProposal"
+          :disabled="!proposal || proposal.assignments.length === 0 || isApplyingProposal"
+          @click="applyProposal"
+        />
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -308,7 +398,13 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import { assignmentsApi } from '../api/assignments'
-import type { AssignmentBoard, BoardCompany, NewAssignment } from '../api/assignments'
+import type {
+  AllocationProposal,
+  AssignmentBoard,
+  BoardCompany,
+  NewAssignment,
+  ProposedAssignment,
+} from '../api/assignments'
 import { labels } from '../i18n/labels'
 import { activeTerm } from '../composables/useTerm'
 
@@ -327,6 +423,15 @@ interface HoverCell {
 interface BlockHighlight {
   day: number
   hours: number[]
+}
+
+/** Öneri uygulanırken her bir kalemin sonucu; kaçının başarılı/başarısız olduğunu
+ *  ve başarısızlık gerekçesini kullanıcıya tam olarak göstermek için tutulur. */
+interface ProposalApplyResult {
+  companyId: number
+  companyName: string
+  success: boolean
+  errorMessage: string | null
 }
 
 const toast = useToast()
@@ -351,6 +456,13 @@ const forceReason = ref('')
 const pendingPlacement = ref<{ companyId: number; day: number; hour: number } | null>(null)
 const pendingViolations = ref<string[]>([])
 
+// Öneri diyaloğu durumu
+const isProposalDialogOpen = ref(false)
+const isProposing = ref(false)
+const isApplyingProposal = ref(false)
+const proposal = ref<AllocationProposal | null>(null)
+const proposalApplyResults = ref<ProposalApplyResult[] | null>(null)
+
 const selectedTeacher = computed(
   () => board.value?.teachers.find((t) => t.teacherId === selectedTeacherId.value) ?? null,
 )
@@ -359,9 +471,10 @@ const draggedCompany = computed<BoardCompany | null>(
   () => board.value?.companies.find((c) => c.companyId === draggedCompanyId.value) ?? null,
 )
 
-/** Sürüklenen/seçilen işletmenin bloğu kaç hücre kaplar. Fahri ziyaret tam 1 hücre. */
-function companySpan(company: BoardCompany): number {
-  return Math.max(1, company.awardedHours)
+/** Bloğun kaç hücre kapladığı. Fahri ziyaret tam 1 hücre. Yapısal tip kullanılır ki
+ *  hem `BoardCompany` hem de `ProposedAssignment` için aynı hesap tekrarsız çalışsın. */
+function companySpan(entry: { awardedHours: number }): number {
+  return Math.max(1, entry.awardedHours)
 }
 
 /** `startHour`'dan başlayıp `span` hücre süren bloğun saatleri. */
@@ -487,9 +600,13 @@ function buildDragImage(company: BoardCompany): HTMLDivElement {
   const el = document.createElement('div')
   el.textContent = `${company.companyName} — ${blockHoursLabel(company)}`
   Object.assign(el.style, {
+    // WebKit (Tauri'nin macOS webview'i), görüş alanının TAMAMEN dışına (ör. top: -1000px)
+    // konumlanmış elemanlar için sürükleme görüntüsünü BOŞ üretebiliyor. Yatayda dışarı
+    // taşıyıp dikeyde görüş alanında (top: 0) tutmak WebKit'te de güvenilir çalışıyor.
+    // `display: none` / `visibility: hidden` KULLANILMAZ; o durumda görüntü hiç oluşmaz.
     position: 'fixed',
-    top: '-1000px',
-    left: '-1000px',
+    top: '0',
+    left: '-9999px',
     padding: '0.375rem 0.625rem',
     borderRadius: '0.375rem',
     background: 'var(--p-primary-color)',
@@ -529,18 +646,28 @@ function onDragEnd(): void {
   dragImageEl.value = null
 }
 
+/** `hoverCell`'i yalnızca gün VEYA saat gerçekten değiştiğinde yazar. `dragover` bir
+ *  hücre üstündeyken saniyede onlarca kez tetiklenir; her seferinde YENİ bir nesne
+ *  yazmak ref'i "değişti" saydırıp önizleme/ihlal taramasını ve tüm ızgarayı gereksiz
+ *  yere yeniden hesaplatıyordu. Aynı hücre için tekrar yazma yapılmaz. */
+function setHoverCell(day: number, hour: number): void {
+  const current = hoverCell.value
+  if (current !== null && current.day === day && current.hour === hour) return
+  hoverCell.value = { day, hour }
+}
+
 /** Hedef hücrede taşıma imlecini gösterir ve blok önizlemesini günceller. */
 function onCellDragOver(event: DragEvent, day: number, hour: number): void {
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'move'
   }
-  hoverCell.value = { day, hour }
+  setHoverCell(day, hour)
 }
 
 /** Klavye ile seçim sırasında fare hücrenin üstüne gelince önizleme göster. */
 function onCellMouseEnter(day: number, hour: number): void {
   if (draggedCompanyId.value !== null) {
-    hoverCell.value = { day, hour }
+    setHoverCell(day, hour)
   }
 }
 
@@ -733,6 +860,104 @@ function confirmClear(): void {
   })
 }
 
+/** Önerilen atamanın gün/saat aralığı etiketi. `ProposedAssignment` yalnızca bloğun
+ *  BAŞLANGICINI taşıdığından bitiş saati burada `awardedHours`'tan hesaplanır. */
+function proposalSlotLabel(item: ProposedAssignment): string {
+  const span = companySpan(item)
+  const endHour = item.visitHour + span - 1
+  const dayName = labels.allocation.days[item.visitDay]
+  return endHour > item.visitHour
+    ? `${dayName} ${item.visitHour}–${endHour}`
+    : `${dayName} ${item.visitHour}`
+}
+
+/** İlgili önerinin uygulama sonucu; henüz uygulanmadıysa `null`. */
+function proposalResultFor(companyId: number): ProposalApplyResult | null {
+  return proposalApplyResults.value?.find((r) => r.companyId === companyId) ?? null
+}
+
+/** Öneriyi arka uçtan ister; hiçbir şey kaydetmez, yalnızca diyaloğu doldurur. */
+async function openProposalDialog(): Promise<void> {
+  isProposing.value = true
+  try {
+    proposal.value = await assignmentsApi.propose()
+    proposalApplyResults.value = null
+    isProposalDialogOpen.value = true
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isProposing.value = false
+  }
+}
+
+function closeProposalDialog(): void {
+  isProposalDialogOpen.value = false
+  proposal.value = null
+  proposalApplyResults.value = null
+}
+
+/**
+ * Öneriyi sırayla uygular. Bir kalem hata verirse diğerleri de denenmeye devam eder
+ * (hata sessizce yutulmaz, kalan kalemler de iptal edilmez); bittiğinde kaçının
+ * başarılı/başarısız olduğu ve gerekçesi hem diyalogda satır satır hem de tek bir
+ * toast özetinde kullanıcıya bildirilir. Sonunda pano tazelenir.
+ */
+async function applyProposal(): Promise<void> {
+  const items = proposal.value?.assignments ?? []
+  if (items.length === 0) return
+
+  isApplyingProposal.value = true
+  const results: ProposalApplyResult[] = []
+
+  for (const item of items) {
+    try {
+      await assignmentsApi.assign({
+        teacherId: item.teacherId,
+        companyId: item.companyId,
+        visitDay: item.visitDay,
+        visitHour: item.visitHour,
+        isForced: false,
+        forceReason: null,
+      })
+      results.push({
+        companyId: item.companyId,
+        companyName: item.companyName,
+        success: true,
+        errorMessage: null,
+      })
+    } catch (error: unknown) {
+      results.push({
+        companyId: item.companyId,
+        companyName: item.companyName,
+        success: false,
+        errorMessage: error instanceof Error ? error.message : labels.common.error,
+      })
+    }
+  }
+
+  proposalApplyResults.value = results
+  await load()
+
+  const successCount = results.filter((r) => r.success).length
+  const failureCount = results.length - successCount
+  if (failureCount === 0) {
+    toast.add({ severity: 'success', summary: labels.allocation.proposalApplied, life: 3000 })
+  } else {
+    const failedNames = results
+      .filter((r) => !r.success)
+      .map((r) => r.companyName)
+      .join(', ')
+    toast.add({
+      severity: 'warn',
+      summary: labels.allocation.proposalApplied,
+      detail: `${successCount}/${results.length} ${labels.allocation.proposalSuccessSuffix}. ${labels.allocation.proposalFailedPrefix}: ${failedNames}`,
+      life: 10000,
+    })
+  }
+
+  isApplyingProposal.value = false
+}
+
 async function load(): Promise<void> {
   try {
     board.value = await assignmentsApi.get()
@@ -759,6 +984,7 @@ onUnmounted(() => {
 .page { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .title-group { display: flex; align-items: center; gap: 0.75rem; }
+.header-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .page-title { font-size: 1.5rem; font-weight: 600; margin: 0; }
 
 .summary { display: flex; flex-wrap: wrap; gap: 2.5rem; }
@@ -919,6 +1145,36 @@ onUnmounted(() => {
 .muted { color: var(--p-text-muted-color); font-size: 0.8125rem; }
 .force-reasons { margin: 0.5rem 0 1rem; padding-left: 1.25rem; color: var(--p-orange-500); }
 .field { display: flex; flex-direction: column; gap: 0.375rem; }
+
+/* Öneri diyaloğu satırları */
+.proposal-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border: 1px solid var(--p-content-border-color);
+  border-radius: var(--p-content-border-radius);
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: var(--p-content-background);
+}
+.proposal-row--success { border-color: var(--p-green-500); }
+.proposal-row--failed { border-color: var(--p-red-500); }
+.proposal-row-info { min-width: 0; }
+.proposal-error { font-size: 0.75rem; color: var(--p-red-500); margin-top: 0.25rem; }
+.proposal-icon { font-size: 1.125rem; flex-shrink: 0; }
+.proposal-icon--success { color: var(--p-green-500); }
+.proposal-icon--failed { color: var(--p-red-500); }
+.proposal-unassigned-panel { margin-top: 1rem; }
+.proposal-unassigned-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.375rem 0;
+  border-bottom: 1px solid var(--p-content-border-color);
+}
+.proposal-unassigned-row:last-child { border-bottom: none; }
 
 /* Hareket duyarlılığı azaltılmış kullanıcılar için tüm geçiş/animasyonları kapat. */
 @media (prefers-reduced-motion: reduce) {

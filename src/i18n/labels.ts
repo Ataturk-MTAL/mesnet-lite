@@ -182,6 +182,8 @@ export const labels = {
     proposalApplied: 'Öneri uygulandı',
     proposalEmpty: 'Atanabilecek işletme bulunamadı.',
     proposalUnassigned: 'Yerleştirilemeyenler',
+    proposalSuccessSuffix: 'başarılı',
+    proposalFailedPrefix: 'Başarısız',
     nearField: 'Yakın alan',
     days: ['', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma'],
     hoursSuffix: 'saat',
