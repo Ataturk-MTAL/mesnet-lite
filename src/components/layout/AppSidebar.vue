@@ -177,6 +177,7 @@ const navGroups: readonly NavGroup[] = [
     label: labels.nav.groupPlanning,
     items: [
       { to: '/availability', label: labels.nav.availability, icon: 'pi pi-calendar' },
+      { to: '/teaching-load', label: labels.nav.teachingLoad, icon: 'pi pi-book' },
       { to: '/company-hours', label: labels.nav.companyHours, icon: 'pi pi-clock' },
       { to: '/allocation', label: labels.nav.allocation, icon: 'pi pi-share-alt' },
     ],
@@ -186,6 +187,7 @@ const navGroups: readonly NavGroup[] = [
     label: labels.nav.groupAdmin,
     items: [
       { to: '/settings', label: labels.nav.settings, icon: 'pi pi-cog' },
+      { to: '/term-management', label: labels.nav.termManagement, icon: 'pi pi-calendar-plus' },
       { to: '/import-export', label: labels.nav.importExport, icon: 'pi pi-file-import' },
     ],
   },

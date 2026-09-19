@@ -13,6 +13,11 @@ const router = createRouter({
       component: () => import('../views/AvailabilityView.vue'),
     },
     {
+      path: '/teaching-load',
+      name: 'teachingLoad',
+      component: () => import('../views/TeachingLoadView.vue'),
+    },
+    {
       path: '/company-hours',
       name: 'companyHours',
       component: () => import('../views/CompanyHoursView.vue'),
@@ -23,6 +28,11 @@ const router = createRouter({
       component: () => import('../views/AllocationView.vue'),
     },
     { path: '/settings', name: 'settings', component: () => import('../views/SettingsView.vue') },
+    {
+      path: '/term-management',
+      name: 'termManagement',
+      component: () => import('../views/TermManagementView.vue'),
+    },
     { path: '/import-export', name: 'importExport', component: () => import('../views/ImportExportView.vue') },
   ],
 })

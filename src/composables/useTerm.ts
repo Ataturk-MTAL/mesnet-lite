@@ -1,6 +1,6 @@
 import { ref, readonly } from 'vue'
 import { settingsApi } from '../api/settings'
-import { studentsApi } from '../api/students'
+import { termsApi } from '../api/terms'
 
 /**
  * Aktif eğitim-öğretim yılı.
@@ -31,7 +31,10 @@ function mergeActiveTerm(list: string[], active: string): string[] {
 export async function loadTerms(): Promise<void> {
   const settings = await settingsApi.get()
   const active = settings.active_term ?? ''
-  const list = await studentsApi.listTerms()
+  // `get_known_terms` döneme bağlı HER tablonun birleşimidir; eski
+  // `studentsApi.listTerms()` yalnızca öğrencisi olan dönemleri döndürdüğü
+  // için henüz öğrencisi girilmemiş yeni bir eğitim-öğretim yılını gizliyordu.
+  const list = await termsApi.list()
 
   activeTermRef.value = active
   availableTerms.value = mergeActiveTerm(list, active)

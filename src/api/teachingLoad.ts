@@ -1,0 +1,42 @@
+import { call } from './client'
+
+/**
+ * Ders Yükü ekranındaki tek bir satır — ister kayıtlı, ister öğrenci
+ * kayıtlarından türeyen bir öneri.
+ */
+export interface TeachingLoadRow {
+  /** Kayıtlı satırın kimliği. Öneri satırında `null`. */
+  id: number | null
+  grade: string
+  branch: string
+  weeklyHours: number
+  groupCount: number
+  /**
+   * `true` ise bu satır o dönemin ÖĞRENCİ kayıtlarından türetildi, henüz
+   * kaydedilmedi (`id === null`, `weeklyHours`/`groupCount` sıfır).
+   */
+  isSuggested: boolean
+}
+
+/** Ders Yükü ekranının tamamı: satırlar + o dönemin havuzu. */
+export interface TeachingLoadBoard {
+  term: string
+  rows: TeachingLoadRow[]
+  /** Σ (haftalık ders saati × grup sayısı) — yalnızca KAYITLI satırlardan. */
+  poolHours: number
+}
+
+/** Kaydetmeye giden satır. */
+export interface TeachingLoadInput {
+  grade: string
+  branch: string
+  weeklyHours: number
+  groupCount: number
+}
+
+export const teachingLoadApi = {
+  get: (): Promise<TeachingLoadBoard> => call('get_teaching_load_board'),
+  /** Aktif dönemin TÜM satırlarını değiştirir; kısmi güncelleme yoktur. */
+  save: (rows: TeachingLoadInput[]): Promise<TeachingLoadBoard> =>
+    call('save_teaching_load', { rows }),
+}

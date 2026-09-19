@@ -45,6 +45,19 @@
       {{ warning }}
     </Message>
 
+    <!-- Havuz tanımlı değilse uyarı Ders Yükü ekranına yönlendirir; o ekran
+         olmadan havuz kalıcı olarak 0 kalıyordu. -->
+    <div v-if="isPoolUndefined" class="pool-warning-action">
+      <RouterLink to="/teaching-load">
+        <Button
+          :label="labels.hours.goToTeachingLoad"
+          icon="pi pi-arrow-right"
+          severity="warn"
+          outlined
+        />
+      </RouterLink>
+    </div>
+
     <!-- Havuz özeti -->
     <Card>
       <template #content>
@@ -215,6 +228,10 @@ const liveHonoraryCount = computed(() => rows.value.filter((row) => row.isHonora
 const isOverPool = computed(
   () => (board.value?.poolHours ?? 0) > 0 && liveTotalAwarded.value > (board.value?.poolHours ?? 0),
 )
+// Rust tarafındaki "havuz tanımlanmamış" uyarısıyla AYNI koşul (bkz.
+// hours_commands.rs::load_board) — havuz 0 olduğunda Ders Yükü ekranına
+// giden bir bağlantı gösterilir.
+const isPoolUndefined = computed(() => board.value !== null && board.value.poolHours === 0)
 
 const allWarnings = computed(() => [...(board.value?.warnings ?? []), ...suggestionWarnings.value])
 
@@ -355,6 +372,7 @@ onMounted(load)
 .summary-label { font-size: 0.8125rem; color: var(--p-text-muted-color); margin-top: 0.125rem; }
 
 .hours-input { width: 9rem; }
+.pool-warning-action { display: flex; }
 .muted { color: var(--p-text-muted-color); font-size: 0.8125rem; }
 .footer-actions {
   display: flex;
