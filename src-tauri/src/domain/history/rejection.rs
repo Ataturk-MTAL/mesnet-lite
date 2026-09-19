@@ -36,6 +36,12 @@ pub enum RejectionCode {
     HasHistory,
     /// Bu işlem yalnız planlama evresinde (dönem başlamadan) yapılabilir.
     PlanningOnly,
+    /// Sınırda doğrulama: komuttaki bir kimlik (`studentId`/`companyId`/
+    /// `teacherId`/`changeSetId`) bağlamda yok, yerinde oluşturulması
+    /// gereken bir kayıt oluşturulamadı, ya da hedef pasif bir işletme
+    /// (R2b brief madde 3). `0`'a düşen sahte varsayılan ya da yer tutucu
+    /// etiketle sessizce devam etmek yerine burada reddedilir.
+    InvalidRequest,
 }
 
 /// `decide` ve `resolve_effective_date`'in alan kuralı reddi.

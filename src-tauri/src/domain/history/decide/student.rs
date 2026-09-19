@@ -23,38 +23,17 @@ pub(super) fn create_student(
 ) -> Result<Decision, Rejection> {
     let d = ctx.term.resolve_effective_date(req.effective_date, ctx.today)?;
     // Yerinde oluşturma (`students::create_in`) `decide`'dan ÖNCE, aynı
-    // transaction'da çalışır; öğrencinin gerçek id'si burada gelir.
-    let student_id = ctx.materialized.student_id.unwrap_or_default();
+    // transaction'da çalışır; `None` sessizce `0` id'sine düşmek yerine
+    // reddedilir (R2b brief madde 3) — bu her zaman çalışır, `company_id`
+    // dalından bağımsızdır.
+    let student_id = ctx.require_materialized_student()?;
     let label = format!("{} {}", student.first_name, student.last_name);
 
     let mut events = Vec::new();
     let mut impact = ImpactSummary::empty(d, ctx.term.is_planning(ctx.today));
 
     if let Some(company_id) = company_id {
-        let primary = PlannedEvent {
-            stream: Stream::Placement,
-            subject_id: student_id,
-            effective_date: d,
-            payload: EventPayload::StudentPlaced {
-                to_company_id: company_id,
-                from_company_id: None,
-                source: "manual".to_string(),
-                labels: labels(&[("student", &label)]),
-            },
-            caused_by: None,
-            revokes: None,
-        };
-        impact.primary.push(impact_line(&label, &primary, None, Some(ctx.company_label(company_id))));
-        events.push(primary);
-
-        let augmented = with_pending(ctx, &events);
-        let (cascade, warnings, notices) = build_policy_events(&augmented, company_id, d, 0);
-        for e in &cascade {
-            impact.automatic.push(impact_line(&ctx.company_label(company_id), e, None, None));
-        }
-        events.extend(cascade);
-        impact.warnings.extend(warnings);
-        impact.notices.extend(notices);
+        append_initial_placement(ctx, student_id, &label, company_id, d, &mut events, &mut impact)?;
     }
 
     let touched = touched_from(&events, &req.term);
@@ -74,8 +53,49 @@ pub(super) fn create_student(
     })
 }
 
+/// Yeni öğrencinin İLK yerleştirmesi ve zincir etkisi. Pasif bir işletme
+/// yeni atama hedefi olamaz (spec §5.4, R2b brief madde 3).
+fn append_initial_placement(
+    ctx: &DecisionContext,
+    student_id: i64,
+    label: &str,
+    company_id: i64,
+    d: NaiveDate,
+    events: &mut Vec<PlannedEvent>,
+    impact: &mut ImpactSummary,
+) -> Result<(), Rejection> {
+    ctx.require_active_company(company_id)?;
+    let primary = PlannedEvent {
+        stream: Stream::Placement,
+        subject_id: student_id,
+        effective_date: d,
+        payload: EventPayload::StudentPlaced {
+            to_company_id: company_id,
+            from_company_id: None,
+            source: "manual".to_string(),
+            labels: labels(&[("student", label)]),
+        },
+        caused_by: None,
+        revokes: None,
+    };
+    impact.primary.push(impact_line(label, &primary, None, Some(ctx.company_label(company_id))));
+    events.push(primary);
+
+    let augmented = with_pending(ctx, events.as_slice());
+    let (cascade, warnings, notices) = build_policy_events(&augmented, company_id, d, 0);
+    for e in &cascade {
+        impact.automatic.push(impact_line(&ctx.company_label(company_id), e, None, None));
+    }
+    events.extend(cascade);
+    impact.warnings.extend(warnings);
+    impact.notices.extend(notices);
+    Ok(())
+}
+
 pub(super) fn place_student(ctx: &DecisionContext, req: &ChangeRequest, student_id: i64, company_id: i64) -> Result<Decision, Rejection> {
     let d = ctx.term.resolve_effective_date(req.effective_date, ctx.today)?;
+    ctx.require_student(student_id)?;
+    ctx.require_active_company(company_id)?;
     let label = ctx.student_label(student_id);
     let candidate = EventPayload::StudentPlaced { to_company_id: company_id, from_company_id: None, source: "manual".to_string(), labels: labels(&[("student", &label)]) };
     validate_placement_change(ctx, student_id, d, None, &candidate)?;
@@ -105,12 +125,9 @@ pub(super) fn transfer_student(
     to: &TransferTarget,
 ) -> Result<Decision, Rejection> {
     let d = ctx.term.resolve_effective_date(req.effective_date, ctx.today)?;
-    let (to_company_id, to_company_created) = match to {
-        TransferTarget::Existing { company_id } => (*company_id, false),
-        // Yeni işletme `decide`'dan ÖNCE `companies::create_in` ile açılmıştır;
-        // gerçek id burada gelir (brief, `Materialized`).
-        TransferTarget::New { .. } => (ctx.materialized.company_id.unwrap_or_default(), true),
-    };
+    ctx.require_student(student_id)?;
+    ctx.require_company(from_company_id)?;
+    let (to_company_id, to_company_created) = resolve_transfer_target(ctx, to)?;
 
     let label = ctx.student_label(student_id);
     let candidate = EventPayload::StudentTransferred {
@@ -126,7 +143,37 @@ pub(super) fn transfer_student(
     impact.primary.push(impact_line(&label, &primary, Some(ctx.company_label(from_company_id)), Some(ctx.company_label(to_company_id))));
     let mut events = vec![primary];
 
-    let augmented = with_pending(ctx, &events);
+    append_transfer_cascade(ctx, from_company_id, to_company_id, to_company_created, d, &mut events, &mut impact);
+
+    finish(ctx, req, d, events, impact, Vec::new())
+}
+
+/// `to`'nun hedef işletme kimliğini çözer: var olan bir işletme (aktif
+/// olmalı) ya da yerinde oluşturulmuş yeni bir işletme. `None` sessizce
+/// `0` id'sine düşmek yerine reddedilir (R2b brief madde 3).
+fn resolve_transfer_target(ctx: &DecisionContext, to: &TransferTarget) -> Result<(i64, bool), Rejection> {
+    match to {
+        TransferTarget::Existing { company_id } => {
+            ctx.require_active_company(*company_id)?;
+            Ok((*company_id, false))
+        }
+        // Yeni işletme `decide`'dan ÖNCE `companies::create_in` ile açılmıştır.
+        TransferTarget::New { .. } => Ok((ctx.require_materialized_company()?, true)),
+    }
+}
+
+/// Eski VE yeni işletmenin zincir etkisi, artı yerinde oluşturulan işletme
+/// için kurulum bildirimi.
+fn append_transfer_cascade(
+    ctx: &DecisionContext,
+    from_company_id: i64,
+    to_company_id: i64,
+    to_company_created: bool,
+    d: NaiveDate,
+    events: &mut Vec<PlannedEvent>,
+    impact: &mut ImpactSummary,
+) {
+    let augmented = with_pending(ctx, events.as_slice());
     for company_id in [from_company_id, to_company_id] {
         let (cascade, warnings, notices) = build_policy_events(&augmented, company_id, d, 0);
         for e in &cascade {
@@ -145,12 +192,12 @@ pub(super) fn transfer_student(
             date: d,
         });
     }
-
-    finish(ctx, req, d, events, impact, Vec::new())
 }
 
 pub(super) fn student_leaves(ctx: &DecisionContext, req: &ChangeRequest, student_id: i64, from_company_id: i64) -> Result<Decision, Rejection> {
     let d = ctx.term.resolve_effective_date(req.effective_date, ctx.today)?;
+    ctx.require_student(student_id)?;
+    ctx.require_company(from_company_id)?;
     let label = ctx.student_label(student_id);
     let candidate = EventPayload::StudentLeft { from_company_id, labels: labels(&[("student", &label)]) };
     validate_placement_change(ctx, student_id, d, Some(from_company_id), &candidate)?;
@@ -173,6 +220,7 @@ pub(super) fn student_leaves(ctx: &DecisionContext, req: &ChangeRequest, student
 }
 
 pub(super) fn delete_student(ctx: &DecisionContext, req: &ChangeRequest, student_id: i64) -> Result<Decision, Rejection> {
+    ctx.require_student(student_id)?;
     let placement_events = ctx.events_for(Stream::Placement, student_id);
     let live = |e: &&StoredEvent| !matches!(e.payload, EventPayload::Revoked);
     let has_history = placement_events.iter().any(|e| !e.is_opening && live(&e));
@@ -442,5 +490,50 @@ mod tests {
 
     fn hours_state_for_test(awarded: i64) -> crate::domain::history::events::HoursState {
         crate::domain::history::events::HoursState { awarded_hours: awarded, max_hours_snapshot: awarded, is_honorary: false, is_locked: false, notes: String::new() }
+    }
+
+    /// `materialized.student_id` `None` gelirse (yerinde oluşturma başarısız
+    /// oldu ya da hiç çalışmadı), önceden `unwrap_or_default()` ile `0`
+    /// id'sine düşüp sahte bir öğrenciyle devam ediyordu (R2b brief madde 3).
+    #[test]
+    fn create_student_without_materialized_id_is_invalid_request() {
+        let today = ymd(2026, 8, 1);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_company(1, "İşletme A", Some(10.0))
+            .build();
+
+        let student = NewStudentInput { first_name: "Ahmet".into(), last_name: "Yılmaz".into(), student_no: None, grade: "12".into(), branch: "A".into(), submitted_at: None };
+        let req = ChangeRequest { term: "2026-2027/1".into(), effective_date: None, document_date: None, reason: "yeni öğrenci".into(), command: ChangeCommand::CreateStudent { student: student.clone(), company_id: Some(1) } };
+        let result = create_student(&ctx, &req, &student, Some(1));
+        assert_eq!(result.unwrap_err().code, RejectionCode::InvalidRequest);
+    }
+
+    #[test]
+    fn transfer_to_unknown_company_is_invalid_request() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_student(100, "Ahmet Yılmaz")
+            .with_event(opened(1, 1, ymd(2026, 9, 1)))
+            .build();
+
+        let req = request(ymd(2026, 11, 3), ChangeCommand::TransferStudent { student_id: 100, from_company_id: 1, to: TransferTarget::Existing { company_id: 999 } });
+        let result = transfer_student(&ctx, &req, 100, 1, &TransferTarget::Existing { company_id: 999 });
+        assert_eq!(result.unwrap_err().code, RejectionCode::InvalidRequest, "bağlamda olmayan bir işletme id'si ile sessizce devam edilmemeli");
+    }
+
+    #[test]
+    fn transfer_to_inactive_company_is_invalid_request() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_inactive_company(2, "Kapanmış İşletme", Some(10.0))
+            .with_student(100, "Ahmet Yılmaz")
+            .with_event(opened(1, 1, ymd(2026, 9, 1)))
+            .build();
+
+        let req = request(ymd(2026, 11, 3), ChangeCommand::TransferStudent { student_id: 100, from_company_id: 1, to: TransferTarget::Existing { company_id: 2 } });
+        let result = transfer_student(&ctx, &req, 100, 1, &TransferTarget::Existing { company_id: 2 });
+        assert_eq!(result.unwrap_err().code, RejectionCode::InvalidRequest, "pasif işletme nakil hedefi olamaz");
     }
 }

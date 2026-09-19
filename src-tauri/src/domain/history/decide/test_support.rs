@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 
 use super::{ChangeSetFacts, CompanyFacts, Decision, DecisionContext, Materialized};
-use crate::domain::history::events::{EventPayload, Stream, StoredEvent};
+use crate::domain::history::events::{EventPayload, Stream, StoredEvent, WeeklySchedule};
 use crate::domain::hour_rules::HourRule;
 use crate::domain::terms::TermDates;
 
@@ -69,6 +69,7 @@ impl ContextBuilder {
                 change_sets: BTreeMap::new(),
                 high_water: 0,
                 materialized: Materialized::default(),
+                source_schedules: BTreeMap::new(),
             },
         }
     }
@@ -105,6 +106,19 @@ impl ContextBuilder {
 
     pub(super) fn materialized(mut self, m: Materialized) -> Self {
         self.ctx.materialized = m;
+        self
+    }
+
+    /// `copySchedulesFromTerm` testleri için: kaynak dönemde bir öğretmenin
+    /// son geçerli programı (R2b brief madde 1).
+    pub(super) fn with_source_schedule(mut self, teacher_id: i64, schedule: WeeklySchedule) -> Self {
+        self.ctx.source_schedules.insert(teacher_id, schedule);
+        self
+    }
+
+    /// Pasif işletme testleri için (`InvalidRequest`, R2b brief madde 3).
+    pub(super) fn with_inactive_company(mut self, id: i64, name: &str, round_trip_km: Option<f64>) -> Self {
+        self.ctx.companies.insert(id, CompanyFacts { name: name.to_string(), round_trip_km, is_active: false });
         self
     }
 

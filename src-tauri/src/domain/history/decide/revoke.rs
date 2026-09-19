@@ -113,11 +113,10 @@ fn build_revoke_decision(ctx: &DecisionContext, req: &ChangeRequest, target_id: 
 /// Hedef kümenin geri alınabilir olup olmadığını denetler (spec §5.4,
 /// "Geri alınamayanlar" + `HasDependents`).
 fn validate_revocable(ctx: &DecisionContext, target_id: i64) -> Result<super::ChangeSetFacts, Rejection> {
-    let facts = ctx
-        .change_sets
-        .get(&target_id)
-        .cloned()
-        .ok_or_else(|| Rejection::new(RejectionCode::NotRevocable, format!("#{target_id} numaralı kayıt bulunamadı; geri alınamaz.")))?;
+    // Bilinmeyen bir `changeSetId` bir İŞ KURALI reddi değil, geçersiz bir
+    // isteğin belirtisidir — `NotRevocable` DEĞİL `InvalidRequest` (R2b brief
+    // madde 3).
+    let facts = ctx.require_change_set(target_id)?;
 
     if facts.kind == "opening" {
         return Err(Rejection::new(RejectionCode::NotRevocable, "Açılış kümesi geri alınamaz.".to_string()));
@@ -478,5 +477,15 @@ mod tests {
             decision.impact.notices.iter().any(|n| n.code == NoticeCode::ReducedBelowCap),
             "X1 geri alınınca A'nın gerçek tavanı yükselir, ama X2'nin kaydı hâlâ eski (2 saatlik) kısıtlamayı taşıyor; bu artık gereğinden fazla düşürülmüş sayılmalı"
         );
+    }
+
+    /// Var olmayan bir `changeSetId`, bir iş kuralı reddi (`NotRevocable`)
+    /// DEĞİL, geçersiz bir isteğin belirtisidir (R2b brief madde 3).
+    #[test]
+    fn revoke_unknown_change_set_is_invalid_request() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31))).build();
+        let result = revoke(&ctx, &request(ChangeCommand::Revoke { change_set_id: 999 }), 999);
+        assert_eq!(result.unwrap_err().code, RejectionCode::InvalidRequest);
     }
 }

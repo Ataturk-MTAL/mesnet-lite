@@ -7,6 +7,7 @@
 //! yardımcılarını ve dağıtımı (`decide()`) barındırır.
 
 mod company;
+mod flags;
 mod revoke;
 mod student;
 mod teacher;
@@ -18,9 +19,9 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::Deserialize;
 
-use super::events::{EventPayload, Labels, Stream, StoredEvent, TeacherLoad};
-use super::rejection::Rejection;
-use super::timeline::{fold_intervals, order_events, Timeline};
+use super::events::{EventPayload, Labels, Stream, StoredEvent, TeacherLoad, WeeklySchedule};
+use super::rejection::{Rejection, RejectionCode};
+use super::timeline::{fold_intervals, order_events, Interval, Timeline};
 use crate::domain::hour_rules::HourRule;
 use crate::domain::models::NewCompany;
 use crate::domain::scheduling::Slot;
@@ -165,6 +166,10 @@ pub struct DecisionContext {
     pub change_sets: BTreeMap<i64, ChangeSetFacts>,
     pub high_water: i64,
     pub materialized: Materialized,
+    /// Kaynak dönemdeki her öğretmenin SON geçerli programı — yalnız
+    /// `copySchedulesFromTerm` için doldurulur (R3'te `db::history_context::load`
+    /// bunu okur); diğer komutlarda boş kalır (R2b brief madde 1).
+    pub source_schedules: BTreeMap<i64, WeeklySchedule>,
 }
 
 /// `decide`'ın planladığı, henüz kaydedilmemiş bir olay.
@@ -393,13 +398,85 @@ impl DecisionContext {
         self.teacher_names.get(&id).cloned().unwrap_or_else(|| format!("Öğretmen #{id}"))
     }
 
+    /// Sınırda doğrulama (R2b brief madde 3): komuttaki bir öğrenci id'si
+    /// bağlamda yoksa `InvalidRequest`. Önceden bu denetim YOKTU; eksik id
+    /// sessizce `student_label`'ın yer tutucu etiketine düşüyordu.
+    pub(super) fn require_student(&self, id: i64) -> Result<(), Rejection> {
+        if self.student_names.contains_key(&id) {
+            Ok(())
+        } else {
+            Err(Rejection::new(RejectionCode::InvalidRequest, format!("#{id} numaralı öğrenci bulunamadı.")))
+        }
+    }
+
+    pub(super) fn require_teacher(&self, id: i64) -> Result<(), Rejection> {
+        if self.teacher_names.contains_key(&id) {
+            Ok(())
+        } else {
+            Err(Rejection::new(RejectionCode::InvalidRequest, format!("#{id} numaralı öğretmen bulunamadı.")))
+        }
+    }
+
+    /// Yalnız VARLIK denetimi yapar; aktiflik `require_active_company`'nindir.
+    pub(super) fn require_company(&self, id: i64) -> Result<&CompanyFacts, Rejection> {
+        self.companies
+            .get(&id)
+            .ok_or_else(|| Rejection::new(RejectionCode::InvalidRequest, format!("#{id} numaralı işletme bulunamadı.")))
+    }
+
+    /// `require_company` + `is_active` denetimi. Yalnız YENİ öğrenci ataması
+    /// ve nakil HEDEFİNDE kullanılır (spec §5.4, R2b brief madde 3): pasif
+    /// bir işletme yeni bir öğrenci kabul edemez.
+    pub(super) fn require_active_company(&self, id: i64) -> Result<&CompanyFacts, Rejection> {
+        let facts = self.require_company(id)?;
+        if facts.is_active {
+            Ok(facts)
+        } else {
+            Err(Rejection::new(
+                RejectionCode::InvalidRequest,
+                format!("{}: pasif işletme yeni atama ya da nakil hedefi olamaz.", facts.name),
+            ))
+        }
+    }
+
+    /// `decide`'dan ÖNCE, aynı transaction'da yerinde oluşturulmuş bir
+    /// satırın id'si `None` gelirse bu, oluşturma adımının başarısız olduğu
+    /// ya da hiç çalıştırılmadığı anlamına gelir — önceden `unwrap_or_default()`
+    /// ile sessizce `0` id'sine düşüyordu (R2b brief madde 3).
+    pub(super) fn require_materialized_student(&self) -> Result<i64, Rejection> {
+        self.materialized
+            .student_id
+            .ok_or_else(|| Rejection::new(RejectionCode::InvalidRequest, "Öğrenci yerinde oluşturulamadı.".to_string()))
+    }
+
+    pub(super) fn require_materialized_teacher(&self) -> Result<i64, Rejection> {
+        self.materialized
+            .teacher_id
+            .ok_or_else(|| Rejection::new(RejectionCode::InvalidRequest, "Öğretmen yerinde oluşturulamadı.".to_string()))
+    }
+
+    pub(super) fn require_materialized_company(&self) -> Result<i64, Rejection> {
+        self.materialized
+            .company_id
+            .ok_or_else(|| Rejection::new(RejectionCode::InvalidRequest, "Yeni işletme oluşturulamadı.".to_string()))
+    }
+
+    /// `revoke`/`correct` bilinmeyen bir `changeSetId` alırsa `NotRevocable`
+    /// DEĞİL `InvalidRequest` döner (R2b brief madde 3): hedef hiç yok, bu
+    /// bir iş kuralı reddi değil, geçersiz bir isteğin belirtisidir.
+    pub(super) fn require_change_set(&self, id: i64) -> Result<ChangeSetFacts, Rejection> {
+        self.change_sets
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| Rejection::new(RejectionCode::InvalidRequest, format!("#{id} numaralı kayıt bulunamadı.")))
+    }
+
     /// Bir işletmedeki öğrenci sayısının zaman içindeki seyri. Tek bir olay
     /// akışından değil, TÜM öğrencilerin yerleştirme zaman çizelgelerinin
     /// birleşiminden türetilir (`placement` akışı özne başınadır, işletme
     /// başına değil).
     pub(super) fn company_student_count_timeline(&self, company_id: i64) -> Timeline<i64> {
         use crate::domain::history::apply::apply_placement;
-        use crate::domain::history::timeline::Interval;
         use std::collections::BTreeSet;
 
         let student_ids: BTreeSet<i64> =

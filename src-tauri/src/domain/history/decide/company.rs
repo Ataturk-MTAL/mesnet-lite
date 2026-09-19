@@ -10,9 +10,10 @@ use crate::domain::history::rejection::{Rejection, RejectionCode};
 use crate::domain::history::timeline::order_events;
 use crate::domain::scheduling::Block;
 
+use super::flags::{apply_shadow_and_future_notices, teacher_capacity_warnings, teacher_schedule_warnings};
 use super::{
-    command_kind, debug_opt, impact_line, labels, touched_from, ChangeRequest, CompanyHoursRow, CoordinatorRow,
-    Decision, DecisionContext, NewChangeSet, PlannedEvent, RowAction,
+    command_kind, debug_opt, impact_line, labels, touched_from, with_pending, ChangeRequest, CompanyHoursRow,
+    CoordinatorRow, Decision, DecisionContext, NewChangeSet, PlannedEvent, RowAction,
 };
 
 /// `d` tarihinden itibaren bir işletmenin zincir etkisini planlar ve olaya
@@ -76,36 +77,61 @@ pub(super) fn set_company_hours(ctx: &DecisionContext, req: &ChangeRequest, rows
     let d = ctx.term.resolve_effective_date(req.effective_date, ctx.today)?;
     let mut events = Vec::new();
     let mut impact = ImpactSummary::empty(d, ctx.term.is_planning(ctx.today));
+    // Saati değişen HER işletmenin, O TARİHTEKİ koordinatörü (spec §5.3, R2b
+    // brief madde 2). Koordinasyon bu komuttan ETKİLENMEZ.
+    let mut coordinators: Vec<i64> = Vec::new();
 
     for row in rows {
-        let label = ctx.company_label(row.company_id);
-        let prior = ctx.state_before::<HoursState>(Stream::CompanyHours, row.company_id, d, apply_hours);
-        let student_count = ctx.company_student_count_timeline(row.company_id).state_at(d).copied().unwrap_or(0);
-        let round_trip_km = ctx.companies.get(&row.company_id).and_then(|c| c.round_trip_km);
-        let cap = cap_for(&ctx.rules, round_trip_km, student_count);
-
-        let awarded = if row.is_honorary { 0 } else { row.awarded_hours };
-        validate_manual_hours(&label, awarded, cap, prior.as_ref())?;
-
-        let max_hours_snapshot = cap.unwrap_or_else(|| prior.as_ref().map(|p| p.max_hours_snapshot).unwrap_or(awarded));
-        let state = HoursState { awarded_hours: awarded, max_hours_snapshot, is_honorary: row.is_honorary, is_locked: row.is_locked, notes: row.notes.clone() };
-        let event = PlannedEvent {
-            stream: Stream::CompanyHours,
-            subject_id: row.company_id,
-            effective_date: d,
-            payload: EventPayload::HoursSet {
-                state: state.clone(),
-                previous_awarded: prior.as_ref().map(|p| p.awarded_hours),
-                labels: labels(&[("company", &label)]),
-            },
-            caused_by: None,
-            revokes: None,
-        };
-        impact.primary.push(impact_line(&label, &event, debug_opt(prior.as_ref()), Some(format!("{state:?}"))));
+        let (event, coordinator) = build_hours_event(ctx, d, row, &mut impact)?;
+        if let Some(teacher_id) = coordinator {
+            if !coordinators.contains(&teacher_id) {
+                coordinators.push(teacher_id);
+            }
+        }
         events.push(event);
     }
 
+    let augmented = with_pending(ctx, &events);
+    for teacher_id in coordinators {
+        impact.warnings.extend(teacher_capacity_warnings(&augmented, teacher_id, d));
+    }
+
     finish(ctx, req, d, events, impact, Vec::new())
+}
+
+/// Tek bir `CompanyHoursRow` için olayı ve etki satırını üretir; döndürdüğü
+/// öğretmen kimliği (varsa) O TARİHTEKİ koordinatördür — kapasite bayrağı
+/// çağıran tarafta TOPLU hesaplanır (spec §5.3, R2b brief madde 2).
+fn build_hours_event(ctx: &DecisionContext, d: NaiveDate, row: &CompanyHoursRow, impact: &mut ImpactSummary) -> Result<(PlannedEvent, Option<i64>), Rejection> {
+    ctx.require_company(row.company_id)?;
+    let label = ctx.company_label(row.company_id);
+    let prior = ctx.state_before::<HoursState>(Stream::CompanyHours, row.company_id, d, apply_hours);
+    let student_count = ctx.company_student_count_timeline(row.company_id).state_at(d).copied().unwrap_or(0);
+    let round_trip_km = ctx.companies.get(&row.company_id).and_then(|c| c.round_trip_km);
+    let cap = cap_for(&ctx.rules, round_trip_km, student_count);
+
+    let awarded = if row.is_honorary { 0 } else { row.awarded_hours };
+    validate_manual_hours(&label, awarded, cap, prior.as_ref())?;
+
+    let max_hours_snapshot = cap.unwrap_or_else(|| prior.as_ref().map(|p| p.max_hours_snapshot).unwrap_or(awarded));
+    let state = HoursState { awarded_hours: awarded, max_hours_snapshot, is_honorary: row.is_honorary, is_locked: row.is_locked, notes: row.notes.clone() };
+    let event = PlannedEvent {
+        stream: Stream::CompanyHours,
+        subject_id: row.company_id,
+        effective_date: d,
+        payload: EventPayload::HoursSet {
+            state: state.clone(),
+            previous_awarded: prior.as_ref().map(|p| p.awarded_hours),
+            labels: labels(&[("company", &label)]),
+        },
+        caused_by: None,
+        revokes: None,
+    };
+    impact.primary.push(impact_line(&label, &event, debug_opt(prior.as_ref()), Some(format!("{state:?}"))));
+    apply_shadow_and_future_notices(ctx, Stream::CompanyHours, row.company_id, &label, d, impact);
+
+    let coordinator = ctx.timeline::<CoordinationState>(Stream::Coordination, row.company_id, apply_coordination).state_at(d).map(|c| c.teacher_id);
+    Ok((event, coordinator))
 }
 
 /// Elle girilen saat, tavanı AŞACAK ŞEKİLDE artırılamaz (spec §5.2). Tek
@@ -128,41 +154,63 @@ pub(super) fn assign_coordinators(ctx: &DecisionContext, req: &ChangeRequest, ro
     let d = ctx.term.resolve_effective_date(req.effective_date, ctx.today)?;
     let mut events = Vec::new();
     let mut impact = ImpactSummary::empty(d, ctx.term.is_planning(ctx.today));
+    let mut teachers: Vec<i64> = Vec::new();
 
     for row in rows {
-        let label = ctx.company_label(row.company_id);
-        let hours = ctx.timeline::<HoursState>(Stream::CompanyHours, row.company_id, apply_hours);
-        let awarded = hours.state_at(d).map(|h| h.awarded_hours).unwrap_or(0);
-        let candidate_block = Block::from_start(row.visit_day, row.visit_hour, awarded);
-
-        if !row.is_forced {
-            if let Some(other) = find_overlapping_company(ctx, row.teacher_id, row.company_id, candidate_block, d) {
-                return Err(Rejection::new(
-                    RejectionCode::BlockOverlap,
-                    format!("{}: aynı öğretmenin {other} işletmesindeki bloğuyla çakışıyor", ctx.teacher_label(row.teacher_id)),
-                ));
-            }
+        let event = build_coordinator_event(ctx, d, row, &mut impact)?;
+        if !teachers.contains(&row.teacher_id) {
+            teachers.push(row.teacher_id);
         }
-
-        let prior = ctx.state_before::<CoordinationState>(Stream::Coordination, row.company_id, d, apply_coordination);
-        let state = CoordinationState { teacher_id: row.teacher_id, visit_day: row.visit_day, visit_hour: row.visit_hour, is_forced: row.is_forced, force_reason: row.force_reason.clone() };
-        let event = PlannedEvent {
-            stream: Stream::Coordination,
-            subject_id: row.company_id,
-            effective_date: d,
-            payload: EventPayload::CoordinatorAssigned {
-                state: state.clone(),
-                from_teacher_id: prior.as_ref().map(|p| p.teacher_id),
-                labels: labels(&[("company", &label)]),
-            },
-            caused_by: None,
-            revokes: None,
-        };
-        impact.primary.push(impact_line(&label, &event, debug_opt(prior.as_ref()), Some(format!("{state:?}"))));
         events.push(event);
     }
 
+    // Yeni atanan öğretmenin haftalık kapasitesi ve boş saatleri artık farklı
+    // bir yük taşıyor olabilir (spec §5.3, R2b brief madde 2).
+    let augmented = with_pending(ctx, &events);
+    for teacher_id in teachers {
+        impact.warnings.extend(teacher_capacity_warnings(&augmented, teacher_id, d));
+        impact.warnings.extend(teacher_schedule_warnings(&augmented, teacher_id, d));
+    }
+
     finish(ctx, req, d, events, impact, Vec::new())
+}
+
+/// Tek bir `CoordinatorRow` için olayı ve etki satırını üretir. Çakışma
+/// denetimi (`find_overlapping_company`) burada kalır; kapasite/program
+/// bayrakları çağıran tarafta TOPLU hesaplanır.
+fn build_coordinator_event(ctx: &DecisionContext, d: NaiveDate, row: &CoordinatorRow, impact: &mut ImpactSummary) -> Result<PlannedEvent, Rejection> {
+    ctx.require_company(row.company_id)?;
+    ctx.require_teacher(row.teacher_id)?;
+    let label = ctx.company_label(row.company_id);
+    let hours = ctx.timeline::<HoursState>(Stream::CompanyHours, row.company_id, apply_hours);
+    let awarded = hours.state_at(d).map(|h| h.awarded_hours).unwrap_or(0);
+    let candidate_block = Block::from_start(row.visit_day, row.visit_hour, awarded);
+
+    if !row.is_forced {
+        if let Some(other) = find_overlapping_company(ctx, row.teacher_id, row.company_id, candidate_block, d) {
+            return Err(Rejection::new(
+                RejectionCode::BlockOverlap,
+                format!("{}: aynı öğretmenin {other} işletmesindeki bloğuyla çakışıyor", ctx.teacher_label(row.teacher_id)),
+            ));
+        }
+    }
+
+    let prior = ctx.state_before::<CoordinationState>(Stream::Coordination, row.company_id, d, apply_coordination);
+    let state = CoordinationState { teacher_id: row.teacher_id, visit_day: row.visit_day, visit_hour: row.visit_hour, is_forced: row.is_forced, force_reason: row.force_reason.clone() };
+    let event = PlannedEvent {
+        stream: Stream::Coordination,
+        subject_id: row.company_id,
+        effective_date: d,
+        payload: EventPayload::CoordinatorAssigned {
+            state: state.clone(),
+            from_teacher_id: prior.as_ref().map(|p| p.teacher_id),
+            labels: labels(&[("company", &label)]),
+        },
+        caused_by: None,
+        revokes: None,
+    };
+    impact.primary.push(impact_line(&label, &event, debug_opt(prior.as_ref()), Some(format!("{state:?}"))));
+    Ok(event)
 }
 
 /// Aynı öğretmenin, tarih aralıkları çakışan başka bir işletme bloğu var mı?
@@ -203,6 +251,7 @@ fn ranges_overlap(a_from: NaiveDate, a_to: Option<NaiveDate>, b_from: NaiveDate,
 
 pub(super) fn end_coordination(ctx: &DecisionContext, req: &ChangeRequest, company_id: i64) -> Result<Decision, Rejection> {
     let d = ctx.term.resolve_effective_date(req.effective_date, ctx.today)?;
+    ctx.require_company(company_id)?;
     let label = ctx.company_label(company_id);
     let prior = ctx.state_before::<CoordinationState>(Stream::Coordination, company_id, d, apply_coordination);
     let Some(prior) = prior else {
@@ -283,7 +332,9 @@ mod tests {
     use super::super::test_support::*;
     use super::*;
     use crate::domain::history::decide::{ChangeCommand, CompanyHoursRow, CoordinatorRow};
-    use crate::domain::history::events::Labels;
+    use crate::domain::history::events::{Labels, TeacherLoad};
+    use crate::domain::history::impact::WarningCode;
+    use crate::domain::models::{ChiefType, EmploymentType};
 
     fn hours_state(awarded: i64, locked: bool) -> HoursState {
         HoursState { awarded_hours: awarded, max_hours_snapshot: awarded, is_honorary: false, is_locked: locked, notes: "eski not".into() }
@@ -392,5 +443,60 @@ mod tests {
         let decision = clear_coordination(&planning, &req).unwrap();
         assert_eq!(decision.events.len(), 1);
         assert!(matches!(decision.events[0].payload, EventPayload::CoordinatorEnded { .. }));
+    }
+
+    fn department_load(other_extra_hours: i64, max_extra_hours: i64, chief_type: ChiefType) -> TeacherLoad {
+        TeacherLoad { base_hours: 15, max_extra_hours, other_extra_hours, chief_type, employment_type: EmploymentType::Tenured }
+    }
+
+    /// B'ye yeni koordinatör atanınca, öğretmenin A'daki 8 saatiyle
+    /// TOPLAM ataması kapasiteyi (24/10/4 → 10) aşar. Bloklar farklı günde
+    /// olduğu için `BlockOverlap` tetiklenmez; yalnız `CapacityExceeded`
+    /// bayraklanır (R2b brief madde 2).
+    #[test]
+    fn assign_coordinator_flags_capacity_via_decide() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_teacher(5, "Ali Öğretmen")
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_company(2, "İşletme B", Some(10.0))
+            .with_event(stored_event(1, 1, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 1), EventPayload::LoadSet { load: department_load(4, 24, ChiefType::Department), previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(3, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(8, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(4, 1, Stream::CompanyHours, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(5, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .build();
+
+        // Farklı gün (2 = Salı): A'nın (Pazartesi) bloğuyla ÖRTÜŞMEZ.
+        let rows = vec![CoordinatorRow { company_id: 2, teacher_id: 5, visit_day: 2, visit_hour: 9, is_forced: false, force_reason: None }];
+        let req = request(ymd(2026, 11, 5), ChangeCommand::AssignCoordinators { rows: rows.clone() });
+        let decision = assign_coordinators(&ctx, &req, &rows).unwrap();
+
+        let warning = decision.impact.warnings.iter().find(|w| w.code == WarningCode::CapacityExceeded).expect("kapasite uyarısı beklenir");
+        assert_eq!(warning.from_date, ymd(2026, 11, 5));
+    }
+
+    /// A'nın koordinatörü Ali'nin kişisel bütçesi (10/0/0 → 10) sabit;
+    /// işletmenin saati 2'den 15'e çıkınca Ali'nin TOPLAM ataması kapasiteyi
+    /// aşar. Bu, kurumun MADDE 15/2 tavanından (burada 20, ayrı bir eksen)
+    /// bağımsız bir bayraktır (R2b brief madde 2).
+    #[test]
+    fn set_company_hours_flags_the_coordinators_capacity() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_rules(vec![rule(1, 0.0, None, 1, None, 20)])
+            .with_teacher(5, "Ali Öğretmen")
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_event(stored_event(1, 1, Stream::Placement, 100, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: 1, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 1, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 1), EventPayload::LoadSet { load: department_load(0, 10, ChiefType::None), previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(3, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(4, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(2, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .build();
+
+        let rows = vec![CompanyHoursRow { company_id: 1, awarded_hours: 15, is_honorary: false, is_locked: false, notes: String::new() }];
+        let req = request(ymd(2026, 11, 5), ChangeCommand::SetCompanyHours { rows: rows.clone() });
+        let decision = set_company_hours(&ctx, &req, &rows).unwrap();
+
+        let warning = decision.impact.warnings.iter().find(|w| w.code == WarningCode::CapacityExceeded).expect("koordinatörün kapasite uyarısı beklenir");
+        assert_eq!(warning.from_date, ymd(2026, 11, 5));
     }
 }
