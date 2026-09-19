@@ -88,7 +88,7 @@
             tabindex="0"
             role="button"
             :aria-label="company.companyName"
-            @dragstart="onDragStart(company.companyId)"
+            @dragstart="onDragStart($event, company.companyId)"
             @dragend="onDragEnd"
             @keydown.enter.prevent="toggleKeyboardSelection(company.companyId)"
             @keydown.space.prevent="toggleKeyboardSelection(company.companyId)"
@@ -168,8 +168,9 @@
                       :key="`${day}-${hour}`"
                       class="grid-cell"
                       :class="cellClass(day, hour)"
-                      @dragover.prevent
-                      @drop.prevent="onDrop(day, hour)"
+                      @dragenter.prevent="onDragOver"
+                      @dragover.prevent="onDragOver"
+                      @drop.prevent.stop="onDrop($event, day, hour)"
                       @click="onCellClick(day, hour)"
                     >
                       <template v-if="cellCompany(day, hour)">
@@ -335,12 +336,28 @@ function cellClass(day: number, hour: number): Record<string, boolean> {
   }
 }
 
-function onDragStart(companyId: number): void {
+/**
+ * WebKit (Tauri'nin macOS webview'i) `dataTransfer` boş bırakılırsa sürükleme
+ * işlemini hiç başlatmaz. Chromium buna göz yumduğu için hata yalnızca
+ * paketlenmiş uygulamada görünür. İşletme kimliğini yüke yazıyoruz.
+ */
+function onDragStart(event: DragEvent, companyId: number): void {
   draggedCompanyId.value = companyId
+  if (event.dataTransfer) {
+    event.dataTransfer.setData('text/plain', String(companyId))
+    event.dataTransfer.effectAllowed = 'move'
+  }
 }
 
 function onDragEnd(): void {
   draggedCompanyId.value = null
+}
+
+/** Hedef hücrede taşıma imlecini gösterir; önlenmezse bırakma gerçekleşmez. */
+function onDragOver(event: DragEvent): void {
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
 }
 
 /** Klavye ile seçim: Enter kartı seçer, sonra hücrede tıklama bırakır. */
@@ -353,9 +370,13 @@ function onCellClick(day: number, hour: number): void {
   void place(draggedCompanyId.value, day, hour)
 }
 
-function onDrop(day: number, hour: number): void {
-  if (draggedCompanyId.value === null) return
-  void place(draggedCompanyId.value, day, hour)
+function onDrop(event: DragEvent, day: number, hour: number): void {
+  // `dragend` bazı webview'larda `drop`tan önce tetiklenip ref'i temizler;
+  // asıl kaynak sürükleme yüküdür, ref yalnızca yedek.
+  const payload = Number(event.dataTransfer?.getData('text/plain'))
+  const companyId = Number.isFinite(payload) && payload > 0 ? payload : draggedCompanyId.value
+  if (companyId === null) return
+  void place(companyId, day, hour)
 }
 
 /** Kural ihlallerini toplar. Boş dizi dönerse yerleşim temizdir. */
@@ -521,7 +542,11 @@ onMounted(load)
   margin-bottom: 0.5rem;
   cursor: grab;
   background: var(--p-content-background);
+  /* WebKit metin seçimini sürükleme sanır; elemanın kendisi sürüklenmeli. */
+  -webkit-user-drag: element;
+  user-select: none;
 }
+.company-card:active { cursor: grabbing; }
 .company-card:hover { background: var(--p-content-hover-background); }
 .company-card--dragging { outline: 2px solid var(--p-primary-color); }
 .company-name { font-weight: 600; font-size: 0.9375rem; }
