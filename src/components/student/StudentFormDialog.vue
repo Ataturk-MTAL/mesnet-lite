@@ -35,7 +35,7 @@
         <InputText id="student-branch" v-model="form.branch" />
       </div>
 
-      <div class="field">
+      <div v-if="!isEdit" class="field">
         <label for="student-company">{{ labels.student.company }}</label>
         <Select
           id="student-company"

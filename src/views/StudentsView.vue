@@ -47,6 +47,10 @@
             <Button icon="pi pi-pencil" severity="secondary" outlined size="small"
                     :aria-label="labels.common.edit" v-tooltip.top="labels.common.edit"
                     @click="openEdit(data)" />
+            <Button icon="pi pi-arrow-right-arrow-left" severity="secondary" outlined size="small"
+                    :disabled="data.companyId === null || currentTerm === null"
+                    :aria-label="labels.studentChange.title" v-tooltip.top="labels.studentChange.title"
+                    @click="openChangeDialog(data)" />
             <Button icon="pi pi-trash" severity="danger" outlined size="small"
                     :aria-label="labels.common.delete" v-tooltip.top="labels.common.delete"
                     @click="confirmRemove(data)" />
@@ -61,18 +65,27 @@
       :companies="companies"
       @save="handleSave"
     />
+
+    <StudentChangeDialog
+      v-model:visible="isChangeDialogOpen"
+      :student="changeSubject"
+      :term="changeTerm"
+      @saved="load"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import StudentFormDialog from '../components/student/StudentFormDialog.vue'
+import StudentChangeDialog, { type StudentChangeSubject } from '../components/student/StudentChangeDialog.vue'
 import { studentsApi } from '../api/students'
 import { companiesApi } from '../api/companies'
+import { listTermsWithDates } from '../api/terms'
 import { labels } from '../i18n/labels'
-import type { Company, NewStudent, Student } from '../types/models'
+import type { Company, NewStudent, Student, TermWithDates } from '../types/models'
 import { activeTerm } from '../composables/useTerm'
 
 const toast = useToast()
@@ -80,10 +93,31 @@ const confirm = useConfirm()
 
 const students = ref<Student[]>([])
 const companies = ref<Company[]>([])
+const termsWithDates = ref<TermWithDates[]>([])
 const isLoading = ref(false)
 const isDialogOpen = ref(false)
 const selected = ref<Student | null>(null)
 const filters = ref({ global: { value: null as string | null, matchMode: 'contains' } })
+
+const isChangeDialogOpen = ref(false)
+const changeSubject = ref<StudentChangeSubject>({ id: 0, fullName: '', companyId: null, companyName: null })
+
+// Nakil/ayrılış diyaloğunun tarih kuralları için aktif dönemin tarihleri.
+const currentTerm = computed(() => termsWithDates.value.find((t) => t.term === activeTerm.value) ?? null)
+// Diyalog `TermWithDates` zorunlu kılar; yalnızca `currentTerm` doluyken açılır,
+// bu değer görünmez durumdayken kullanılan zararsız bir yer tutucudur.
+const changeTerm = computed<TermWithDates>(
+  () =>
+    currentTerm.value ?? {
+      term: '',
+      startDate: '',
+      endDate: '',
+      datesConfirmed: false,
+      isPlanning: true,
+      defaultAsOf: '',
+      earliestAllowedDate: '',
+    },
+)
 
 function companyName(companyId: number | null): string | null {
   if (companyId === null) return null
@@ -98,14 +132,16 @@ function showError(error: unknown): void {
 async function load(): Promise<void> {
   isLoading.value = true
   try {
-    // İki liste birlikte yüklenir; öğrenci tablosu işletme adını göstermek için
-    // işletme listesine ihtiyaç duyar.
-    const [studentRows, companyRows] = await Promise.all([
+    // Üç liste birlikte yüklenir: öğrenci tablosu işletme adını göstermek için
+    // işletme listesine, nakil/ayrılış diyaloğu da dönem tarihlerine ihtiyaç duyar.
+    const [studentRows, companyRows, termRows] = await Promise.all([
       studentsApi.list(),
       companiesApi.list(),
+      listTermsWithDates(),
     ])
     students.value = studentRows
     companies.value = companyRows
+    termsWithDates.value = termRows
   } catch (error: unknown) {
     showError(error)
   } finally {
@@ -121,6 +157,18 @@ function openCreate(): void {
 function openEdit(student: Student): void {
   selected.value = student
   isDialogOpen.value = true
+}
+
+function openChangeDialog(student: Student): void {
+  // Düğme zaten `currentTerm === null` iken devre dışıdır; bu yalnız savunma amaçlıdır.
+  if (currentTerm.value === null) return
+  changeSubject.value = {
+    id: student.id,
+    fullName: `${student.firstName} ${student.lastName}`,
+    companyId: student.companyId,
+    companyName: companyName(student.companyId),
+  }
+  isChangeDialogOpen.value = true
 }
 
 async function handleSave(input: NewStudent): Promise<void> {
