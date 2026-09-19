@@ -525,7 +525,6 @@ export const labels = {
     planningBadge: 'Planlama dönemi',
     shadowedNote: 'Bu değişiklik, sonraki bir kayıtla gölgeleniyor.',
     rejectedTitle: 'Reddedildi',
-    staleTitle: 'Etki güncel değildi, yeniden önizlendi',
     previewing: 'Önizleniyor…',
     committing: 'Kaydediliyor…',
     committed: 'Değişiklik kaydedildi',

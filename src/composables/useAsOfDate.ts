@@ -39,5 +39,10 @@ export function useAsOfDate() {
     asOfDateRef.value = date
   }
 
-  return { asOfDate: asOfDateRef, isToday, isReadOnly, initializeFromTerm, setAsOfDate }
+  /** "Bugün" düğmesi: `isToday` ile aynı gün hesabını kullanır, sapma olmaz. */
+  function goToToday(): void {
+    setAsOfDate(todayLocalIso())
+  }
+
+  return { asOfDate: asOfDateRef, isToday, isReadOnly, initializeFromTerm, setAsOfDate, goToToday }
 }

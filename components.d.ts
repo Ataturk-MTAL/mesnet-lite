@@ -12,6 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AppSidebar: typeof import('./src/components/layout/AppSidebar.vue')['default']
+    AsOfDatePicker: typeof import('./src/components/history/AsOfDatePicker.vue')['default']
     AutoComplete: typeof import('openvue/autocomplete')['default']
     Button: typeof import('openvue/button')['default']
     Card: typeof import('openvue/card')['default']
@@ -20,8 +21,12 @@ declare module 'vue' {
     CompanyFormDialog: typeof import('./src/components/company/CompanyFormDialog.vue')['default']
     ConfirmDialog: typeof import('openvue/confirmdialog')['default']
     DataTable: typeof import('openvue/datatable')['default']
+    DatePicker: typeof import('openvue/datepicker')['default']
     Dialog: typeof import('openvue/dialog')['default']
     Drawer: typeof import('openvue/drawer')['default']
+    EffectiveDateField: typeof import('./src/components/history/EffectiveDateField.vue')['default']
+    ImpactDialog: typeof import('./src/components/history/ImpactDialog.vue')['default']
+    ImpactLineRow: typeof import('./src/components/history/ImpactLineRow.vue')['default']
     InputNumber: typeof import('openvue/inputnumber')['default']
     InputText: typeof import('openvue/inputtext')['default']
     LocationPickerMap: typeof import('./src/components/map/LocationPickerMap.vue')['default']
