@@ -32,6 +32,8 @@ typst-pdf = "0.15.1"
 
 [dev-dependencies]
 tempfile = "3"
+# Gömülü fontların Türkçe gliflerini içerdiğini testte doğrulamak için.
+ttf-parser = "0.25"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

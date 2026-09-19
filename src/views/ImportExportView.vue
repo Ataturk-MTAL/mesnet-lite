@@ -124,6 +124,35 @@
       </template>
     </Card>
 
+    <Card>
+      <template #title>{{ labels.nav.groupReports }}</template>
+      <template #content>
+        <div class="report-row">
+          <Button
+            :label="labels.reports.assignmentSheet"
+            icon="pi pi-file-pdf"
+            severity="secondary"
+            outlined
+            :loading="isPrintingSheet"
+            @click="exportAssignmentSheet"
+          />
+          <small class="hint">{{ labels.reports.assignmentSheetNote }}</small>
+        </div>
+
+        <div class="report-row">
+          <Button
+            :label="labels.reports.visitLists"
+            icon="pi pi-file-pdf"
+            severity="secondary"
+            outlined
+            :loading="isPrintingVisits"
+            @click="exportVisitLists"
+          />
+          <small class="hint">{{ labels.reports.visitListsNote }}</small>
+        </div>
+      </template>
+    </Card>
+
     <Message v-if="summary" severity="success" :closable="false">
       {{ summary.companiesCreated }} {{ labels.importCsv.summaryCompanies }}
       {{ labels.importCsv.resultCreated }},
@@ -155,6 +184,8 @@ const preview = ref<ImportPreview | null>(null)
 const summary = ref<ImportSummary | null>(null)
 const isApplying = ref(false)
 const isExporting = ref(false)
+const isPrintingSheet = ref(false)
+const isPrintingVisits = ref(false)
 
 async function exportExcel(): Promise<void> {
   isExporting.value = true
@@ -167,6 +198,31 @@ async function exportExcel(): Promise<void> {
   } finally {
     isExporting.value = false
   }
+}
+
+/** PDF üretimi ile diske yazmayı tek yerde birleştirir. */
+async function savePdf(
+  busy: typeof isPrintingSheet,
+  produce: (fileName: string) => Promise<string>,
+  baseName: string,
+): Promise<void> {
+  busy.value = true
+  try {
+    const path = await produce(`${baseName}-${activeTerm.value.replace('/', '-')}.pdf`)
+    toast.add({ severity: 'success', summary: labels.export.saved, detail: path, life: 8000 })
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    busy.value = false
+  }
+}
+
+function exportAssignmentSheet(): void {
+  void savePdf(isPrintingSheet, filesApi.exportAssignmentSheet, 'Gorevlendirme-Cizelgesi')
+}
+
+function exportVisitLists(): void {
+  void savePdf(isPrintingVisits, filesApi.exportVisitLists, 'Ziyaret-Listeleri')
 }
 
 // Yalnızca mevcut kayıtla çakışan gruplar için anlamlıdır; belirtilmeyen
@@ -234,6 +290,7 @@ async function applyImport(): Promise<void> {
 .file-row { display: flex; align-items: center; gap: 1rem; }
 .file-input { display: none; }
 .file-name { font-size: 0.875rem; color: var(--p-text-muted-color); }
+.report-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.75rem; }
 .hint { display: block; margin-top: 0.5rem; color: var(--p-text-muted-color); font-size: 0.75rem; }
 .policy-select { min-width: 12rem; }
 .muted { color: var(--p-text-muted-color); }

@@ -48,6 +48,8 @@ pub fn run() {
             commands::export_commands::export_workbook,
             commands::file_commands::save_to_downloads,
             commands::geocoding_commands::geocode_pending_companies,
+            commands::report_commands::export_assignment_sheet,
+            commands::report_commands::export_visit_lists,
             commands::hours_commands::get_hours_board,
             commands::hours_commands::save_company_hours,
             commands::hours_commands::auto_distribute_hours,

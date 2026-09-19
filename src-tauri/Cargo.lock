@@ -3142,6 +3142,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "ttf-parser",
  "typst",
  "typst-as-lib",
  "typst-layout",

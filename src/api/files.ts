@@ -21,6 +21,16 @@ export const filesApi = {
     const bytes = await call<number[]>('export_workbook')
     return saveToDownloads(fileName, bytes)
   },
+  /** Koordinatör Görevlendirme Çizelgesi'ni PDF üretir ve kaydeder. */
+  exportAssignmentSheet: async (fileName: string): Promise<string> => {
+    const bytes = await call<number[]>('export_assignment_sheet')
+    return saveToDownloads(fileName, bytes)
+  },
+  /** Öğretmen Ziyaret Listeleri'ni PDF üretir ve kaydeder. */
+  exportVisitLists: async (fileName: string): Promise<string> => {
+    const bytes = await call<number[]>('export_visit_lists')
+    return saveToDownloads(fileName, bytes)
+  },
   /** Konumu olmayan işletmeleri Nominatim ile çözer. Saniyede bir istek. */
   geocodePending: (): Promise<GeocodeSummary> => call('geocode_pending_companies'),
 }

@@ -634,4 +634,70 @@ mod tests {
         assert!(row.is_honorary);
         assert_eq!(row.hours, 0, "fahri satırda saat 0'a zorlanır");
     }
+
+    /// Türkçe alfabenin tamamı (küçük ve BÜYÜK: ğ/Ğ, ı/I, i/İ, ş/Ş, ö/Ö, ç/Ç,
+    /// ü/Ü) ile şapkalı â, Typst'e verilip PDF'e dönüşebilmeli.
+    ///
+    /// DİKKAT: Bu test glif KAPSAMINI kanıtlamaz. Typst eksik glifi hata değil
+    /// uyarı sayar ve `render_pdf` uyarıları kullanmaz; eksik glif sessizce
+    /// tofu (□) olarak basılırdı. Kapsamı `fonts_cover_every_turkish_character`
+    /// doğrudan fontun cmap tablosundan doğrular.
+    #[tokio::test]
+    async fn renders_every_turkish_character_including_capitals() {
+        let (_dir, pool) = test_pool().await;
+
+        settings::set(&pool, "school_name", "Şükrü Saracoğlu Mesleki ve Teknik Anadolu Lisesi")
+            .await
+            .unwrap();
+        settings::set(&pool, "active_term", TERM).await.unwrap();
+
+        // Büyük Ğ ve İ en sık düşen gliflerdir; adlarda açıkça geçmeleri şart.
+        let teacher_id = seed_teacher(&pool, "ÇAĞIL İŞIKÖZÜ").await;
+        let company_id = seed_company(&pool, "ÇELİK ÖĞÜT SANAYİ A.Ş. — Gıda ve Şişeleme").await;
+        seed_student(&pool, company_id, "Gökçe", "Ünlü").await;
+        seed_hours(&pool, company_id, 6).await;
+        assignments::assign(
+            &pool,
+            TERM,
+            &assignments::NewAssignment {
+                teacher_id,
+                company_id,
+                visit_day: 3,
+                visit_hour: 4,
+                is_forced: true,
+                force_reason: Some("Güzergâh zorunluluğu".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let pdf = build_assignment_sheet(&pool, TERM).await.unwrap();
+        assert!(pdf.starts_with(b"%PDF"));
+        // Boş/uç bir PDF değil: gerçekten sayfa çizilmiş olmalı.
+        assert!(pdf.len() > 2_000, "PDF beklenenden küçük: {} bayt", pdf.len());
+    }
+
+    /// Gömülü iki fontun da Türkçe'ye özgü her kod noktası için gerçek bir glifi
+    /// olmalı. Eksik glif render sırasında sessizce tofu (□) basılmasına yol
+    /// açar; tek kesin kontrol fontun cmap tablosudur.
+    #[test]
+    fn fonts_cover_every_turkish_character() {
+        // Türkçe'ye özgü harfler + rapor metinlerinde geçen şapkalı sesliler.
+        const TURKISH: &str = "çÇğĞıIiİöÖşŞüÜâÂîÎûÛ";
+
+        for (name, bytes) in [("DejaVuSans", FONT_REGULAR), ("DejaVuSans-Bold", FONT_BOLD)] {
+            let face = ttf_parser::Face::parse(bytes, 0)
+                .unwrap_or_else(|e| panic!("{name} ayrıştırılamadı: {e}"));
+
+            let missing: Vec<char> = TURKISH
+                .chars()
+                .filter(|c| face.glyph_index(*c).is_none())
+                .collect();
+
+            assert!(
+                missing.is_empty(),
+                "{name} fontunda şu karakterlerin glifi yok: {missing:?}"
+            );
+        }
+    }
 }
