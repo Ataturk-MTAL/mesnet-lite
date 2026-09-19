@@ -1,4 +1,5 @@
 import { call } from './client'
+import type { TermWithDates, UpdateTermDatesInput } from '../types/models'
 
 /** `create_term` çağrısının sonucu. */
 export interface CreateTermResult {
@@ -25,4 +26,20 @@ export const termsApi = {
    */
   create: (term: string, copyTeachingLoadFromTerm: string | null): Promise<CreateTermResult> =>
     call('create_term', { term, copyTeachingLoadFromTerm }),
+}
+
+/**
+ * Bilinen her dönemin başlangıç/bitiş tarihi, onay durumu ve o dönem için
+ * hesaplanmış `defaultAsOf` / `earliestAllowedDate` değerleri (spec §8).
+ */
+export function listTermsWithDates(): Promise<TermWithDates[]> {
+  return call('list_terms_with_dates')
+}
+
+/**
+ * Bir dönemin başlangıç/bitiş tarihini günceller. `confirm: true` verilirse
+ * `datesConfirmed` işaretlenir ve Dönem Yönetimi'ndeki uyarı başlığı kalkar.
+ */
+export function updateTermDates(input: UpdateTermDatesInput): Promise<TermWithDates> {
+  return call('update_term_dates', { ...input })
 }

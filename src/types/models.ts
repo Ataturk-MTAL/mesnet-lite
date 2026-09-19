@@ -117,3 +117,262 @@ export function parseBranches(raw: string): string[] {
     return []
   }
 }
+
+// ---------------------------------------------------------------------------
+// Dönem içi değişiklik tarihçesi — spec §8 (Tauri sözleşmesi) ile birebir.
+// Kaynak: docs/superpowers/specs/2026-09-19-donem-ici-degisiklik-tarihce-design.md
+// ---------------------------------------------------------------------------
+
+/** Beş tarihçe akışından biri; `Stream::as_str()` ile birebir aynı metinler. */
+export type Stream = 'placement' | 'company_hours' | 'coordination' | 'teacher_load' | 'teacher_schedule'
+
+/**
+ * `EventPayload::kind()` çıktısı; 12 tür (11 olay + geri alma işareti).
+ * Etiketleri için bkz. `labels.history.eventKind`.
+ */
+export type EventKind =
+  | 'student_placed'
+  | 'student_transferred'
+  | 'student_left'
+  | 'hours_set'
+  | 'hours_capped'
+  | 'hours_cleared'
+  | 'coordinator_assigned'
+  | 'coordinator_ended'
+  | 'coordinator_ended_by_policy'
+  | 'load_set'
+  | 'schedule_set'
+  | 'revoked'
+
+/** `rejected.code` değerleri (spec §8). */
+export type RejectionCode =
+  | 'previousMonthClosed'
+  | 'effectiveDateRequired'
+  | 'outOfTerm'
+  | 'factNotTrueAtDate'
+  | 'conflictsWithLaterChange'
+  | 'aboveCap'
+  | 'blockOverlap'
+  | 'notRevocable'
+  | 'hasDependents'
+  | 'hasHistory'
+  | 'planningOnly'
+
+/** `ImpactWarning.code` değerleri. */
+export type WarningCode =
+  | 'lockedAboveCap'
+  | 'capacityExceeded'
+  | 'dailyCapExceeded'
+  | 'blockOutsideFreeSlots'
+  | 'capUnknown'
+
+/** `ImpactNotice.code` değerleri. */
+export type NoticeCode = 'capIncreased' | 'reducedBelowCap' | 'newCompanyNeedsSetup' | 'futureDated' | 'shadowed'
+
+/** Öğrenci oluşturma komutunun taşıdığı alanlar; `companyId` ve `term` komut zarfında ayrıca yer alır. */
+export interface NewStudentInput {
+  firstName: string
+  lastName: string
+  studentNo: string | null
+  grade: string
+  branch: string
+  submittedAt: string | null
+}
+
+/** `assignCoordinators.rows` öğesi. */
+export interface CoordinatorAssignmentRow {
+  companyId: number
+  teacherId: number
+  visitDay: number
+  visitHour: number
+  isForced: boolean
+  forceReason: string | null
+}
+
+/** `setCompanyHours.rows` öğesi. */
+export interface CompanyHoursRow {
+  companyId: number
+  awardedHours: number
+  isHonorary: boolean
+  isLocked: boolean
+  notes: string
+}
+
+/**
+ * `createTeacher.teacher`: yalnız kimlik bilgisi. Yük alanları tarihe bağlı
+ * olduğu için ayrı `load` alanında gelir; burada tekrarlanmaz.
+ */
+export interface NewTeacherProfile {
+  firstName: string
+  lastName: string
+  registryNo: string
+  field: string
+  branches: string[]
+  isActive: boolean
+}
+
+/** `createTeacher.load` ve `setTeacherLoad.load`. */
+export interface TeacherLoadInput {
+  baseHours: number
+  maxExtraHours: number
+  otherExtraHours: number
+  chiefType: ChiefType
+  employmentType: EmploymentType
+}
+
+/** `setTeacherSchedule.slots` öğesi. */
+export interface ScheduleSlot {
+  dayOfWeek: number
+  hour: number
+}
+
+/** `transferStudent.to`. */
+export type TransferTarget = { type: 'existing'; companyId: number } | { type: 'new'; company: NewCompany }
+
+/**
+ * Spec §8'deki 16 komut türü, `type` etiketiyle ayırt edilir. `correct.replacement`
+ * bu birleşimin tamamına başvurur; spec metni "yukarıdakilerden biri" der ve
+ * `revoke` / `correct`'i dışlamaz.
+ */
+export type ChangeCommand =
+  | { type: 'createStudent'; student: NewStudentInput; companyId: number | null }
+  | { type: 'placeStudent'; studentId: number; companyId: number }
+  | { type: 'transferStudent'; studentId: number; fromCompanyId: number; to: TransferTarget }
+  | { type: 'studentLeaves'; studentId: number; fromCompanyId: number }
+  | { type: 'deleteStudent'; studentId: number }
+  | { type: 'setCompanyHours'; rows: CompanyHoursRow[] }
+  | { type: 'assignCoordinators'; rows: CoordinatorAssignmentRow[] }
+  | { type: 'endCoordination'; companyId: number }
+  | { type: 'clearCoordination' }
+  | { type: 'createTeacher'; teacher: NewTeacherProfile; load: TeacherLoadInput }
+  | { type: 'setTeacherLoad'; teacherId: number; load: TeacherLoadInput }
+  | { type: 'setTeacherSchedule'; teacherId: number; slots: ScheduleSlot[] }
+  | { type: 'copySchedulesFromTerm'; fromTerm: string }
+  | { type: 'deleteTeacher'; teacherId: number }
+  | { type: 'revoke'; changeSetId: number }
+  | { type: 'correct'; changeSetId: number; replacement: ChangeCommand }
+
+/** `preview_change` / `commit_change` isteği. */
+export interface ChangeRequest {
+  term: string
+  effectiveDate: string | null
+  documentDate: string | null
+  reason: string
+  command: ChangeCommand
+}
+
+/** Etki penceresinde birincil ya da otomatik bir satır. */
+export interface ImpactLine {
+  kind: EventKind
+  stream: Stream
+  subjectId: number
+  subjectLabel: string
+  effectiveDate: string
+  before: string | null
+  after: string | null
+}
+
+export interface ImpactWarning {
+  code: WarningCode
+  message: string
+  subjectLabel: string
+  fromDate: string
+  toDate: string | null
+}
+
+export interface ImpactNotice {
+  code: NoticeCode
+  message: string
+  subjectLabel: string
+  date: string
+}
+
+export interface ImpactSummary {
+  effectiveDate: string
+  isPlanning: boolean
+  shadowedUntil: string | null
+  primary: ImpactLine[]
+  automatic: ImpactLine[]
+  warnings: ImpactWarning[]
+  notices: ImpactNotice[]
+}
+
+/** `preview_change` / `commit_change` yanıtı; `status` ile ayırt edilir. */
+export type ChangeOutcome =
+  | {
+      status: 'rejected'
+      code: RejectionCode
+      reason: string
+      conflictingChangeSetIds: number[]
+      suggestedDate: string | null
+    }
+  | { status: 'stale'; message: string }
+  | { status: 'preview'; impact: ImpactSummary; highWater: number }
+  | { status: 'committed'; changeSetId: number; impact: ImpactSummary }
+
+/** `list_history` isteği. */
+export interface HistoryFilter {
+  term: string
+  stream: Stream | null
+  subjectId: number | null
+  companyId: number | null
+  teacherId: number | null
+  includeOpening: boolean
+  beforeChangeSetId: number | null
+  limit: number
+}
+
+/** Bir değişiklik kümesi içindeki tek bir olay; denetim satırı. */
+export interface HistoryEventEntry {
+  eventId: number
+  stream: Stream
+  subjectId: number
+  subjectLabel: string
+  kind: EventKind
+  effectiveDate: string
+  before: string | null
+  after: string | null
+  causedByEventId: number | null
+  isRevoked: boolean
+}
+
+/** Tarihçe listesindeki bir değişiklik kümesi. */
+export interface HistoryChangeSetEntry {
+  changeSetId: number
+  recordedAt: string
+  kind: string
+  reason: string
+  actor: string
+  effectiveDate: string
+  documentDate: string | null
+  revokedByChangeSetId: number | null
+  revokesChangeSetId: number | null
+  isRevocable: boolean
+  warnings: ImpactWarning[]
+  events: HistoryEventEntry[]
+}
+
+/** `list_history` yanıtı; sayfalama `nextBeforeChangeSetId` ile ilerler. */
+export interface HistoryResponse {
+  entries: HistoryChangeSetEntry[]
+  nextBeforeChangeSetId: number | null
+}
+
+/** `list_terms_with_dates` yanıtındaki tek dönem. */
+export interface TermWithDates {
+  term: string
+  startDate: string
+  endDate: string
+  datesConfirmed: boolean
+  isPlanning: boolean
+  defaultAsOf: string
+  earliestAllowedDate: string
+}
+
+/** `update_term_dates` isteği. */
+export interface UpdateTermDatesInput {
+  term: string
+  startDate: string
+  endDate: string
+  confirm: boolean
+}

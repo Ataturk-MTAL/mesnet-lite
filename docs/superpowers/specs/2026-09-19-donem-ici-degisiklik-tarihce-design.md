@@ -343,9 +343,18 @@ request = {
   }
   ```
 
+- `get_subject_history({stream, subjectId, term})` → `HistoryEventEntry[]`. Şekli, yukarıdaki `events[]` öğesiyle aynıdır.
+
 **Dönemler:**
 - `list_terms_with_dates()` → `[{term, startDate, endDate, datesConfirmed, isPlanning, defaultAsOf, earliestAllowedDate}]`
-- `update_term_dates({term, startDate, endDate, confirm})`
+- `update_term_dates({term, startDate, endDate, confirm})` → güncellenmiş kaydı döndürür (`TermWithDates`, `list_terms_with_dates` öğesiyle aynı şekil).
+
+**İç gövdeler** (V1'de sabitlendi):
+- `createStudent.student` = `NewStudentInput`: `{firstName, lastName, studentNo | null, grade, branch, submittedAt | null}`.
+  - `companyId` ve `term` bu gövdede **yoktur**; zarftaki `companyId` ve istekteki `term` kullanılır.
+- `createTeacher.teacher` = `{firstName, lastName, registryNo, field, branches: string[], isActive}`.
+- `createTeacher.load` = `setTeacherLoad.load` ile aynı şekildedir.
+- `correct.replacement` herhangi bir `ChangeCommand` olabilir. Ancak `revoke` ve `correct`, `decide` tarafından `notRevocable` ile reddedilir.
 
 ## 9. Göç
 
