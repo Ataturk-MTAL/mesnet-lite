@@ -179,7 +179,8 @@ pub(super) fn assign_coordinators(ctx: &DecisionContext, req: &ChangeRequest, ro
 /// denetimi (`find_overlapping_company`) burada kalır; kapasite/program
 /// bayrakları çağıran tarafta TOPLU hesaplanır.
 fn build_coordinator_event(ctx: &DecisionContext, d: NaiveDate, row: &CoordinatorRow, impact: &mut ImpactSummary) -> Result<PlannedEvent, Rejection> {
-    ctx.require_company(row.company_id)?;
+    // Pasif işletme artık kullanılmıyor; ona ziyaret planlanmaz.
+    ctx.require_active_company(row.company_id)?;
     ctx.require_teacher(row.teacher_id)?;
     let label = ctx.company_label(row.company_id);
     let hours = ctx.timeline::<HoursState>(Stream::CompanyHours, row.company_id, apply_hours);
