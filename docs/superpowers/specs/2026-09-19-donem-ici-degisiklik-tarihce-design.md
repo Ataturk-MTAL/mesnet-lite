@@ -317,6 +317,7 @@ request = {
 | `hasDependents` | Önce sonraki bağlı kayıt geri alınmalı. `conflictingChangeSetIds` dolu gelir. |
 | `hasHistory` | Kaydın geçmişi var, silinemez; pasif yapılabilir. |
 | `planningOnly` | Dönem başladı, bu işlem yalnız planlamada yapılabilir. |
+| `invalidRequest` | Komuttaki öğrenci, işletme, öğretmen ya da değişiklik kümesi yok; işletme pasif; ya da yerinde oluşturulması gereken satır oluşturulmamış. |
 
 **`ImpactSummary`:** `{effectiveDate, isPlanning, shadowedUntil | null, primary, automatic, warnings, notices}`
 

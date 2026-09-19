@@ -497,6 +497,7 @@ export const labels = {
       hasDependents: 'Bağlı kayıt var',
       hasHistory: 'Geçmişi var',
       planningOnly: 'Yalnız planlamada yapılabilir',
+      invalidRequest: 'Geçersiz istek',
     },
     warningCode: {
       lockedAboveCap: 'Kilitli satır tavanın üstünde',

@@ -157,6 +157,7 @@ export type RejectionCode =
   | 'hasDependents'
   | 'hasHistory'
   | 'planningOnly'
+  | 'invalidRequest'
 
 /** `ImpactWarning.code` değerleri. */
 export type WarningCode =
