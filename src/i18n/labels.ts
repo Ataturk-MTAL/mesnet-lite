@@ -184,6 +184,8 @@ export const labels = {
     proposalUnassigned: 'Yerleştirilemeyenler',
     nearField: 'Yakın alan',
     days: ['', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma'],
+    hoursSuffix: 'saat',
+    assignedSection: 'Atanmış İşletmeler',
   },
   availability: {
     title: 'Müsaitlik Takvimi',

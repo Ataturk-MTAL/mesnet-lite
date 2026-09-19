@@ -118,6 +118,39 @@
               {{ labels.allocation.notWorkplaceDay }}
             </div>
           </div>
+
+          <!-- Atanmış işletmeler: kart solda kaybolmasın, nereye gittiği görünsün -->
+          <Panel
+            v-if="assignedCompanies.length > 0"
+            :header="`${labels.allocation.assignedSection} (${assignedCompanies.length})`"
+            toggleable
+            class="assigned-panel"
+          >
+            <div
+              v-for="company in assignedCompanies"
+              :key="company.companyId"
+              class="assigned-card"
+              :class="{ 'assigned-card--settle': recentlyAssignedCompanyId === company.companyId }"
+            >
+              <div class="assigned-card-info">
+                <div class="company-name">{{ company.companyName }}</div>
+                <div class="company-meta">
+                  <Tag :value="assignedTeacherName(company)" severity="secondary" />
+                  <span class="muted">{{ assignedSlotLabel(company) }}</span>
+                </div>
+              </div>
+              <Button
+                icon="pi pi-times"
+                severity="danger"
+                text
+                rounded
+                size="small"
+                :aria-label="labels.allocation.removeAssignment"
+                v-tooltip.top="labels.allocation.removeAssignment"
+                @click="unassign(company.companyId)"
+              />
+            </div>
+          </Panel>
         </template>
       </Card>
 
@@ -168,24 +201,38 @@
                       :key="`${day}-${hour}`"
                       class="grid-cell"
                       :class="cellClass(day, hour)"
-                      @dragenter.prevent="onDragOver"
-                      @dragover.prevent="onDragOver"
+                      @dragenter.prevent="onCellDragOver($event, day, hour)"
+                      @dragover.prevent="onCellDragOver($event, day, hour)"
                       @drop.prevent.stop="onDrop($event, day, hour)"
                       @click="onCellClick(day, hour)"
+                      @mouseenter="onCellMouseEnter(day, hour)"
+                      @mouseleave="onCellMouseLeave(day, hour)"
                     >
-                      <template v-if="cellCompany(day, hour)">
-                        <span class="cell-name">{{ cellCompany(day, hour)?.companyName }}</span>
-                        <Button
-                          icon="pi pi-times"
-                          severity="danger"
-                          text
-                          rounded
-                          size="small"
-                          :aria-label="labels.allocation.removeAssignment"
-                          v-tooltip.top="labels.allocation.removeAssignment"
-                          @click.stop="unassign(cellCompany(day, hour)!.companyId)"
-                        />
-                      </template>
+                      <div
+                        v-if="cellCompany(day, hour)"
+                        class="cell-fill"
+                        :class="{
+                          'cell-fill--start': isBlockStart(day, hour),
+                          'cell-fill--end': isBlockEnd(day, hour),
+                        }"
+                      >
+                        <template v-if="isBlockStart(day, hour)">
+                          <span class="cell-name">
+                            {{ cellCompany(day, hour)?.companyName }} —
+                            {{ blockHoursLabel(cellCompany(day, hour)!) }}
+                          </span>
+                          <Button
+                            icon="pi pi-times"
+                            severity="danger"
+                            text
+                            rounded
+                            size="small"
+                            :aria-label="labels.allocation.removeAssignment"
+                            v-tooltip.top="labels.allocation.removeAssignment"
+                            @click.stop="unassign(cellCompany(day, hour)!.companyId)"
+                          />
+                        </template>
+                      </div>
                       <span v-else-if="isFree(day, hour)" class="cell-free">
                         {{ labels.allocation.free }}
                       </span>
@@ -257,7 +304,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import { assignmentsApi } from '../api/assignments'
@@ -266,6 +313,21 @@ import { labels } from '../i18n/labels'
 import { activeTerm } from '../composables/useTerm'
 
 const DAYS = [1, 2, 3, 4, 5] as const
+/** OÖKY MADDE 88: bir öğretmen bir günde en fazla bu kadar saat koordinatörlük yapabilir. */
+const DAILY_HOUR_LIMIT = 8
+/** Yerleşim sonrası blok/kart vurgusunun ekranda kalma süresi (ms). CSS'teki
+ *  `cell-settle` animasyon süresi ve `.assigned-card--settle` geçişiyle senkron tutulmalı. */
+const SETTLE_ANIMATION_MS = 650
+
+interface HoverCell {
+  day: number
+  hour: number
+}
+
+interface BlockHighlight {
+  day: number
+  hours: number[]
+}
 
 const toast = useToast()
 const confirm = useConfirm()
@@ -274,6 +336,14 @@ const board = ref<AssignmentBoard | null>(null)
 const selectedTeacherId = ref<number | null>(null)
 const companySearch = ref('')
 const draggedCompanyId = ref<number | null>(null)
+/** Sürükleme veya klavye seçimi sırasında imlecin üstünde olduğu hücre. */
+const hoverCell = ref<HoverCell | null>(null)
+/** Sürüklenen işletmenin ekran dışına konumlanmış özel sürükleme görüntüsü. */
+const dragImageEl = ref<HTMLDivElement | null>(null)
+/** Az önce yerleşen bloğu/kartı kısa süreliğine vurgulamak için. */
+const settledBlock = ref<BlockHighlight | null>(null)
+const recentlyAssignedCompanyId = ref<number | null>(null)
+let settleTimeoutId: ReturnType<typeof setTimeout> | null = null
 
 // Zorlama diyaloğu durumu
 const isForceDialogOpen = ref(false)
@@ -284,6 +354,31 @@ const pendingViolations = ref<string[]>([])
 const selectedTeacher = computed(
   () => board.value?.teachers.find((t) => t.teacherId === selectedTeacherId.value) ?? null,
 )
+
+const draggedCompany = computed<BoardCompany | null>(
+  () => board.value?.companies.find((c) => c.companyId === draggedCompanyId.value) ?? null,
+)
+
+/** Sürüklenen/seçilen işletmenin bloğu kaç hücre kaplar. Fahri ziyaret tam 1 hücre. */
+function companySpan(company: BoardCompany): number {
+  return Math.max(1, company.awardedHours)
+}
+
+/** `startHour`'dan başlayıp `span` hücre süren bloğun saatleri. */
+function blockHours(startHour: number, span: number): number[] {
+  return Array.from({ length: span }, (_, index) => startHour + index)
+}
+
+/** İmlecin üstündeki hücreden başlayacak bloğun önizlemesi ve geçerliliği. */
+const previewBlock = computed<{ day: number; hours: number[]; isValid: boolean } | null>(() => {
+  const cell = hoverCell.value
+  const company = draggedCompany.value
+  if (!cell || !company) return null
+
+  const hours = blockHours(cell.hour, companySpan(company))
+  const violations = collectViolations(company, cell.day, cell.hour)
+  return { day: cell.day, hours, isValid: violations.length === 0 }
+})
 
 /** Izgara satırları ayarlardaki gün aralığından gelir. */
 const gridHours = computed(() => {
@@ -306,34 +401,105 @@ const filteredUnassigned = computed(() => {
   )
 })
 
+/** Atanmış işletmeler; solda kaybolmadan bir iz bırakması için ayrı listelenir. */
+const assignedCompanies = computed(
+  () => board.value?.companies.filter((c) => c.assignedTeacherId !== null) ?? [],
+)
+
 function showError(error: unknown): void {
   const detail = error instanceof Error ? error.message : labels.common.error
   toast.add({ severity: 'error', summary: labels.common.error, detail, life: 8000 })
+}
+
+/** "İşletme adı — 6 saat" ya da fahri ziyarette "İşletme adı — Fahri" biçimi. */
+function blockHoursLabel(company: BoardCompany): string {
+  return company.isHonorary
+    ? labels.hours.honorary
+    : `${company.awardedHours} ${labels.allocation.hoursSuffix}`
+}
+
+function assignedTeacherName(company: BoardCompany): string {
+  return (
+    board.value?.teachers.find((t) => t.teacherId === company.assignedTeacherId)?.teacherName ?? ''
+  )
+}
+
+/** "Salı 10–12" gibi kısa bir yerleşim özeti; tek saatlik blokta aralık gösterilmez. */
+function assignedSlotLabel(company: BoardCompany): string {
+  if (company.visitDay === null || company.visitHour === null) return ''
+  const dayName = labels.allocation.days[company.visitDay]
+  const endHour = company.visitEndHour ?? company.visitHour
+  return endHour > company.visitHour
+    ? `${dayName} ${company.visitHour}–${endHour}`
+    : `${dayName} ${company.visitHour}`
 }
 
 function isFree(day: number, hour: number): boolean {
   return selectedTeacher.value?.freeSlots.includes(`${day}-${hour}`) ?? false
 }
 
+/** Hücreyi kaplayan işletme; blokun başlangıcı değil, HER hücresi için çalışır. */
 function cellCompany(day: number, hour: number): BoardCompany | null {
-  return (
-    board.value?.companies.find(
-      (c) =>
-        c.assignedTeacherId === selectedTeacherId.value &&
-        c.visitDay === day &&
-        c.visitHour === hour,
-    ) ?? null
-  )
+  const companyId = selectedTeacher.value?.occupiedBy[`${day}-${hour}`]
+  if (companyId === undefined) return null
+  return board.value?.companies.find((c) => c.companyId === companyId) ?? null
+}
+
+function isBlockStart(day: number, hour: number): boolean {
+  const company = cellCompany(day, hour)
+  return company !== null && company.visitHour === hour
+}
+
+function isBlockEnd(day: number, hour: number): boolean {
+  const company = cellCompany(day, hour)
+  return company !== null && company.visitEndHour === hour
+}
+
+/** İmleç bu hücredeyken önizlenen blok bu hücreyi de kaplıyor mu. */
+function isInPreview(day: number, hour: number): boolean {
+  const preview = previewBlock.value
+  return preview !== null && preview.day === day && preview.hours.includes(hour)
 }
 
 function cellClass(day: number, hour: number): Record<string, boolean> {
   const occupied = cellCompany(day, hour) !== null
+  const inPreview = !occupied && isInPreview(day, hour)
+  const previewValid = inPreview && (previewBlock.value?.isValid ?? false)
   return {
     'grid-cell--busy': occupied,
-    'grid-cell--free': !occupied && isFree(day, hour),
-    'grid-cell--blocked': !occupied && !isFree(day, hour),
-    'grid-cell--target': draggedCompanyId.value !== null && !occupied && isFree(day, hour),
+    'grid-cell--block-start': occupied && isBlockStart(day, hour),
+    'grid-cell--block-end': occupied && isBlockEnd(day, hour),
+    'grid-cell--free': !occupied && !inPreview && isFree(day, hour),
+    'grid-cell--blocked': !occupied && !inPreview && !isFree(day, hour),
+    'grid-cell--preview-valid': previewValid,
+    'grid-cell--preview-invalid': inPreview && !previewValid,
+    'grid-cell--settle': isSettled(day, hour),
   }
+}
+
+function isSettled(day: number, hour: number): boolean {
+  const settle = settledBlock.value
+  return settle !== null && settle.day === day && settle.hours.includes(hour)
+}
+
+/** Ekran dışına konumlanmış, sürükleme sırasında gösterilen kompakt görüntü. */
+function buildDragImage(company: BoardCompany): HTMLDivElement {
+  const el = document.createElement('div')
+  el.textContent = `${company.companyName} — ${blockHoursLabel(company)}`
+  Object.assign(el.style, {
+    position: 'fixed',
+    top: '-1000px',
+    left: '-1000px',
+    padding: '0.375rem 0.625rem',
+    borderRadius: '0.375rem',
+    background: 'var(--p-primary-color)',
+    color: 'var(--p-primary-contrast-color)',
+    fontSize: '0.8125rem',
+    fontWeight: '600',
+    whiteSpace: 'nowrap',
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
+  })
+  return el
 }
 
 /**
@@ -343,26 +509,52 @@ function cellClass(day: number, hour: number): Record<string, boolean> {
  */
 function onDragStart(event: DragEvent, companyId: number): void {
   draggedCompanyId.value = companyId
-  if (event.dataTransfer) {
-    event.dataTransfer.setData('text/plain', String(companyId))
-    event.dataTransfer.effectAllowed = 'move'
-  }
+  if (!event.dataTransfer) return
+
+  event.dataTransfer.setData('text/plain', String(companyId))
+  event.dataTransfer.effectAllowed = 'move'
+
+  const company = board.value?.companies.find((c) => c.companyId === companyId)
+  if (!company) return
+  const dragImage = buildDragImage(company)
+  document.body.appendChild(dragImage)
+  event.dataTransfer.setDragImage(dragImage, 12, 12)
+  dragImageEl.value = dragImage
 }
 
 function onDragEnd(): void {
   draggedCompanyId.value = null
+  hoverCell.value = null
+  dragImageEl.value?.remove()
+  dragImageEl.value = null
 }
 
-/** Hedef hücrede taşıma imlecini gösterir; önlenmezse bırakma gerçekleşmez. */
-function onDragOver(event: DragEvent): void {
+/** Hedef hücrede taşıma imlecini gösterir ve blok önizlemesini günceller. */
+function onCellDragOver(event: DragEvent, day: number, hour: number): void {
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'move'
+  }
+  hoverCell.value = { day, hour }
+}
+
+/** Klavye ile seçim sırasında fare hücrenin üstüne gelince önizleme göster. */
+function onCellMouseEnter(day: number, hour: number): void {
+  if (draggedCompanyId.value !== null) {
+    hoverCell.value = { day, hour }
+  }
+}
+
+function onCellMouseLeave(day: number, hour: number): void {
+  if (hoverCell.value?.day === day && hoverCell.value?.hour === hour) {
+    hoverCell.value = null
   }
 }
 
 /** Klavye ile seçim: Enter kartı seçer, sonra hücrede tıklama bırakır. */
 function toggleKeyboardSelection(companyId: number): void {
-  draggedCompanyId.value = draggedCompanyId.value === companyId ? null : companyId
+  const isDeselecting = draggedCompanyId.value === companyId
+  draggedCompanyId.value = isDeselecting ? null : companyId
+  if (isDeselecting) hoverCell.value = null
 }
 
 function onCellClick(day: number, hour: number): void {
@@ -375,27 +567,47 @@ function onDrop(event: DragEvent, day: number, hour: number): void {
   // asıl kaynak sürükleme yüküdür, ref yalnızca yedek.
   const payload = Number(event.dataTransfer?.getData('text/plain'))
   const companyId = Number.isFinite(payload) && payload > 0 ? payload : draggedCompanyId.value
+  hoverCell.value = null
   if (companyId === null) return
   void place(companyId, day, hour)
 }
 
-/** Kural ihlallerini toplar. Boş dizi dönerse yerleşim temizdir. */
+/** Kural ihlallerini toplar. Boş dizi dönerse yerleşim (bloğun TAMAMI için) temizdir. */
 function collectViolations(company: BoardCompany, day: number, hour: number): string[] {
   const problems: string[] = []
+  const span = companySpan(company)
+  const hours = blockHours(hour, span)
+  const dayEndHour = board.value?.dayEndHour ?? 17
+  const teacher = selectedTeacher.value
 
-  if (!isFree(day, hour)) {
-    problems.push('Seçilen saat öğretmenin boş saatleri arasında değil.')
+  const allHoursFree = hours.every((h) => isFree(day, h))
+  if (!allHoursFree) {
+    problems.push('Seçilen bloktaki saatlerin tamamı öğretmenin boş saatleri arasında değil.')
   }
   if (!company.workplaceDays.includes(day)) {
     problems.push(`Öğrenciler ${labels.allocation.days[day]} günü işletmede değil.`)
   }
+  if (hour + span > dayEndHour) {
+    problems.push(
+      `Blok ${span} saat sürüyor ve ${labels.allocation.days[day]} günü ${dayEndHour}.saati aşıyor.`,
+    )
+  }
 
-  const teacher = selectedTeacher.value
   if (teacher) {
-    const dayHours = teacher.hoursPerDay[String(day)] ?? 0
-    if (dayHours + company.awardedHours > 8) {
+    const overlapCompanyId = hours
+      .map((h) => teacher.occupiedBy[`${day}-${h}`])
+      .find((id) => id !== undefined)
+    if (overlapCompanyId !== undefined) {
+      const overlapCompany = board.value?.companies.find((c) => c.companyId === overlapCompanyId)
       problems.push(
-        `${labels.allocation.days[day]} günü toplam ${dayHours + company.awardedHours} saat olur; günlük sınır 8 (OÖKY MADDE 88).`,
+        `Blok, ${overlapCompany?.companyName ?? 'başka bir atama'} işletmesinin bloğuyla çakışıyor.`,
+      )
+    }
+
+    const dayHours = teacher.hoursPerDay[String(day)] ?? 0
+    if (dayHours + company.awardedHours > DAILY_HOUR_LIMIT) {
+      problems.push(
+        `${labels.allocation.days[day]} günü toplam ${dayHours + company.awardedHours} saat olur; günlük sınır ${DAILY_HOUR_LIMIT} (OÖKY MADDE 88).`,
       )
     }
     if (teacher.assignedHours + company.awardedHours > teacher.capacity) {
@@ -406,6 +618,26 @@ function collectViolations(company: BoardCompany, day: number, hour: number): st
   }
 
   return problems
+}
+
+/** Yeni yerleşen bloğu ızgarada ve atanmış listesinde kısaca vurgular. */
+function flashAssignment(companyId: number): void {
+  const company = board.value?.companies.find((c) => c.companyId === companyId)
+  if (!company || company.visitDay === null || company.visitHour === null) return
+
+  const span =
+    company.visitEndHour !== null
+      ? company.visitEndHour - company.visitHour + 1
+      : companySpan(company)
+  settledBlock.value = { day: company.visitDay, hours: blockHours(company.visitHour, span) }
+  recentlyAssignedCompanyId.value = companyId
+
+  if (settleTimeoutId !== null) clearTimeout(settleTimeoutId)
+  settleTimeoutId = setTimeout(() => {
+    settledBlock.value = null
+    recentlyAssignedCompanyId.value = null
+    settleTimeoutId = null
+  }, SETTLE_ANIMATION_MS)
 }
 
 async function place(companyId: number, day: number, hour: number): Promise<void> {
@@ -442,7 +674,9 @@ async function submit(input: NewAssignment): Promise<void> {
   try {
     board.value = await assignmentsApi.assign(input)
     draggedCompanyId.value = null
+    hoverCell.value = null
     toast.add({ severity: 'success', summary: labels.allocation.assigned, life: 2500 })
+    flashAssignment(input.companyId)
   } catch (error: unknown) {
     showError(error)
   }
@@ -514,6 +748,11 @@ async function load(): Promise<void> {
 watch(activeTerm, load)
 
 onMounted(load)
+
+onUnmounted(() => {
+  if (settleTimeoutId !== null) clearTimeout(settleTimeoutId)
+  dragImageEl.value?.remove()
+})
 </script>
 
 <style scoped>
@@ -545,10 +784,19 @@ onMounted(load)
   /* WebKit metin seçimini sürükleme sanır; elemanın kendisi sürüklenmeli. */
   -webkit-user-drag: element;
   user-select: none;
+  transition:
+    transform 150ms ease,
+    opacity 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
 }
 .company-card:active { cursor: grabbing; }
 .company-card:hover { background: var(--p-content-hover-background); }
-.company-card--dragging { outline: 2px solid var(--p-primary-color); }
+.company-card--dragging {
+  outline: 2px solid var(--p-primary-color);
+  opacity: 0.5;
+  transform: scale(0.97);
+}
 .company-name { font-weight: 600; font-size: 0.9375rem; }
 .company-meta {
   display: flex;
@@ -560,6 +808,28 @@ onMounted(load)
 .company-branches,
 .company-days { font-size: 0.75rem; color: var(--p-text-muted-color); margin-top: 0.25rem; }
 .company-days--missing { color: var(--p-orange-500); }
+
+/* Atanmış işletmeler paneli: kart solda kaybolmasın, iz bıraksın */
+.assigned-panel { margin-top: 1rem; }
+.assigned-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border: 1px solid var(--p-content-border-color);
+  border-radius: var(--p-content-border-radius);
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: var(--p-content-background);
+  transition:
+    background-color 400ms ease,
+    box-shadow 400ms ease;
+}
+.assigned-card--settle {
+  background: var(--p-highlight-background);
+  box-shadow: 0 0 0 2px var(--p-primary-color);
+}
+.assigned-card-info { min-width: 0; }
 
 .teacher-select { width: 100%; margin-bottom: 0.75rem; }
 .teacher-stats {
@@ -581,24 +851,83 @@ onMounted(load)
 }
 .grid-hour-head,
 .grid-hour { width: 3.5rem; color: var(--p-text-muted-color); font-weight: 500; }
-.grid-cell { height: 3rem; min-width: 8rem; }
+.grid-cell {
+  position: relative;
+  height: 3rem;
+  min-width: 8rem;
+  transition:
+    background-color 150ms ease,
+    outline-color 150ms ease,
+    box-shadow 150ms ease;
+}
 .grid-cell--free { cursor: pointer; }
 .grid-cell--blocked {
   background: var(--p-content-hover-background);
   color: var(--p-text-muted-color);
 }
-.grid-cell--busy {
+/* Blok hücreleri artık `cell-fill` katmanıyla boyanır; td'nin kendi dolgusu sıfırlanır. */
+.grid-cell--busy { padding: 0; }
+/* Aynı bloğun ardışık hücreleri arasındaki çizgiyi görünmez kılar, bitişik görünsün diye.
+   `border-collapse: collapse` altında hangi hücrenin kenarlığı kazanırsa kazansın aynı
+   renk görünsün diye HEM üst HEM alt kenarlık boyanır. */
+.grid-cell--busy:not(.grid-cell--block-start) { border-top-color: var(--p-highlight-background); }
+.grid-cell--busy:not(.grid-cell--block-end) { border-bottom-color: var(--p-highlight-background); }
+
+.grid-cell--preview-valid {
+  background: color-mix(in srgb, var(--p-green-500) 22%, transparent);
+  outline: 2px dashed var(--p-green-500);
+  outline-offset: -2px;
+}
+.grid-cell--preview-invalid {
+  background: color-mix(in srgb, var(--p-red-500) 22%, transparent);
+  outline: 2px dashed var(--p-red-500);
+  outline-offset: -2px;
+}
+
+.grid-cell--settle { animation: cell-settle var(--settle-duration, 650ms) ease; }
+@keyframes cell-settle {
+  0% { box-shadow: inset 0 0 0 3px var(--p-primary-color); }
+  100% { box-shadow: inset 0 0 0 0 transparent; }
+}
+
+.cell-fill {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 0 0.5rem;
   background: var(--p-highlight-background);
   color: var(--p-highlight-color);
   font-weight: 500;
+  overflow: hidden;
 }
-.grid-cell--target { outline: 2px dashed var(--p-primary-color); }
+.cell-fill--start { border-top-left-radius: 0.5rem; border-top-right-radius: 0.5rem; }
+.cell-fill--end { border-bottom-left-radius: 0.5rem; border-bottom-right-radius: 0.5rem; }
+
 .cell-free { color: var(--p-text-muted-color); }
 .cell-unavailable { color: var(--p-text-muted-color); opacity: 0.6; }
-.cell-name { margin-right: 0.25rem; }
+.cell-name {
+  margin-right: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .over { color: var(--p-red-500); font-weight: 600; }
 .muted { color: var(--p-text-muted-color); font-size: 0.8125rem; }
 .force-reasons { margin: 0.5rem 0 1rem; padding-left: 1.25rem; color: var(--p-orange-500); }
 .field { display: flex; flex-direction: column; gap: 0.375rem; }
+
+/* Hareket duyarlılığı azaltılmış kullanıcılar için tüm geçiş/animasyonları kapat. */
+@media (prefers-reduced-motion: reduce) {
+  .company-card,
+  .assigned-card,
+  .grid-cell,
+  .grid-cell--settle {
+    transition: none;
+    animation: none;
+  }
+}
 </style>

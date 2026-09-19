@@ -1,4 +1,4 @@
-use crate::domain::scheduling::{eligible_slots, pick_visit_slot, Slot};
+use crate::domain::scheduling::{eligible_slots, pick_visit_block, Block, Slot};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -112,7 +112,15 @@ struct TeacherState<'a> {
 ///    işletmelerinin coğrafi merkezine en yakın öğretmen
 ///
 /// Yerleştirilemeyen işletmeler sessizce düşmez, gerekçesiyle raporlanır.
-pub fn propose(companies: &[CompanyInput], teachers: &[TeacherInput]) -> AllocationProposal {
+///
+/// `day_end_hour`: ızgaranın bitişi, HARİÇ (ayarlardan). Bir işletmenin
+/// takdir edilen saati kadar ARDIŞIK boş hücreye ihtiyacı vardır; artık tek
+/// bir boş hücre yeterli değildir.
+pub fn propose(
+    companies: &[CompanyInput],
+    teachers: &[TeacherInput],
+    day_end_hour: i64,
+) -> AllocationProposal {
     let mut proposal = AllocationProposal::default();
 
     if teachers.is_empty() {
@@ -162,7 +170,7 @@ pub fn propose(companies: &[CompanyInput], teachers: &[TeacherInput]) -> Allocat
         };
 
         // Aday seçimi: önce tam dal eşleşmesi, sonra yakın alan.
-        let mut best: Option<(usize, Slot, bool, f64)> = None;
+        let mut best: Option<(usize, Block, bool, f64)> = None;
 
         for exact_only in [true, false] {
             for (index, state) in states.iter().enumerate() {
@@ -184,11 +192,12 @@ pub fn propose(companies: &[CompanyInput], teachers: &[TeacherInput]) -> Allocat
                 }
 
                 let eligible = eligible_slots(&state.input.free_slots, &company.workplace_days);
-                let Some(slot) = pick_visit_slot(
+                let Some(block) = pick_visit_block(
                     &eligible,
                     &state.used_slots,
                     &state.hours_by_day,
                     company.awarded_hours,
+                    day_end_hour,
                 ) else {
                     continue;
                 };
@@ -205,7 +214,7 @@ pub fn propose(companies: &[CompanyInput], teachers: &[TeacherInput]) -> Allocat
                     Some((_, _, _, best_proximity)) => proximity < *best_proximity,
                 };
                 if is_better {
-                    best = Some((index, slot, matches_branch, proximity));
+                    best = Some((index, block, matches_branch, proximity));
                 }
             }
 
@@ -215,11 +224,12 @@ pub fn propose(companies: &[CompanyInput], teachers: &[TeacherInput]) -> Allocat
         }
 
         match best {
-            Some((index, slot, exact_branch_match, _)) => {
+            Some((index, block, exact_branch_match, _)) => {
                 let state = &mut states[index];
                 state.remaining_capacity -= company.awarded_hours;
-                state.used_slots.insert(slot);
-                *state.hours_by_day.entry(slot.day_of_week).or_insert(0) += company.awarded_hours;
+                state.used_slots.extend(block.cells());
+                *state.hours_by_day.entry(block.day_of_week).or_insert(0) +=
+                    company.awarded_hours;
                 if let Some(point) = company_point {
                     state.assigned_points.push(point);
                 }
@@ -230,8 +240,8 @@ pub fn propose(companies: &[CompanyInput], teachers: &[TeacherInput]) -> Allocat
                     teacher_id: state.input.id,
                     teacher_name: state.input.name.clone(),
                     awarded_hours: company.awarded_hours,
-                    visit_day: slot.day_of_week,
-                    visit_hour: slot.hour,
+                    visit_day: block.day_of_week,
+                    visit_hour: block.start_hour,
                     exact_branch_match,
                 });
             }
@@ -321,7 +331,7 @@ mod tests {
 
     #[test]
     fn assigns_a_company_to_one_cell() {
-        let proposal = propose(&[company(1, 4)], &[teacher(10, 20)]);
+        let proposal = propose(&[company(1, 4)], &[teacher(10, 20)], 17);
 
         assert_eq!(proposal.assignments.len(), 1);
         assert!(proposal.unassigned.is_empty());
@@ -336,7 +346,7 @@ mod tests {
     /// Motor takdir edilen saati DEĞİŞTİRMEZ; o karar takdir ekranında verilir.
     #[test]
     fn proposal_preserves_the_awarded_hours() {
-        let proposal = propose(&[company(1, 7)], &[teacher(10, 20)]);
+        let proposal = propose(&[company(1, 7)], &[teacher(10, 20)], 17);
         assert_eq!(proposal.assignments[0].awarded_hours, 7);
     }
 
@@ -349,7 +359,7 @@ mod tests {
         first.workplace_days = BTreeSet::from([1]);
         second.workplace_days = BTreeSet::from([1]);
 
-        let proposal = propose(&[first, second], &[teacher(10, 20)]);
+        let proposal = propose(&[first, second], &[teacher(10, 20)], 17);
 
         assert_eq!(proposal.assignments.len(), 1, "biri yerleşebilmeli");
         assert_eq!(proposal.unassigned.len(), 1);
@@ -359,7 +369,7 @@ mod tests {
     /// Farklı günlere dağılabiliyorsa ikisi de yerleşir.
     #[test]
     fn heavy_companies_spread_across_days() {
-        let proposal = propose(&[company(1, 5), company(2, 5)], &[teacher(10, 20)]);
+        let proposal = propose(&[company(1, 5), company(2, 5)], &[teacher(10, 20)], 17);
 
         assert_eq!(proposal.assignments.len(), 2);
         let days: BTreeSet<i64> = proposal.assignments.iter().map(|a| a.visit_day).collect();
@@ -369,7 +379,7 @@ mod tests {
     /// Kapasite tükenince kalan işletmeler gerekçesiyle raporlanır.
     #[test]
     fn reports_companies_that_exceed_remaining_capacity() {
-        let proposal = propose(&[company(1, 8), company(2, 8)], &[teacher(10, 10)]);
+        let proposal = propose(&[company(1, 8), company(2, 8)], &[teacher(10, 10)], 17);
 
         assert_eq!(proposal.assignments.len(), 1);
         assert_eq!(proposal.unassigned.len(), 1);
@@ -382,7 +392,7 @@ mod tests {
         let mut busy = teacher(10, 20);
         busy.already_assigned_hours = 18;
 
-        let proposal = propose(&[company(1, 4)], &[busy]);
+        let proposal = propose(&[company(1, 4)], &[busy], 17);
 
         assert!(proposal.assignments.is_empty());
         assert!(proposal.unassigned[0].reason.contains("kapasite"));
@@ -395,7 +405,7 @@ mod tests {
         teacher_with_one_slot.free_slots = slots(&[(1, 9)]);
         teacher_with_one_slot.used_slots = slots(&[(1, 9)]);
 
-        let proposal = propose(&[company(1, 2)], &[teacher_with_one_slot]);
+        let proposal = propose(&[company(1, 2)], &[teacher_with_one_slot], 17);
 
         assert!(proposal.assignments.is_empty());
         assert_eq!(proposal.unassigned.len(), 1);
@@ -407,7 +417,7 @@ mod tests {
         let mut target = company(1, 4);
         target.workplace_days = BTreeSet::new();
 
-        let proposal = propose(&[target], &[teacher(10, 20)]);
+        let proposal = propose(&[target], &[teacher(10, 20)], 17);
 
         assert_eq!(proposal.unassigned.len(), 1);
         assert!(proposal.unassigned[0].reason.contains("işletme günü"));
@@ -415,7 +425,7 @@ mod tests {
 
     #[test]
     fn all_companies_are_reported_when_there_are_no_teachers() {
-        let proposal = propose(&[company(1, 4), company(2, 4)], &[]);
+        let proposal = propose(&[company(1, 4), company(2, 4)], &[], 17);
 
         assert!(proposal.assignments.is_empty());
         assert_eq!(proposal.unassigned.len(), 2);
@@ -429,7 +439,7 @@ mod tests {
         other_branch.branches = vec!["Endüstriyel Bakım Onarım".into()];
         let exact = teacher(11, 20);
 
-        let proposal = propose(&[company(1, 4)], &[other_branch, exact]);
+        let proposal = propose(&[company(1, 4)], &[other_branch, exact], 17);
 
         assert_eq!(proposal.assignments[0].teacher_id, 11);
         assert!(proposal.assignments[0].exact_branch_match);
@@ -441,7 +451,7 @@ mod tests {
         let mut only_other = teacher(10, 20);
         only_other.branches = vec!["Endüstriyel Bakım Onarım".into()];
 
-        let proposal = propose(&[company(1, 4)], &[only_other]);
+        let proposal = propose(&[company(1, 4)], &[only_other], 17);
 
         assert_eq!(proposal.assignments.len(), 1);
         assert!(!proposal.assignments[0].exact_branch_match);
@@ -456,7 +466,7 @@ mod tests {
         let mut full = teacher(10, 20);
         full.already_assigned_hours = 20;
 
-        let proposal = propose(&[honorary], &[full]);
+        let proposal = propose(&[honorary], &[full], 17);
 
         assert_eq!(proposal.assignments.len(), 1);
         assert_eq!(proposal.assignments[0].awarded_hours, 0);
@@ -468,7 +478,7 @@ mod tests {
         let mut busy = teacher(10, 20);
         busy.free_slots = BTreeSet::new();
 
-        let proposal = propose(&[company(1, 4)], &[busy]);
+        let proposal = propose(&[company(1, 4)], &[busy], 17);
 
         assert!(proposal.assignments.is_empty());
         assert!(proposal.unassigned[0].reason.contains("gün/saat"));
@@ -476,14 +486,14 @@ mod tests {
 
     #[test]
     fn hours_by_teacher_sums_per_teacher() {
-        let proposal = propose(&[company(1, 4), company(2, 3)], &[teacher(10, 20)]);
+        let proposal = propose(&[company(1, 4), company(2, 3)], &[teacher(10, 20)], 17);
         assert_eq!(hours_by_teacher(&proposal)[&10], 7);
     }
 
     /// Ağır işletme önce yerleşir; kapasite yalnızca birine yetiyorsa o kazanır.
     #[test]
     fn heavier_company_is_placed_first() {
-        let proposal = propose(&[company(1, 2), company(2, 8)], &[teacher(10, 8)]);
+        let proposal = propose(&[company(1, 2), company(2, 8)], &[teacher(10, 8)], 17);
 
         assert_eq!(proposal.assignments.len(), 1);
         assert_eq!(proposal.assignments[0].company_id, 2);

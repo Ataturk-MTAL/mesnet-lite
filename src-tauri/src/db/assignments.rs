@@ -1,3 +1,4 @@
+use crate::domain::scheduling::Block;
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -82,8 +83,68 @@ pub async fn get_for_company(
         .await?)
 }
 
-/// İşletmeyi bir öğretmenin hücresine yerleştirir.
-/// Aynı işletme zaten atanmışsa yerleşim güncellenir (taşıma).
+/// Girdinin taşıdığı bloğun kapsamı için işletmenin dönemlik takdirini okur.
+/// Takdir henüz girilmemişse fahri ziyaret gibi davranılır (1 hücre).
+async fn awarded_hours_for<'e, E>(executor: E, company_id: i64, term: &str) -> AppResult<i64>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let awarded: Option<i64> = sqlx::query_scalar(
+        "SELECT awarded_hours FROM company_term_hours WHERE company_id = ?1 AND term = ?2",
+    )
+    .bind(company_id)
+    .bind(term)
+    .fetch_optional(executor)
+    .await?;
+    Ok(awarded.unwrap_or(0))
+}
+
+/// Aynı öğretmenin bu dönemdeki DİĞER atamalarının bloklarıyla çakışan ilk
+/// işletmenin adını döner; çakışma yoksa None.
+///
+/// Yalnızca başlangıç hücresini koruyan `UNIQUE(teacher_id, term, visit_day,
+/// visit_hour)` kısıtı, ardışık hücrelerden oluşan bir bloğun ORTASINA denk
+/// gelen çakışmayı yakalayamaz; bu yüzden denetim burada, ADET olarak
+/// yapılır.
+async fn find_overlapping_company<'e, E>(
+    executor: E,
+    term: &str,
+    teacher_id: i64,
+    exclude_company_id: i64,
+    new_block: Block,
+) -> AppResult<Option<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let others: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT c.name, a.visit_day, a.visit_hour, COALESCE(h.awarded_hours, 0)
+         FROM assignments a
+         JOIN companies c ON c.id = a.company_id
+         LEFT JOIN company_term_hours h
+                ON h.company_id = a.company_id AND h.term = a.term
+         WHERE a.teacher_id = ?1 AND a.term = ?2 AND a.company_id <> ?3",
+    )
+    .bind(teacher_id)
+    .bind(term)
+    .bind(exclude_company_id)
+    .fetch_all(executor)
+    .await?;
+
+    for (company_name, day, hour, awarded_hours) in others {
+        let existing_block = Block::from_start(day, hour, awarded_hours);
+        if new_block.overlaps(&existing_block) {
+            return Ok(Some(company_name));
+        }
+    }
+    Ok(None)
+}
+
+/// İşletmeyi bir öğretmenin hücresine yerleştirir; işletmenin takdir edilen
+/// saati kadar ARDIŞIK hücreden oluşan bir blok kaplar (fahri ziyaret tek
+/// hücre kaplar). Aynı işletme zaten atanmışsa yerleşim güncellenir (taşıma).
+///
+/// Çakışma denetimi ile INSERT/UPDATE AYNI transaction içinde çalışır; aksi
+/// halde iki eşzamanlı istek arasında yarış koşulu oluşur.
 pub async fn assign(
     pool: &SqlitePool,
     term: &str,
@@ -91,25 +152,23 @@ pub async fn assign(
 ) -> AppResult<Assignment> {
     validate(input)?;
 
-    // Hedef hücre başka bir işletme tarafından doluysa açık hata verilir;
-    // UNIQUE kısıtının teknik mesajı kullanıcıya bir şey anlatmaz.
-    let occupied: Option<i64> = sqlx::query_scalar(
-        "SELECT company_id FROM assignments
-         WHERE teacher_id = ?1 AND term = ?2 AND visit_day = ?3 AND visit_hour = ?4
-           AND company_id <> ?5",
-    )
-    .bind(input.teacher_id)
-    .bind(term)
-    .bind(input.visit_day)
-    .bind(input.visit_hour)
-    .bind(input.company_id)
-    .fetch_optional(pool)
-    .await?;
+    let mut tx = pool.begin().await?;
 
-    if occupied.is_some() {
-        return Err(AppError::Validation(
-            "Bu gün ve saatte öğretmenin başka bir işletmesi var".into(),
-        ));
+    let new_awarded = awarded_hours_for(&mut *tx, input.company_id, term).await?;
+    let new_block = Block::from_start(input.visit_day, input.visit_hour, new_awarded);
+
+    if let Some(conflicting_company) = find_overlapping_company(
+        &mut *tx,
+        term,
+        input.teacher_id,
+        input.company_id,
+        new_block,
+    )
+    .await?
+    {
+        return Err(AppError::Validation(format!(
+            "Bu gün ve saatlerde öğretmenin başka bir işletmesi var: {conflicting_company}"
+        )));
     }
 
     let now = now_iso();
@@ -134,12 +193,21 @@ pub async fn assign(
     .bind(i64::from(input.is_forced))
     .bind(&input.force_reason)
     .bind(&now)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
-    get_for_company(pool, input.company_id, term)
-        .await?
-        .ok_or_else(|| AppError::Database("Atama yazıldı ama okunamadı".into()))
+    let saved = sqlx::query_as::<_, Assignment>(&format!(
+        "SELECT {SELECT_COLUMNS} FROM assignments WHERE company_id = ?1 AND term = ?2"
+    ))
+    .bind(input.company_id)
+    .bind(term)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::Database("Atama yazıldı ama okunamadı".into()))?;
+
+    tx.commit().await?;
+
+    Ok(saved)
 }
 
 /// İşletmenin atamasını kaldırır. Atama yoksa sessizce geçer.
@@ -388,6 +456,102 @@ mod tests {
         }
     }
 
+    /// Bloklar farklı hücrelerden başlasa bile aralıkları kesişiyorsa çakışma
+    /// yakalanmalı; yalnızca başlangıç hücresini koruyan UNIQUE kısıtı bunu
+    /// tek başına yakalayamaz.
+    #[tokio::test]
+    async fn overlapping_blocks_starting_at_different_cells_are_rejected() {
+        let (_dir, pool) = test_pool().await;
+        let teacher_id = a_teacher(&pool, "Yilmaz").await;
+        let first = a_company(&pool, "Bir").await;
+        let second = a_company(&pool, "Iki").await;
+
+        // Bir: 1. gün, 3. saatten başlayıp 4 saat sürüyor -> 3,4,5,6. saatleri kaplar.
+        set_hours(&pool, first, 4).await;
+        assign(&pool, TERM, &placement(teacher_id, first, 1, 3))
+            .await
+            .unwrap();
+
+        // Iki: aynı öğretmen, 5. saatten başlıyor -> Bir'in bloğunun ortasına düşüyor.
+        set_hours(&pool, second, 2).await;
+        let err = assign(&pool, TERM, &placement(teacher_id, second, 1, 5))
+            .await
+            .unwrap_err();
+
+        match err {
+            AppError::Validation(message) => {
+                assert!(message.contains("başka bir işletmesi"));
+                assert!(message.contains("Bir"));
+            }
+            other => panic!("beklenmeyen hata: {other:?}"),
+        }
+        assert_eq!(list(&pool, TERM).await.unwrap().len(), 1);
+    }
+
+    /// Bloklar hücre paylaşmıyorsa (bitişik bile olsa) çakışma sayılmaz.
+    #[tokio::test]
+    async fn adjacent_non_overlapping_blocks_are_allowed() {
+        let (_dir, pool) = test_pool().await;
+        let teacher_id = a_teacher(&pool, "Yilmaz").await;
+        let first = a_company(&pool, "Bir").await;
+        let second = a_company(&pool, "Iki").await;
+
+        // Bir: 1-4. saatler.
+        set_hours(&pool, first, 4).await;
+        assign(&pool, TERM, &placement(teacher_id, first, 1, 1))
+            .await
+            .unwrap();
+
+        // Iki: 5-6. saatler, Bir'in bloğuyla hücre paylaşmıyor.
+        set_hours(&pool, second, 2).await;
+        assign(&pool, TERM, &placement(teacher_id, second, 1, 5))
+            .await
+            .unwrap();
+
+        assert_eq!(list(&pool, TERM).await.unwrap().len(), 2);
+    }
+
+    /// Fahri ziyaret (takdir 0) tek hücre kaplar; komşu hücreye başka bir
+    /// işletme sığabilmeli.
+    #[tokio::test]
+    async fn honorary_visit_only_blocks_its_own_single_cell() {
+        let (_dir, pool) = test_pool().await;
+        let teacher_id = a_teacher(&pool, "Yilmaz").await;
+        let honorary = a_company(&pool, "Fahri").await;
+        let other = a_company(&pool, "Diğer").await;
+
+        set_hours(&pool, honorary, 0).await;
+        assign(&pool, TERM, &placement(teacher_id, honorary, 1, 1))
+            .await
+            .unwrap();
+
+        set_hours(&pool, other, 3).await;
+        assign(&pool, TERM, &placement(teacher_id, other, 1, 2))
+            .await
+            .unwrap();
+
+        assert_eq!(list(&pool, TERM).await.unwrap().len(), 2);
+    }
+
+    /// Takdiri henüz girilmemiş işletme fahri gibi (tek hücre) davranır.
+    #[tokio::test]
+    async fn assignment_without_hours_set_yet_behaves_like_a_single_cell() {
+        let (_dir, pool) = test_pool().await;
+        let teacher_id = a_teacher(&pool, "Yilmaz").await;
+        let first = a_company(&pool, "Bir").await;
+        let second = a_company(&pool, "Iki").await;
+
+        // `first` için saat takdiri hiç girilmedi.
+        assign(&pool, TERM, &placement(teacher_id, first, 1, 1))
+            .await
+            .unwrap();
+        assign(&pool, TERM, &placement(teacher_id, second, 1, 2))
+            .await
+            .unwrap();
+
+        assert_eq!(list(&pool, TERM).await.unwrap().len(), 2);
+    }
+
     /// Farklı öğretmenler aynı gün ve saatte çalışabilir.
     #[tokio::test]
     async fn same_cell_is_allowed_for_different_teachers() {
@@ -454,11 +618,11 @@ mod tests {
 
         set_hours(&pool, first, 6).await;
         set_hours(&pool, second, 4).await;
-        // İkisi de aynı gün, farklı ders saati
+        // İkisi de aynı gün; Bir'in bloğu 1-6, Iki'nin bloğu 7-10 — çakışmıyor.
         assign(&pool, TERM, &placement(teacher_id, first, 3, 1))
             .await
             .unwrap();
-        assign(&pool, TERM, &placement(teacher_id, second, 3, 2))
+        assign(&pool, TERM, &placement(teacher_id, second, 3, 7))
             .await
             .unwrap();
 

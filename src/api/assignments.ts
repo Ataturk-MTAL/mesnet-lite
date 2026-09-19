@@ -19,6 +19,8 @@ export interface BoardCompany {
   assignedTeacherId: number | null
   visitDay: number | null
   visitHour: number | null
+  /** Bloğun bittiği saat, uç DAHİL. Atanmamışsa `null`. */
+  visitEndHour: number | null
   isForced: boolean
   forceReason: string | null
 }
@@ -32,6 +34,8 @@ export interface BoardTeacher {
   companyCount: number
   /** Boş saatler: `{gün}-{saat}` anahtarları. */
   freeSlots: string[]
+  /** Bloğun HER hücresini kaplayan işletme: `{gün}-{saat}` → companyId. */
+  occupiedBy: Record<string, number>
   /** Gün numarası → o güne düşen toplam saat. */
   hoursPerDay: Record<string, number>
   daysOverCap: number[]

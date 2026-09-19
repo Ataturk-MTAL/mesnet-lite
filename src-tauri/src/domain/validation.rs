@@ -1,4 +1,4 @@
-use crate::domain::scheduling::{days_over_daily_cap, Slot, MAX_HOURS_PER_DAY};
+use crate::domain::scheduling::{days_over_daily_cap, Block, Slot, MAX_HOURS_PER_DAY};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,6 +29,10 @@ pub enum ViolationCode {
     RuleNotFound,
     MissingCoordinates,
     PartialStudentCoverage,
+    /// Blok, öğretmenin aynı dönemdeki başka bir bloğuyla aynı hücrede duruyor.
+    BlockOverlap,
+    /// Blok, ızgaranın gün sonunu (`day_end_hour`, HARİÇ) aşıyor.
+    BlockExceedsDayEnd,
 }
 
 impl ViolationCode {
@@ -41,7 +45,9 @@ impl ViolationCode {
             | ViolationCode::SlotNotAvailable
             | ViolationCode::SlotNotWorkplaceDay
             | ViolationCode::NotPlaced
-            | ViolationCode::TooManyStudentsPerCoordinator => Severity::Error,
+            | ViolationCode::TooManyStudentsPerCoordinator
+            | ViolationCode::BlockOverlap
+            | ViolationCode::BlockExceedsDayEnd => Severity::Error,
 
             ViolationCode::PoolExceeded
             | ViolationCode::FieldMismatch
@@ -129,6 +135,12 @@ pub struct AssignmentCheck {
     /// İşletmenin dalı öğretmenin dalları arasında mı?
     pub branch_matches: bool,
     pub has_coordinates: bool,
+    /// Izgaranın bitişi (ayarlardaki `day_end_hour`), HARİÇ.
+    pub day_end_hour: i64,
+    /// Aynı öğretmenin bloğuyla çakışan başka bir işletme varsa adı; yoksa None.
+    /// Çakışma denetimi burada YAPILMAZ — çağıran taraf (repository katmanı)
+    /// tüm atamaları görebildiği için hesaplayıp buraya bilgi olarak geçirir.
+    pub overlapping_with: Option<String>,
 }
 
 /// Tek bir atamayı denetler.
@@ -200,7 +212,42 @@ pub fn check_assignment(check: &AssignmentCheck) -> Vec<Violation> {
                     .for_company(check.company_id),
                 );
             }
+
+            let block = Block::from_start(slot.day_of_week, slot.hour, check.awarded_hours);
+            if block.exceeds_day_end(check.day_end_hour) {
+                violations.push(
+                    Violation::new(
+                        ViolationCode::BlockExceedsDayEnd,
+                        forced,
+                        format!(
+                            "{}: {}. saatte başlayan {} saatlik blok, ızgaranın {}. saatte biten \
+                             gün sonunu aşıyor",
+                            check.company_name,
+                            block.start_hour,
+                            block.end_hour - block.start_hour + 1,
+                            check.day_end_hour
+                        ),
+                    )
+                    .for_company(check.company_id)
+                    .for_teacher(check.teacher_id),
+                );
+            }
         }
+    }
+
+    if let Some(other_company) = &check.overlapping_with {
+        violations.push(
+            Violation::new(
+                ViolationCode::BlockOverlap,
+                forced,
+                format!(
+                    "{}: ziyaret bloğu, aynı öğretmenin {} işletmesindeki bloğuyla çakışıyor",
+                    check.company_name, other_company
+                ),
+            )
+            .for_company(check.company_id)
+            .for_teacher(check.teacher_id),
+        );
     }
 
     if check.student_count > MAX_STUDENTS_PER_COORDINATOR {
@@ -286,15 +333,26 @@ pub fn check_teacher_totals(
     }
 
     // Günlük sınır SAAT toplamına bakar; bir hücrede 8 saatlik işletme durabilir.
-    for day in days_over_daily_cap(hours_by_day) {
+    // Birden çok gün aşılmışsa TEK bir ihlalde, gün adları Türkçe liste olarak
+    // birleştirilir (ham gün numarası kullanıcıya asla gösterilmez).
+    let exceeded_days = days_over_daily_cap(hours_by_day);
+    if !exceeded_days.is_empty() {
+        let day_list = exceeded_days
+            .iter()
+            .map(|day| day_name(*day))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let day_word = if exceeded_days.len() == 1 {
+            "gününde"
+        } else {
+            "günlerinde"
+        };
         violations.push(
             Violation::new(
                 ViolationCode::DailyCapExceeded,
                 is_forced,
                 format!(
-                    "{teacher_name}: {}. günde {} saat, günlük sınır {MAX_HOURS_PER_DAY}",
-                    day,
-                    hours_by_day.get(&day).copied().unwrap_or(0)
+                    "{teacher_name}: {day_list} {day_word} günlük {MAX_HOURS_PER_DAY} saat sınırı aşıldı"
                 ),
             )
             .for_teacher(teacher_id),
@@ -302,6 +360,22 @@ pub fn check_teacher_totals(
     }
 
     violations
+}
+
+/// Gün numarasını (1 = Pazartesi … 5 = Cuma) Türkçe gün adına çevirir.
+/// Tanınmayan bir numara sessizce yutulmaz, "Gün {n}" olarak görünür kalır.
+///
+/// Bu, projedeki TEK gün-adı eşlemesi olmalı: aynı eşlemeyi başka bir dosyada
+/// (ör. `pdf_report.rs`) yeniden yazmak yerine buradan çağırın.
+pub fn day_name(day: i64) -> String {
+    match day {
+        1 => "Pazartesi".to_string(),
+        2 => "Salı".to_string(),
+        3 => "Çarşamba".to_string(),
+        4 => "Perşembe".to_string(),
+        5 => "Cuma".to_string(),
+        other => format!("Gün {other}"),
+    }
 }
 
 /// Okulun toplam havuzu aşıldı mı (MADDE 15/2).
@@ -340,6 +414,8 @@ mod tests {
             covered_student_count: 1,
             branch_matches: true,
             has_coordinates: true,
+            day_end_hour: 17,
+            overlapping_with: None,
         }
     }
 
@@ -403,6 +479,70 @@ mod tests {
         check.visit_slot = Some(Slot::new(4, 10));
 
         assert!(codes(&check_assignment(&check)).contains(&ViolationCode::SlotNotWorkplaceDay));
+    }
+
+    /// Blok gün sonunu aşarsa ihlal, hücrenin kendisi boş olsa bile bayraklanır.
+    #[test]
+    fn block_exceeding_the_grid_day_end_is_flagged() {
+        let mut check = valid_check();
+        check.teacher_free_slots = slots(&[(1, 11), (1, 12), (1, 13), (1, 14), (1, 15), (1, 16)]);
+        check.visit_slot = Some(Slot::new(1, 11));
+        check.awarded_hours = 6; // 11-16, ızgara 17'de (hariç) bitiyor -> tam sığar
+        check.day_end_hour = 16; // ama ızgara burada 16'da bitiyor -> aşıyor
+
+        assert!(codes(&check_assignment(&check)).contains(&ViolationCode::BlockExceedsDayEnd));
+    }
+
+    /// Blok tam ızgara sınırından önce bitiyorsa ihlal oluşmaz.
+    #[test]
+    fn block_ending_exactly_before_day_end_is_not_flagged() {
+        let mut check = valid_check();
+        check.awarded_hours = 2;
+        check.visit_slot = Some(Slot::new(1, 9));
+        check.day_end_hour = 11; // 9-10 tam sığar
+
+        assert!(!codes(&check_assignment(&check)).contains(&ViolationCode::BlockExceedsDayEnd));
+    }
+
+    /// Repository katmanı çakışan işletmeyi bildirdiğinde ihlal oluşur.
+    #[test]
+    fn overlapping_block_reported_by_the_caller_is_flagged() {
+        let mut check = valid_check();
+        check.overlapping_with = Some("Çakışan İşletme".into());
+
+        let found = check_assignment(&check);
+        let overlap = found
+            .iter()
+            .find(|v| v.code == ViolationCode::BlockOverlap)
+            .unwrap();
+        assert!(overlap.message.contains("Çakışan İşletme"));
+    }
+
+    #[test]
+    fn no_overlap_reported_when_the_caller_found_none() {
+        let check = valid_check();
+        assert!(!codes(&check_assignment(&check)).contains(&ViolationCode::BlockOverlap));
+    }
+
+    /// Zorlama açıkken blok ihlalleri de uyarıya düşer ama KAYBOLMAZ.
+    #[test]
+    fn forcing_downgrades_block_violations_to_warnings_without_hiding_them() {
+        let mut check = valid_check();
+        check.is_forced = true;
+        check.overlapping_with = Some("Çakışan İşletme".into());
+        check.day_end_hour = 1; // her blok aşar
+
+        let found = check_assignment(&check);
+        let overlap = found
+            .iter()
+            .find(|v| v.code == ViolationCode::BlockOverlap)
+            .unwrap();
+        let exceeds = found
+            .iter()
+            .find(|v| v.code == ViolationCode::BlockExceedsDayEnd)
+            .unwrap();
+        assert_eq!(overlap.severity, Severity::Warning);
+        assert_eq!(exceeds.severity, Severity::Warning);
     }
 
     /// OÖKY MADDE 88: 15 öğrenciye kadar bir koordinatör.
@@ -497,6 +637,42 @@ mod tests {
     fn exactly_eight_hours_on_a_day_is_allowed() {
         let hours_by_day = BTreeMap::from([(2, 8)]);
         assert!(check_teacher_totals(1, "Test", 20, 8, &hours_by_day, false).is_empty());
+    }
+
+    /// Uyarı metni ham gün numarası DEĞİL, Türkçe gün adı içermeli.
+    #[test]
+    fn daily_cap_message_uses_the_turkish_day_name_not_the_raw_number() {
+        let hours_by_day = BTreeMap::from([(3, 9)]);
+        let found = check_teacher_totals(1, "Ahmet YILMAZ", 20, 9, &hours_by_day, false);
+
+        assert_eq!(found.len(), 1);
+        assert!(found[0].message.contains("Çarşamba"));
+        assert!(!found[0].message.contains(" 3 "));
+    }
+
+    /// Birden çok gün aşıldığında TEK ihlalde, adlar virgülle birleştirilir.
+    #[test]
+    fn multiple_days_over_cap_are_combined_into_one_message() {
+        let hours_by_day = BTreeMap::from([(2, 9), (3, 10)]);
+        let found = check_teacher_totals(1, "Ahmet YILMAZ", 20, 19, &hours_by_day, false);
+
+        let daily = found
+            .iter()
+            .filter(|v| v.code == ViolationCode::DailyCapExceeded)
+            .collect::<Vec<_>>();
+        assert_eq!(daily.len(), 1);
+        assert!(daily[0].message.contains("Salı, Çarşamba"));
+    }
+
+    #[test]
+    fn day_name_maps_numbers_to_turkish_day_names() {
+        assert_eq!(day_name(1), "Pazartesi");
+        assert_eq!(day_name(2), "Salı");
+        assert_eq!(day_name(3), "Çarşamba");
+        assert_eq!(day_name(4), "Perşembe");
+        assert_eq!(day_name(5), "Cuma");
+        // Tanınmayan numara sessizce yutulmaz, olduğu gibi görünür kalır.
+        assert_eq!(day_name(9), "Gün 9");
     }
 
     #[test]

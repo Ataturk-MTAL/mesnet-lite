@@ -6,7 +6,8 @@ use crate::db::{
 use crate::domain::allocation::{
     propose, AllocationProposal, CompanyInput, TeacherInput,
 };
-use crate::domain::scheduling::{Slot, MAX_HOURS_PER_DAY};
+use crate::domain::scheduling::{visit_span, Slot, MAX_HOURS_PER_DAY};
+use crate::domain::validation::{check_pool, check_teacher_totals, Violation};
 use crate::domain::workload::{coordinator_capacity, statutory_cap, InstitutionType};
 use crate::error::AppResult;
 use serde::Serialize;
@@ -36,6 +37,9 @@ pub struct BoardCompany {
     pub assigned_teacher_id: Option<i64>,
     pub visit_day: Option<i64>,
     pub visit_hour: Option<i64>,
+    /// Bloğun BİTTİĞİ saat, DAHİL. `visit_hour` ile `visit_hour + span - 1`
+    /// arasıdır; fahri ziyarette (`awarded_hours = 0`) `visit_hour` ile aynıdır.
+    pub visit_end_hour: Option<i64>,
     pub is_forced: bool,
     pub force_reason: Option<String>,
 }
@@ -58,6 +62,10 @@ pub struct BoardTeacher {
     pub hours_per_day: BTreeMap<i64, i64>,
     pub days_over_cap: Vec<i64>,
     pub is_over_capacity: bool,
+    /// Hücre (`{gün}-{saat}`) → o hücreyi kaplayan işletme id'si. Ardışık
+    /// blok hücrelerinin TAMAMINI kapsar; ızgara bu hücreleri kapalı gösterip
+    /// yeni bir bırakmayı reddetmelidir.
+    pub occupied_by: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -83,6 +91,34 @@ fn parse_hour_setting(all: &BTreeMap<String, String>, key: &str, fallback: i64) 
     all.get(key)
         .and_then(|value| value.trim().parse::<i64>().ok())
         .unwrap_or(fallback)
+}
+
+/// Bir öğretmenin bloklarla dolu hücrelerini işletme id'sine eşler.
+///
+/// Girdi: `(öğretmen id, gün, başlangıç saati, bitiş saati DAHİL, işletme id)`
+/// demetleri. Her blok, kapladığı TÜM ardışık hücrelere açılır.
+fn occupied_cells_by_teacher(
+    placements: &[(i64, i64, i64, i64, i64)],
+) -> BTreeMap<i64, BTreeMap<String, i64>> {
+    let mut result: BTreeMap<i64, BTreeMap<String, i64>> = BTreeMap::new();
+    for &(teacher_id, day, start_hour, end_hour, company_id) in placements {
+        let cells = result.entry(teacher_id).or_default();
+        for hour in start_hour..=end_hour {
+            cells.insert(format!("{day}-{hour}"), company_id);
+        }
+    }
+    result
+}
+
+/// Bir `Violation`'ı panonun düz Türkçe uyarı metnine çevirir. Mevzuat
+/// dayanağı varsa mevcut uyarı üslubuna uyarak parantez içinde eklenir
+/// (ör. "... (OÖKY MADDE 88)."). Bu, `Violation` -> `String` dönüşümünün
+/// yapıldığı TEK yer olmalı.
+fn violation_to_warning(violation: &Violation) -> String {
+    match violation.legal_basis {
+        Some(basis) => format!("{} ({basis}).", violation.message),
+        None => format!("{}.", violation.message),
+    }
 }
 
 fn pool_from_settings(all: &BTreeMap<String, String>) -> i64 {
@@ -165,6 +201,7 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
 
         let hours = hours_map.get(&company.id);
         let assignment = assignment_map.get(&company.id);
+        let awarded_hours = hours.map(|h| h.awarded_hours).unwrap_or(0);
 
         board.companies.push(BoardCompany {
             company_id: company.id,
@@ -177,13 +214,14 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
                 .map(|s| format!("{} {}", s.first_name, s.last_name))
                 .collect(),
             branches: branches.into_iter().collect(),
-            awarded_hours: hours.map(|h| h.awarded_hours).unwrap_or(0),
+            awarded_hours,
             is_honorary: hours.map(|h| h.is_honorary == 1).unwrap_or(false),
             hours_missing: hours.is_none(),
             workplace_days: workplace_days.into_iter().collect(),
             assigned_teacher_id: assignment.map(|a| a.teacher_id),
             visit_day: assignment.map(|a| a.visit_day),
             visit_hour: assignment.map(|a| a.visit_hour),
+            visit_end_hour: assignment.map(|a| a.visit_hour + visit_span(awarded_hours) - 1),
             is_forced: assignment.map(|a| a.is_forced == 1).unwrap_or(false),
             force_reason: assignment.and_then(|a| a.force_reason.clone()),
         });
@@ -207,6 +245,22 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
     {
         per_day.insert((teacher_id, day), hours);
     }
+
+    // Bloklarla dolu hücreler: ızgara bunları kapalı göstermeli ve yeni bir
+    // bırakmayı bu hücrelere reddetmelidir.
+    let placements: Vec<(i64, i64, i64, i64, i64)> = board
+        .companies
+        .iter()
+        .filter_map(|c| {
+            match (c.assigned_teacher_id, c.visit_day, c.visit_hour, c.visit_end_hour) {
+                (Some(teacher_id), Some(day), Some(start), Some(end)) => {
+                    Some((teacher_id, day, start, end, c.company_id))
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    let occupied_by_teacher = occupied_cells_by_teacher(&placements);
 
     for teacher in all_teachers {
         let chief_hours = teachers::parse_chief_type(&teacher.chief_type).weekly_hours();
@@ -248,6 +302,7 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
             hours_per_day,
             days_over_cap,
             is_over_capacity: assigned_hours > capacity,
+            occupied_by: occupied_by_teacher.get(&teacher.id).cloned().unwrap_or_default(),
         });
     }
 
@@ -291,23 +346,28 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
              İşletme Saat Ayarları ekranından takdir edin."
         ));
     }
-    for teacher in board.teachers.iter().filter(|t| t.is_over_capacity) {
-        board.warnings.push(format!(
-            "{}: atanan {} saat, kapasitesi {} saati aşıyor.",
-            teacher.teacher_name, teacher.assigned_hours, teacher.capacity
-        ));
+
+    // MADDE 15/2: takdir edilen toplam saat, dağıtılabilir okul havuzunu aşarsa
+    // kullanıcı UYARILMALI (arayüz sayıyı kırmızıya boyaması yetmez).
+    let total_awarded_hours: i64 = board.companies.iter().map(|c| c.awarded_hours).sum();
+    if let Some(violation) = check_pool(total_awarded_hours, board.pool_hours) {
+        board.warnings.push(violation_to_warning(&violation));
     }
-    for teacher in board.teachers.iter().filter(|t| !t.days_over_cap.is_empty()) {
-        board.warnings.push(format!(
-            "{}: {} numaralı günde günlük {MAX_HOURS_PER_DAY} saat sınırı aşıldı (OÖKY MADDE 88).",
-            teacher.teacher_name,
-            teacher
-                .days_over_cap
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+
+    // Öğretmen bazlı kapasite ve günlük sınır denetimi TEK doğru kaynaktan
+    // (`check_teacher_totals`) yapılır; kural burada ikinci kez yazılmaz.
+    for teacher in &board.teachers {
+        let violations = check_teacher_totals(
+            teacher.teacher_id,
+            &teacher.teacher_name,
+            teacher.capacity,
+            teacher.assigned_hours,
+            &teacher.hours_per_day,
+            false,
+        );
+        board
+            .warnings
+            .extend(violations.iter().map(violation_to_warning));
     }
 
     Ok(board)
@@ -353,20 +413,23 @@ pub async fn propose_assignments(state: State<'_, AppState>) -> AppResult<Alloca
             capacity: t.capacity,
             free_slots: t.free_slots.iter().filter_map(|key| parse_slot_key(key)).collect(),
             already_assigned_hours: t.assigned_hours,
+            // Dolu hücreler artık BLOK genişliğinde: yalnızca başlangıç
+            // hücresi değil, `visit_hour..=visit_end_hour` arasının tamamı.
             used_slots: board
                 .companies
                 .iter()
                 .filter(|c| c.assigned_teacher_id == Some(t.teacher_id))
-                .filter_map(|c| match (c.visit_day, c.visit_hour) {
-                    (Some(day), Some(hour)) => Some(Slot::new(day, hour)),
+                .filter_map(|c| match (c.visit_day, c.visit_hour, c.visit_end_hour) {
+                    (Some(day), Some(start), Some(end)) => Some((day, start, end)),
                     _ => None,
                 })
+                .flat_map(|(day, start, end)| (start..=end).map(move |hour| Slot::new(day, hour)))
                 .collect(),
             hours_by_day: t.hours_per_day.clone(),
         })
         .collect();
 
-    Ok(propose(&companies, &teachers))
+    Ok(propose(&companies, &teachers, board.day_end_hour))
 }
 
 /// `{gün}-{saat}` anahtarını dilime çevirir. Bozuk anahtar sessizce atlanır.
@@ -412,6 +475,44 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn occupied_cells_by_teacher_expands_a_multi_hour_block() {
+        // Öğretmen 1, 2. gün 3. saatten başlayıp 3 hücre kaplayan bir blokla dolu.
+        let placements = [(1, 2, 3, 5, 100)];
+        let occupied = occupied_cells_by_teacher(&placements);
+
+        let teacher_cells = &occupied[&1];
+        assert_eq!(teacher_cells.len(), 3);
+        assert_eq!(teacher_cells["2-3"], 100);
+        assert_eq!(teacher_cells["2-4"], 100);
+        assert_eq!(teacher_cells["2-5"], 100);
+    }
+
+    /// Fahri ziyaret (başlangıç = bitiş) tek hücre kaplar.
+    #[test]
+    fn occupied_cells_by_teacher_handles_a_single_cell_block() {
+        let placements = [(1, 1, 9, 9, 200)];
+        let occupied = occupied_cells_by_teacher(&placements);
+
+        assert_eq!(occupied[&1].len(), 1);
+        assert_eq!(occupied[&1]["1-9"], 200);
+    }
+
+    #[test]
+    fn occupied_cells_by_teacher_keeps_teachers_separate() {
+        let placements = [(1, 1, 9, 10, 100), (2, 1, 9, 9, 200)];
+        let occupied = occupied_cells_by_teacher(&placements);
+
+        assert_eq!(occupied.len(), 2);
+        assert_eq!(occupied[&1]["1-9"], 100);
+        assert_eq!(occupied[&2]["1-9"], 200);
+    }
+
+    #[test]
+    fn occupied_cells_by_teacher_is_empty_for_no_placements() {
+        assert!(occupied_cells_by_teacher(&[]).is_empty());
     }
 
     #[test]

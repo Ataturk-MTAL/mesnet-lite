@@ -43,8 +43,20 @@ pub fn day_name(day: i64) -> String {
     }
 }
 
-fn format_visit_schedule(day: i64, hour: i64) -> String {
-    format!("{} / {}. Saat", day_name(day), hour)
+/// Bir koordinatörlük ataması artık tek bir ders saati değil, ardışık
+/// saatlerden oluşan bir BLOK kaplar: `visit_hour` ile `visit_hour + span - 1`
+/// arası, her iki uç dahil. `span`, çağıran tarafından `max(1, awarded_hours)`
+/// olarak hesaplanıp geçirilir (fahri ziyaretler dahil, tek saatten kısa blok
+/// olmaz). Tek saatlik blok (`span <= 1`) aralık göstermez, yalnızca tek saat
+/// yazılır — `4-4. Saat` çirkin ve yanıltıcıdır.
+fn format_visit_schedule(day: i64, hour: i64, span: i64) -> String {
+    let effective_span = span.max(1);
+    if effective_span <= 1 {
+        format!("{} / {}. Saat", day_name(day), hour)
+    } else {
+        let end_hour = hour + effective_span - 1;
+        format!("{} / {}-{}. Saat", day_name(day), hour, end_hour)
+    }
 }
 
 fn assignment_engine() -> &'static TypstEngine<TypstTemplateMainFile> {
@@ -176,6 +188,9 @@ fn build_row(ctx: &ReportContext, assignment: &Assignment) -> RowData {
         .map(|c| format!("{} {}", c.contact_first_name, c.contact_last_name).trim().to_string())
         .unwrap_or_default();
 
+    let awarded_hours = hours_row.map(|h| h.awarded_hours).unwrap_or(0);
+    let span = awarded_hours.max(1);
+
     RowData {
         company_name: company.map(|c| c.name.clone()).unwrap_or_default(),
         address: company.map(|c| c.address_text.clone()).unwrap_or_default(),
@@ -183,8 +198,8 @@ fn build_row(ctx: &ReportContext, assignment: &Assignment) -> RowData {
         contact,
         student_count: students.len(),
         students: student_names,
-        visit_schedule: format_visit_schedule(assignment.visit_day, assignment.visit_hour),
-        hours: hours_row.map(|h| h.awarded_hours).unwrap_or(0),
+        visit_schedule: format_visit_schedule(assignment.visit_day, assignment.visit_hour, span),
+        hours: awarded_hours,
         is_forced: assignment.is_forced != 0,
         is_honorary: hours_row.map(|h| h.is_honorary != 0).unwrap_or(false),
     }
@@ -538,6 +553,106 @@ mod tests {
 
         let visit_pdf = build_visit_lists(&pool, TERM).await.unwrap();
         assert!(visit_pdf.starts_with(b"%PDF"));
+    }
+
+    /// Tek saatlik blok (span = 1): aralık gösterilmez, yalnızca tek saat yazılır.
+    #[test]
+    fn format_visit_schedule_prints_a_single_hour_when_span_is_one() {
+        assert_eq!(format_visit_schedule(3, 4, 1), "Çarşamba / 4. Saat");
+    }
+
+    /// Çok saatlik blok (span > 1): `başlangıç-bitiş. Saat` aralığı basılır,
+    /// bitiş = visit_hour + span - 1 (her iki uç dahil).
+    #[test]
+    fn format_visit_schedule_prints_an_hour_range_when_span_is_greater_than_one() {
+        assert_eq!(format_visit_schedule(3, 4, 6), "Çarşamba / 4-9. Saat");
+    }
+
+    /// Fahri ziyaret gibi span <= 0 durumları savunmacı biçimde tek saate
+    /// zorlanır; asla `4-3. Saat` gibi geçersiz bir aralık üretilmez.
+    #[test]
+    fn format_visit_schedule_treats_zero_or_negative_span_as_a_single_hour() {
+        assert_eq!(format_visit_schedule(1, 2, 0), "Pazartesi / 2. Saat");
+        assert_eq!(format_visit_schedule(1, 2, -3), "Pazartesi / 2. Saat");
+    }
+
+    /// Uçtan uca: 6 saat takdir edilmiş bir atama, 4. saatten başlıyorsa
+    /// çizelgede "4-9. Saat" olarak görünmeli (eskiden yanlışlıkla "4. Saat").
+    #[tokio::test]
+    async fn multi_hour_award_renders_the_full_block_as_an_hour_range() {
+        let (_dir, pool) = test_pool().await;
+
+        let teacher_id = seed_teacher(&pool, "Aydın").await;
+        let company_id = seed_company(&pool, "Test İşletme D").await;
+        seed_hours(&pool, company_id, 6).await;
+        assignments::assign(
+            &pool,
+            TERM,
+            &assignments::NewAssignment {
+                teacher_id,
+                company_id,
+                visit_day: 3,
+                visit_hour: 4,
+                is_forced: false,
+                force_reason: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let ctx = load_context(&pool, TERM).await.unwrap();
+        let assignment_list = assignments::list(&pool, TERM).await.unwrap();
+        let groups = group_by_teacher(&ctx, &assignment_list);
+        let (_, rows) = groups.first().expect("bir grup olmalı");
+        let row = build_row(&ctx, rows[0]);
+
+        assert_eq!(row.visit_schedule, "Çarşamba / 4-9. Saat");
+    }
+
+    /// Fahri ziyaret (awarded_hours = 0) tam 1 saat gibi gösterilmeli; aralık
+    /// yazılmamalı.
+    #[tokio::test]
+    async fn honorary_visit_renders_as_a_single_hour_not_a_range() {
+        let (_dir, pool) = test_pool().await;
+
+        let teacher_id = seed_teacher(&pool, "Koç").await;
+        let company_id = seed_company(&pool, "Test İşletme E").await;
+        company_hours::upsert(
+            &pool,
+            TERM,
+            &HoursInput {
+                company_id,
+                max_hours_snapshot: 8,
+                awarded_hours: 8,
+                is_honorary: true,
+                is_locked: false,
+                notes: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+        assignments::assign(
+            &pool,
+            TERM,
+            &assignments::NewAssignment {
+                teacher_id,
+                company_id,
+                visit_day: 4,
+                visit_hour: 2,
+                is_forced: false,
+                force_reason: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let ctx = load_context(&pool, TERM).await.unwrap();
+        let assignment_list = assignments::list(&pool, TERM).await.unwrap();
+        let groups = group_by_teacher(&ctx, &assignment_list);
+        let (_, rows) = groups.first().expect("bir grup olmalı");
+        let row = build_row(&ctx, rows[0]);
+
+        assert_eq!(row.visit_schedule, "Perşembe / 2. Saat");
     }
 
     /// Gün numarası → Türkçe gün adı eşlemesi (MADDE'de kullanılan 1..5 sırası).

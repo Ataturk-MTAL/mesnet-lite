@@ -53,34 +53,105 @@ pub fn days_over_daily_cap(hours_by_day: &BTreeMap<i64, i64>) -> Vec<i64> {
         .collect()
 }
 
-/// Bir işletme için tek bir ziyaret hücresi seçer.
+/// Bir atamanın kapladığı hücre sayısı. Fahri ziyaret (`awarded_hours = 0`)
+/// bile TAM olarak 1 hücre kaplar; ekranda gösterecek bir yeri olmalı.
+pub fn visit_span(awarded_hours: i64) -> i64 {
+    awarded_hours.max(1)
+}
+
+/// Bir atamanın ardışık hücrelerden oluşan BLOĞU.
 ///
-/// Kurallar:
-/// - Hücre uygun olmalı (öğretmen boş + öğrenciler o gün işletmede)
-/// - Hücre başka bir işletmeye verilmemiş olmalı
-/// - O güne eklenecek saat günlük 8 saat sınırını aşmamalı
+/// Kapsam `start_hour` ile `start_hour + span - 1` arasıdır, her iki uç
+/// DAHİL. Eskiden bir işletme tek bir hücre kaplardı; artık takdir edilen
+/// saat kadar ardışık hücre kaplıyor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Block {
+    pub day_of_week: i64,
+    pub start_hour: i64,
+    /// DAHİL üst sınır.
+    pub end_hour: i64,
+}
+
+impl Block {
+    pub fn from_start(day_of_week: i64, start_hour: i64, awarded_hours: i64) -> Self {
+        Self {
+            day_of_week,
+            start_hour,
+            end_hour: start_hour + visit_span(awarded_hours) - 1,
+        }
+    }
+
+    /// Bloğun kapladığı tüm hücreler.
+    pub fn cells(&self) -> BTreeSet<Slot> {
+        (self.start_hour..=self.end_hour)
+            .map(|hour| Slot::new(self.day_of_week, hour))
+            .collect()
+    }
+
+    /// İki blok aynı öğretmende aynı anda duramaz mı? Yalnızca aynı günde ve
+    /// hücre aralıkları kesişiyorsa true döner.
+    pub fn overlaps(&self, other: &Block) -> bool {
+        self.day_of_week == other.day_of_week
+            && self.start_hour <= other.end_hour
+            && other.start_hour <= self.end_hour
+    }
+
+    /// Izgaranın `day_end_hour` (HARİÇ) sınırını aşıyor mu?
+    pub fn exceeds_day_end(&self, day_end_hour: i64) -> bool {
+        self.end_hour >= day_end_hour
+    }
+}
+
+/// Birden çok bloğun birlikte kapladığı hücreler — bir öğretmenin dolu
+/// hücre haritası.
+pub fn occupied_cells(blocks: &[Block]) -> BTreeSet<Slot> {
+    blocks.iter().flat_map(Block::cells).collect()
+}
+
+/// Bir işletme için ardışık boş hücrelerden oluşan bir BLOK arar.
 ///
-/// Yükü en az olan gün tercih edilir; böylece saatler haftaya yayılır ve
-/// günlük sınıra çarpma olasılığı düşer. Eşitlikte haftanın erken günü ve
-/// erken ders saati seçilir — sonuç belirlenimcidir.
-pub fn pick_visit_slot(
+/// Eskiden tek bir boş hücre yeterliydi; artık `awarded_hours` kadar ARDIŞIK
+/// hücrenin hepsi boş olmalı, hiçbiri başka bir bloğa ait olmamalı ve blok
+/// ızgaranın gün sonunu aşmamalı.
+///
+/// `eligible`: öğretmenin boş VE işletmenin gün kısıtına uyan tekil hücreler.
+/// `occupied`: öğretmenin başka atamalarının bloklarıyla dolu hücreleri.
+/// `day_end_hour`: ızgaranın bitişi, HARİÇ (ayarlardan).
+pub fn pick_visit_block(
     eligible: &BTreeSet<Slot>,
-    used_slots: &BTreeSet<Slot>,
+    occupied: &BTreeSet<Slot>,
     hours_by_day: &BTreeMap<i64, i64>,
     awarded_hours: i64,
-) -> Option<Slot> {
+    day_end_hour: i64,
+) -> Option<Block> {
     eligible
         .iter()
-        .filter(|slot| !used_slots.contains(slot))
-        .filter(|slot| {
+        .filter(|slot| !occupied.contains(slot))
+        .filter_map(|slot| {
+            let block = Block::from_start(slot.day_of_week, slot.hour, awarded_hours);
+            if block.exceeds_day_end(day_end_hour) {
+                return None;
+            }
+
+            let cells = block.cells();
+            let fits = cells
+                .iter()
+                .all(|cell| eligible.contains(cell) && !occupied.contains(cell));
+            if !fits {
+                return None;
+            }
+
             let current = hours_by_day.get(&slot.day_of_week).copied().unwrap_or(0);
-            current + awarded_hours <= MAX_HOURS_PER_DAY
+            if current + awarded_hours > MAX_HOURS_PER_DAY {
+                return None;
+            }
+
+            Some(block)
         })
-        .min_by_key(|slot| {
-            let load = hours_by_day.get(&slot.day_of_week).copied().unwrap_or(0);
-            (load, slot.day_of_week, slot.hour)
+        .min_by_key(|block| {
+            let load = hours_by_day.get(&block.day_of_week).copied().unwrap_or(0);
+            (load, block.day_of_week, block.start_hour)
         })
-        .copied()
 }
 
 #[cfg(test)]
@@ -127,67 +198,215 @@ mod tests {
         assert!(days_over_daily_cap(&load(&[(1, MAX_HOURS_PER_DAY)])).is_empty());
     }
 
-    #[test]
-    fn picks_a_slot_when_the_day_has_room() {
-        let eligible = slots(&[(1, 9), (1, 10)]);
-        let picked = pick_visit_slot(&eligible, &BTreeSet::new(), &BTreeMap::new(), 6);
-
-        assert_eq!(picked, Some(Slot::new(1, 9)), "erken saat tercih edilmeli");
+    fn eligible_range(day: i64, hours: std::ops::Range<i64>) -> BTreeSet<Slot> {
+        hours.map(|h| Slot::new(day, h)).collect()
     }
 
-    /// Başka işletmeye verilmiş hücre yeniden kullanılamaz.
-    #[test]
-    fn skips_slots_already_used_by_another_company() {
-        let eligible = slots(&[(1, 9), (1, 10)]);
-        let used = slots(&[(1, 9)]);
+    // --- visit_span ---
 
+    #[test]
+    fn honorary_visit_span_is_exactly_one_hour() {
+        assert_eq!(visit_span(0), 1);
+    }
+
+    #[test]
+    fn span_matches_awarded_hours_when_positive() {
+        assert_eq!(visit_span(6), 6);
+    }
+
+    // --- Block ---
+
+    #[test]
+    fn block_end_hour_covers_the_full_span() {
+        let block = Block::from_start(2, 9, 6);
+        assert_eq!(block.start_hour, 9);
+        assert_eq!(block.end_hour, 14, "9,10,11,12,13,14 = 6 hücre");
+    }
+
+    #[test]
+    fn honorary_block_occupies_a_single_cell() {
+        let block = Block::from_start(1, 9, 0);
+        assert_eq!(block.end_hour, 9);
+        assert_eq!(block.cells(), slots(&[(1, 9)]));
+    }
+
+    #[test]
+    fn block_cells_lists_every_hour_in_the_span() {
+        let block = Block::from_start(3, 10, 3);
+        assert_eq!(block.cells(), slots(&[(3, 10), (3, 11), (3, 12)]));
+    }
+
+    #[test]
+    fn overlapping_blocks_on_the_same_day_are_detected() {
+        let a = Block::from_start(1, 9, 4); // 9-12
+        let b = Block::from_start(1, 12, 2); // 12-13, paylaşılan hücre 12
+        assert!(a.overlaps(&b));
+    }
+
+    #[test]
+    fn adjacent_blocks_that_do_not_share_a_cell_do_not_overlap() {
+        let a = Block::from_start(1, 9, 4); // 9-12
+        let b = Block::from_start(1, 13, 2); // 13-14
+        assert!(!a.overlaps(&b));
+    }
+
+    #[test]
+    fn blocks_on_different_days_never_overlap_even_with_the_same_hours() {
+        let a = Block::from_start(1, 9, 4);
+        let b = Block::from_start(2, 9, 4);
+        assert!(!a.overlaps(&b));
+    }
+
+    #[test]
+    fn block_within_grid_does_not_exceed_day_end() {
+        let block = Block::from_start(1, 9, 8); // 9-16
+        assert!(!block.exceeds_day_end(17));
+    }
+
+    #[test]
+    fn block_reaching_the_grid_boundary_exceeds_day_end() {
+        let block = Block::from_start(1, 9, 9); // 9-17, 17 hariç sınırını yiyor
+        assert!(block.exceeds_day_end(17));
+    }
+
+    #[test]
+    fn occupied_cells_unions_every_block() {
+        let blocks = vec![Block::from_start(1, 9, 2), Block::from_start(2, 13, 3)];
         assert_eq!(
-            pick_visit_slot(&eligible, &used, &BTreeMap::new(), 4),
-            Some(Slot::new(1, 10))
+            occupied_cells(&blocks),
+            slots(&[(1, 9), (1, 10), (2, 13), (2, 14), (2, 15)])
         );
     }
 
-    /// Günlük sınırı aşacak gün elenir.
-    #[test]
-    fn rejects_a_day_that_would_exceed_the_daily_cap() {
-        let eligible = slots(&[(1, 9), (2, 9)]);
-        // 1. gün zaten 6 saat dolu; 4 saatlik işletme oraya sığmaz.
-        let picked = pick_visit_slot(&eligible, &BTreeSet::new(), &load(&[(1, 6)]), 4);
+    // --- pick_visit_block ---
 
-        assert_eq!(picked, Some(Slot::new(2, 9)));
+    #[test]
+    fn picks_a_block_that_fits_entirely_in_free_hours() {
+        let eligible = eligible_range(1, 8..17);
+        let block =
+            pick_visit_block(&eligible, &BTreeSet::new(), &BTreeMap::new(), 6, 17).unwrap();
+        assert_eq!(block, Block::from_start(1, 8, 6));
+    }
+
+    /// Yalnızca 2 saat boş; 6 saatlik blok sığmaz.
+    #[test]
+    fn rejects_a_start_when_the_span_is_not_fully_free() {
+        let eligible = slots(&[(1, 9), (1, 10)]);
+        assert_eq!(
+            pick_visit_block(&eligible, &BTreeSet::new(), &BTreeMap::new(), 6, 17),
+            None
+        );
+    }
+
+    /// 12. saat dolu olduğu için 6 saatlik bloğun HER olası başlangıcı çakışır.
+    #[test]
+    fn rejects_a_block_that_would_overlap_another_assignment() {
+        let eligible = eligible_range(1, 8..17);
+        let occupied = slots(&[(1, 12)]);
+        assert_eq!(
+            pick_visit_block(&eligible, &occupied, &BTreeMap::new(), 6, 17),
+            None
+        );
+    }
+
+    /// İlk 4 saat dolu; 3 saatlik blok ancak 12'den sonra sığar.
+    #[test]
+    fn moves_to_the_next_valid_start_when_earlier_ones_overlap() {
+        let eligible = eligible_range(1, 8..17);
+        let occupied = eligible_range(1, 8..12);
+        let block = pick_visit_block(&eligible, &occupied, &BTreeMap::new(), 3, 17).unwrap();
+        assert_eq!(block.start_hour, 12);
+    }
+
+    /// 8. saat dolu; 9'dan başlayan 8 saatlik blok 9-16 olurdu ve hücrelerin
+    /// hepsi boş olsa bile ızgara 16'da (HARİÇ) bittiği için sığmaz.
+    #[test]
+    fn rejects_a_block_that_would_exceed_the_grids_day_end() {
+        let eligible = eligible_range(1, 8..17); // 8..16 arası boş
+        let occupied = slots(&[(1, 8)]);
+        assert_eq!(
+            pick_visit_block(&eligible, &occupied, &BTreeMap::new(), 8, 16),
+            None
+        );
+    }
+
+    /// 8'den başlayan blok (8-15) ızgara sınırının içinde kaldığı için sığar.
+    #[test]
+    fn accepts_a_block_that_ends_exactly_before_the_grids_day_end() {
+        let eligible = eligible_range(1, 8..17);
+        let block =
+            pick_visit_block(&eligible, &BTreeSet::new(), &BTreeMap::new(), 8, 16).unwrap();
+        assert_eq!(block.start_hour, 8);
+        assert_eq!(block.end_hour, 15);
+    }
+
+    #[test]
+    fn daily_cap_still_applies_to_the_whole_block() {
+        let eligible = eligible_range(1, 8..17);
+        let hours_by_day = BTreeMap::from([(1, 6)]);
+        // 6 + 4 = 10 > 8, günlük sınırı aşar.
+        assert_eq!(
+            pick_visit_block(&eligible, &BTreeSet::new(), &hours_by_day, 4, 17),
+            None
+        );
+    }
+
+    #[test]
+    fn honorary_block_fits_a_single_free_cell_even_on_a_full_day() {
+        let eligible = slots(&[(1, 9)]);
+        let hours_by_day = BTreeMap::from([(1, 8)]);
+        let block = pick_visit_block(&eligible, &BTreeSet::new(), &hours_by_day, 0, 17).unwrap();
+        assert_eq!(block, Block::from_start(1, 9, 0));
+    }
+
+    #[test]
+    fn prefers_the_least_loaded_day_for_the_whole_block() {
+        let eligible: BTreeSet<Slot> = eligible_range(1, 8..17)
+            .into_iter()
+            .chain(eligible_range(2, 8..17))
+            .collect();
+        let hours_by_day = BTreeMap::from([(1, 6)]);
+        let block = pick_visit_block(&eligible, &BTreeSet::new(), &hours_by_day, 2, 17).unwrap();
+        assert_eq!(block.day_of_week, 2, "hiç yükü olmayan gün önce");
+    }
+
+    #[test]
+    fn pick_visit_block_returns_none_when_nothing_is_eligible() {
+        assert_eq!(
+            pick_visit_block(&BTreeSet::new(), &BTreeSet::new(), &BTreeMap::new(), 2, 17),
+            None
+        );
+    }
+
+    /// Günlük sınırı aşacak gün elenir; blok başka güne düşer.
+    ///
+    /// Eskiden `pick_visit_slot` için yazılmıştı — kural (günlük sınırı aşan
+    /// günün elenip başka güne düşülmesi) blok modelinde de geçerli, o yüzden
+    /// silinmedi, `pick_visit_block` üzerinden uyarlandı.
+    #[test]
+    fn rejects_a_day_that_would_exceed_the_daily_cap_and_falls_back_to_another_day() {
+        let eligible: BTreeSet<Slot> = eligible_range(1, 9..13)
+            .into_iter()
+            .chain(eligible_range(2, 9..13))
+            .collect();
+        // 1. gün zaten 6 saat dolu; 4 saatlik blok oraya sığmaz, 2. güne düşer.
+        let hours_by_day = BTreeMap::from([(1, 6)]);
+        let block = pick_visit_block(&eligible, &BTreeSet::new(), &hours_by_day, 4, 17).unwrap();
+        assert_eq!(block.day_of_week, 2);
+        assert_eq!(block.start_hour, 9);
     }
 
     /// Hiçbir gün sığdıramıyorsa None döner; zorlama kullanıcının kararıdır.
+    ///
+    /// Eskiden `pick_visit_slot` için yazılmıştı — kural (tüm günler günlük
+    /// sınırı aşınca None dönmesi) blok modelinde de geçerli, o yüzden
+    /// silinmedi, `pick_visit_block` üzerinden uyarlandı.
     #[test]
     fn returns_none_when_no_day_can_absorb_the_hours() {
         let eligible = slots(&[(1, 9), (2, 9)]);
-        let picked = pick_visit_slot(&eligible, &BTreeSet::new(), &load(&[(1, 8), (2, 8)]), 1);
-
-        assert_eq!(picked, None);
-    }
-
-    /// Yükü en az olan gün tercih edilir; saatler haftaya yayılır.
-    #[test]
-    fn prefers_the_least_loaded_day() {
-        let eligible = slots(&[(1, 9), (2, 9), (3, 9)]);
-        let picked = pick_visit_slot(&eligible, &BTreeSet::new(), &load(&[(1, 6), (2, 2)]), 2);
-
-        assert_eq!(picked, Some(Slot::new(3, 9)), "hiç yükü olmayan gün önce");
-    }
-
-    /// Fahri ziyaret 0 saat taşır; dolu bir güne bile yerleşebilir.
-    #[test]
-    fn honorary_visit_fits_even_on_a_full_day() {
-        let eligible = slots(&[(1, 9)]);
-        let picked = pick_visit_slot(&eligible, &BTreeSet::new(), &load(&[(1, 8)]), 0);
-
-        assert_eq!(picked, Some(Slot::new(1, 9)));
-    }
-
-    #[test]
-    fn returns_none_when_nothing_is_eligible() {
+        let hours_by_day = BTreeMap::from([(1, 8), (2, 8)]);
         assert_eq!(
-            pick_visit_slot(&BTreeSet::new(), &BTreeSet::new(), &BTreeMap::new(), 2),
+            pick_visit_block(&eligible, &BTreeSet::new(), &hours_by_day, 1, 17),
             None
         );
     }

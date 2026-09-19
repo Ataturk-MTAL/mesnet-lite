@@ -26,6 +26,7 @@ declare module 'vue' {
     InputText: typeof import('openvue/inputtext')['default']
     LocationPickerMap: typeof import('./src/components/map/LocationPickerMap.vue')['default']
     Message: typeof import('openvue/message')['default']
+    Panel: typeof import('openvue/panel')['default']
     ProgressBar: typeof import('openvue/progressbar')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

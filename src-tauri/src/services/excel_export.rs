@@ -33,6 +33,22 @@ fn day_name(day: i64) -> &'static str {
     }
 }
 
+/// Ziyaret saatini blok olarak biçimlendirir.
+///
+/// Bir koordinatörlük ataması artık tek bir ders saati değil, ardışık
+/// saatlerden oluşan bir BLOK kaplar: `hour` ile `hour + span - 1` arası, her
+/// iki uç dahil. `span`, çağıran tarafından `max(1, awarded_hours)` olarak
+/// hesaplanıp geçirilir. Tek saatlik blokta (`span <= 1`) yalnızca başlangıç
+/// saati yazılır; `4-4` gibi çirkin ve yanıltıcı bir aralık üretilmez.
+fn format_visit_hour(hour: i64, span: i64) -> String {
+    let effective_span = span.max(1);
+    if effective_span <= 1 {
+        hour.to_string()
+    } else {
+        format!("{}-{}", hour, hour + effective_span - 1)
+    }
+}
+
 /// İşletmenin coğrafi kodlama durumunu Türkçe etikete çevirir.
 fn geocode_status_label(status: &str) -> &'static str {
     match status {
@@ -143,8 +159,9 @@ async fn write_assignments_sheet(
         worksheet.write_string(row, 0, company_name)?;
         worksheet.write_string(row, 1, address)?;
         worksheet.write_string(row, 2, teacher_name)?;
+        let hour_span = awarded_hours.max(1);
         worksheet.write_string(row, 3, day_name(assignment.visit_day))?;
-        worksheet.write_number(row, 4, assignment.visit_hour as f64)?;
+        worksheet.write_string(row, 4, format_visit_hour(assignment.visit_hour, hour_span))?;
         worksheet.write_number(row, 5, awarded_hours as f64)?;
         worksheet.write_string(row, 6, yes_no(is_honorary))?;
         worksheet.write_string(row, 7, yes_no(assignment.is_forced == 1))?;
@@ -387,6 +404,28 @@ mod tests {
             seeded_bytes.len() > empty_bytes.len(),
             "doldurulmuş dönem boş dönemden daha büyük bir dosya üretmeli"
         );
+    }
+
+    /// Tek saatlik blok (span = 1): aralık gösterilmez, yalnızca başlangıç
+    /// saati yazılır.
+    #[test]
+    fn format_visit_hour_prints_a_single_number_when_span_is_one() {
+        assert_eq!(format_visit_hour(4, 1), "4");
+    }
+
+    /// Çok saatlik blok (span > 1): `başlangıç-bitiş` aralığı basılır, bitiş =
+    /// hour + span - 1 (her iki uç dahil).
+    #[test]
+    fn format_visit_hour_prints_a_range_when_span_is_greater_than_one() {
+        assert_eq!(format_visit_hour(4, 6), "4-9");
+    }
+
+    /// Fahri ziyaret gibi span <= 0 durumları savunmacı biçimde tek saate
+    /// zorlanır; asla `4-3` gibi geçersiz bir aralık üretilmez.
+    #[test]
+    fn format_visit_hour_treats_zero_or_negative_span_as_a_single_hour() {
+        assert_eq!(format_visit_hour(2, 0), "2");
+        assert_eq!(format_visit_hour(2, -3), "2");
     }
 
     #[test]
