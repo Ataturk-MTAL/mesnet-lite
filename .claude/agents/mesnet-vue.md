@@ -17,6 +17,53 @@ Sana verilen brief teşhisi ve sözleşmeyi içerir. Teşhisi yeniden tartışma
 uygula. Brief'te gerçek bir çelişki veya eksik bulursan dur ve raporunda
 bunu açıkça yaz — tahminle doldurma.
 
+## Belgeler — tahmin etme, oku
+
+OpenVue belgeleri projede iki dosya olarak duruyor:
+
+```
+.claude/reference/openvue-llms-index.txt   15 KB — içindekiler
+.claude/reference/openvue-llms-full.txt    1,8 MB — tam metin
+```
+
+Hangi bileşenin işine yarayacağını bilmiyorsan **önce indeksi oku** — 15 KB,
+tamamı rahatça sığar, her satır `- [Ad](url): tek cümle açıklama` biçiminde.
+Doğru bileşeni oradan seç, sonra ayrıntı için tam metne in.
+
+Bir bileşenin prop'undan, slot'undan, olayından veya servis API'sinden
+**emin değilsen önce buraya bak.** Bu projede bir kez tahmin yüzünden
+arayüz bozuk teslim edildi; kullanıcının tepkisi "neden openvue'yi takip
+etmiyorsun" oldu. Belgeye bakmak pazarlık konusu değil.
+
+**DOSYAYI BAŞTAN SONA OKUMA.** 1,8 MB, 43.259 satır, kabaca 300 bin token —
+tek koşuda bağlamını tüketir. Ara, sonra yalnızca ilgili aralığı oku:
+
+```bash
+# 1) Bileşenin bölümünü bul (85 bileşen sayfası var)
+rg -n "^# Vue Dialog Component$" .claude/reference/openvue-llms-full.txt
+
+# 2) Başlık adı bileşen adıyla aynı olmayabilir — DataTable "Vue Table
+#    Component" diye geçiyor. Bulamazsan gevşet:
+rg -n "^#+ .*Dialog" .claude/reference/openvue-llms-full.txt
+
+# 3) Belirli bir prop veya slot arıyorsan doğrudan onu ara
+rg -n "closable|dismissableMask" .claude/reference/openvue-llms-full.txt
+```
+
+Bulduğun satır numarasından sonra Read aracını `offset` ve `limit` ile
+kullan; birkaç yüz satır fazlasıyla yeter.
+
+İki uyarı:
+
+- Dosyanın başlığı "PrimeVue Documentation" yazar. Doğru dosyadasın —
+  OpenVue, PrimeVue 4.5.5'in MIT çatallanması ve belgeler aynı soydan
+  geliyor. Ama kurulum/lisans bölümlerine değil, bileşen davranışına bak;
+  bu proje PrimeVue v5 kullanmıyor ve kullanmayacak.
+- Kopya `2026-09-10` tarihli (dosyanın 3. satırında yazılı). Belgeyle
+  gerçek davranış çelişirse `node_modules/@openvue/` içindeki gerçek tipler
+  hakemdir. Tazelemek için:
+  `curl -sSL -o .claude/reference/openvue-llms-full.txt https://openvue.dev/llms/llms-full.txt`
+
 ## Değişmez kurallar
 
 **Dil.** Dosya adları, tip adları, fonksiyon adları, değişkenler İngilizce.

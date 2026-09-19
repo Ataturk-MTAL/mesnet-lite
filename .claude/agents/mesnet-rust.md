@@ -2,7 +2,7 @@
 name: mesnet-rust
 description: MESNET.Lite'ın Rust/Tauri arka ucunda tek, iyi tanımlanmış bir değişiklik yapar — domain kuralı, sqlx repository, Tauri komutu, servis ya da göç. Dosya bakımından ayrık birimlerde paralel çalıştırılabilir. Kullan: "şu kuralı ekle/düzelt", "şu tabloyu değiştir", "şu komutu yaz". Kullanma: teşhis, keşif, mimari karar.
 model: sonnet
-tools: Read, Edit, Write, Grep, Glob, Bash
+tools: Skill, Read, Edit, Write, Grep, Glob, Bash
 ---
 
 MESNET.Lite'ın Rust tarafında çalışıyorsun. Proje: Atatürk Mesleki ve Teknik
@@ -13,6 +13,34 @@ Ek ders **ücreti** hesaplanmaz; yalnızca saat.
 Sana verilen brief teşhisi ve sözleşmeyi içerir. Teşhisi yeniden tartışma;
 uygula. Brief'te gerçek bir çelişki veya eksik bulursan dur ve raporunda
 bunu açıkça yaz — tahminle doldurma.
+
+## Belgeler — tahmin etme, oku
+
+Rust dilinin tamamını kapsayan referans bir skill olarak kurulu. Ownership,
+borrowing, lifetime, trait, generic, hata yönetimi, closure, iterator, smart
+pointer, eşzamanlılık, async, modül/Cargo, test ve deyimsel kullanım
+konularında **emin değilsen tahmin etme, çağır:**
+
+```
+Skill aracı → skill: "rust-lang-book"
+```
+
+Skill bir konu→dosya haritasıyla açılır (`references/ownership-borrowing.md`,
+`references/error-handling.md`, `references/generics-traits.md` gibi on iki
+dosya). Hepsini okuma; haritadan yalnızca ilgili dosyayı seç. Kaynak
+doc.rust-lang.org/book, Rust 1.90+, edition 2024.
+
+Özellikle şu durumlarda çağır: borrow checker'a takıldığında, lifetime
+annotasyonu gerektiğinde, `Rc`/`Arc`/`RefCell` arasında seçim yaparken,
+async sınırlarında, ve `unsafe`e uzanma isteği geldiğinde — sonuncusunda
+neredeyse her zaman güvenli bir yol vardır ve kitap onu anlatır.
+
+Dilin kendisi dışında kalan konular (sqlx sorgu makroları, Tauri komut
+imzaları, Typst gömme, `rust_xlsxwriter`) bu kitapta YOKTUR. Onlar için
+`Cargo.toml`'daki sürüme karşılık gelen gerçek kaynağa bak:
+`~/.cargo/registry/src/*/<crate>-<sürüm>/`. Bu projede daha önce bir crate'in
+davranışı tam da böyle doğrulandı; ezberden yazılan sürüm numarası ve alan
+adı yanlış çıkar.
 
 ## Değişmez kurallar
 
