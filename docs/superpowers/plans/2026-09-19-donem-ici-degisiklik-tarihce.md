@@ -737,7 +737,14 @@ Eski depolamaya kalan okuma ve yazmalar bulunur. İzin verilen tek şey: R6'ya b
   - `src/views/ImportExportView.vue`: raporlara `asOf`, içe aktarmaya `effectiveDate`.
   - `src/views/TermManagementView.vue`: dönem başı ve sonu, "onaylandı" işareti, uyarı başlığı.
   - `src/views/SettingsView.vue`: `operator_name`.
-- **Dokunma:** V1–V5 dosyaları, `labels.ts`. Eksik bir etiket olursa dur ve raporla; orkestratör V1 kapsamında ekler.
+- **V5'ten devralınanlar** (yürütme sırasında eklendi):
+  - `HistoryEntryCard.vue`'ye "Düzelt" düğmesi eklenir (`labels.changeHistory.correct`, anahtar hazır).
+    - Kümenin `kind` değerine göre ilgili pencere açılır: `student_transfer` ve `student_leave` için `StudentChangeDialog`, `teacher_load_change` için `TeacherLoadDialog`.
+    - Pencere eski değerlerle dolu gelir ve `{type:'correct', changeSetId, replacement}` gönderir.
+    - Küme türlerinin `ChangeCommand` türleriyle eşlemesi R2'nin ürettiği `NewChangeSet.kind` değerlerinden okunur. Orkestratör bu değerleri brief'e verir.
+  - `revoked` emit'i `changed` olarak genelleştirilir.
+  - `HistoryView.vue` içindeki ham `subjectId` sayı alanı kaldırılır; yerine öğrenci seçici gelir (`Select`, `studentsApi` listesi).
+- **Dokunma:** V1–V5 dosyaları (yukarıda izin verilen iki dosya hariç), `labels.ts`. Eksik bir etiket olursa dur ve raporla; orkestratör V1 kapsamında ekler.
 
 **Her V görevi için:**
 - **Kapı:** `npx vue-tsc --noEmit && npm run build && npx vitest run`.
