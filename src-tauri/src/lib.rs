@@ -46,6 +46,8 @@ pub fn run() {
             commands::settings_commands::create_term,
             commands::import_commands::preview_csv_import,
             commands::import_commands::apply_csv_import,
+            commands::student_list_commands::preview_student_list_import,
+            commands::student_list_commands::apply_student_list_import,
             commands::dashboard_commands::get_dashboard_stats,
             commands::export_commands::export_workbook,
             commands::file_commands::save_to_downloads,

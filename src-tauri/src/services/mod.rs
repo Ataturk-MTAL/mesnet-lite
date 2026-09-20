@@ -8,6 +8,8 @@ pub mod geocoding;
 pub mod history_service;
 pub mod import_apply;
 pub mod pdf_report;
+pub mod student_list_apply;
+pub mod student_list_import;
 
 mod change_input;
 
@@ -21,3 +23,5 @@ mod change_service_test_support;
 mod change_service_tests;
 #[cfg(test)]
 mod history_service_tests;
+#[cfg(test)]
+mod real_export_fixture;

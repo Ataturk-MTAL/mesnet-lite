@@ -31,6 +31,23 @@ pub async fn list_by_term(pool: &SqlitePool, term: &str) -> AppResult<Vec<Studen
         .await?)
 }
 
+/// `list_by_term`in aynı transaction'daki bağlantı üzerinden çalışan hâli.
+/// `services::student_list_apply` (e-Okul sınıf listesi içe aktarımı) TÜM
+/// okuma ve yazmayı tek `BEGIN IMMEDIATE` transaction'ında yapar; transaction
+/// açıkken havuzdan okumak sessizce eski veriyi döndürebileceği için
+/// (`change_service.rs` üstteki uyarıyla aynı gerekçe) bu bağlantı-bazlı
+/// kopya gerekir.
+pub async fn list_by_term_in(conn: &mut SqliteConnection, term: &str) -> AppResult<Vec<Student>> {
+    let sql = format!(
+        "SELECT {SELECT_COLUMNS} FROM students WHERE term = ?1
+         ORDER BY grade COLLATE NOCASE, last_name COLLATE NOCASE, first_name COLLATE NOCASE"
+    );
+    Ok(sqlx::query_as::<_, Student>(&sql)
+        .bind(term)
+        .fetch_all(&mut *conn)
+        .await?)
+}
+
 /// Veritabanındaki tüm dönemler, en yeniden eskiye.
 pub async fn list_terms(pool: &SqlitePool) -> AppResult<Vec<String>> {
     let rows: Vec<(String,)> = sqlx::query_as(
@@ -140,6 +157,34 @@ pub async fn remove_in(conn: &mut SqliteConnection, id: i64) -> AppResult<()> {
     Ok(())
 }
 
+/// e-Okul sınıf listesi içe aktarımı SIRASINDA mevcut bir öğrencinin
+/// ad/soyad/sınıf/dal alanlarını günceller. `company_id`, `submitted_at` ve
+/// `term` BİLİNÇLİ OLARAK dokunulmaz: bu dosyada işletme bilgisi yoktur,
+/// öğrencinin var olan yerleştirmesi ya da dönemi bu içe aktarmayla
+/// bozulmamalıdır (brief: "İşletme ataması YOK").
+pub async fn update_identity_fields_in(
+    conn: &mut SqliteConnection,
+    id: i64,
+    first_name: &str,
+    last_name: &str,
+    grade: &str,
+    branch: &str,
+) -> AppResult<Student> {
+    let sql = format!(
+        "UPDATE students SET first_name = ?1, last_name = ?2, grade = ?3, branch = ?4
+         WHERE id = ?5
+         RETURNING {SELECT_COLUMNS}"
+    );
+    Ok(sqlx::query_as::<_, Student>(&sql)
+        .bind(first_name)
+        .bind(last_name)
+        .bind(grade)
+        .bind(branch)
+        .bind(id)
+        .fetch_one(&mut *conn)
+        .await?)
+}
+
 pub async fn update(pool: &SqlitePool, id: i64, input: &NewStudent) -> AppResult<Student> {
     let affected = sqlx::query(
         "UPDATE students SET
@@ -179,7 +224,10 @@ pub async fn remove(pool: &SqlitePool, id: i64) -> AppResult<()> {
     Ok(())
 }
 
-fn normalize(value: &str) -> String {
+/// `services::student_list_apply` da (e-Okul içe aktarımı) aynı normalize
+/// kuralını kullanır; farklı olan yalnız yedek anahtarın alan SAYISIDIR
+/// (bkz. `find_duplicate` üstündeki yorum), o yüzden bu yardımcı paylaşılır.
+pub(crate) fn normalize(value: &str) -> String {
     value
         .to_lowercase()
         .split_whitespace()

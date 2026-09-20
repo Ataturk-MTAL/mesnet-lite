@@ -12,5 +12,6 @@ pub mod import_commands;
 pub mod report_commands;
 pub mod settings_commands;
 pub mod student_commands;
+pub mod student_list_commands;
 pub mod teacher_commands;
 pub mod term_commands;

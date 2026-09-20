@@ -24,6 +24,10 @@ thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["time"] }
 csv = "1.3"
+# e-Okul sınıf listelerini okumak için: eski BIFF/OLE2 `.XLS` biçimi
+# (Crystal Reports üretimi) yalnız bu crate ile okunabiliyor; `rust_xlsxwriter`
+# yalnız YAZAR, `xlsx`/OOXML okuyucuları bu eski biçimi tanımaz.
+calamine = "0.36"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 typst-as-lib = "0.16"
 typst = "0.15.1"

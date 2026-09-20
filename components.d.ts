@@ -18,6 +18,7 @@ declare module 'vue' {
     Card: typeof import('openvue/card')['default']
     ChangeDetailsDialog: typeof import('./src/components/history/ChangeDetailsDialog.vue')['default']
     Checkbox: typeof import('openvue/checkbox')['default']
+    Chip: typeof import('openvue/chip')['default']
     Column: typeof import('openvue/column')['default']
     CompanyFormDialog: typeof import('./src/components/company/CompanyFormDialog.vue')['default']
     ConfirmDialog: typeof import('openvue/confirmdialog')['default']
