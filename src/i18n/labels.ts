@@ -498,6 +498,7 @@ export const labels = {
       hasHistory: 'Geçmişi var',
       planningOnly: 'Yalnız planlamada yapılabilir',
       invalidRequest: 'Geçersiz istek',
+      chiefAlreadyAssigned: 'Alan şefi zaten var',
     },
     warningCode: {
       lockedAboveCap: 'Kilitli satır tavanın üstünde',

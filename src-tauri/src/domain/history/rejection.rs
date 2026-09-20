@@ -42,6 +42,11 @@ pub enum RejectionCode {
     /// (R2b brief madde 3). `0`'a düşen sahte varsayılan ya da yer tutucu
     /// etiketle sessizce devam etmek yerine burada reddedilir.
     InvalidRequest,
+    /// Okulda aynı anda en fazla bir öğretmen alan şefi (`department`)
+    /// olabilir; komut, başka bir öğretmenin şeflik aralığıyla çakışan
+    /// yeni bir `department` günü yaratıyor. `conflicting_change_set_ids`,
+    /// o öğretmenin şefliğini kuran değişiklik kümesini taşır.
+    ChiefAlreadyAssigned,
 }
 
 /// `decide` ve `resolve_effective_date`'in alan kuralı reddi.
@@ -78,5 +83,17 @@ impl Rejection {
     pub fn with_conflicts(mut self, ids: Vec<i64>) -> Self {
         self.conflicting_change_set_ids = ids;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Arayüz `code` alanını bu birebir metinle karşılaştırır (spec §8).
+    #[test]
+    fn chief_already_assigned_serializes_as_camel_case() {
+        let json = serde_json::to_string(&RejectionCode::ChiefAlreadyAssigned).unwrap();
+        assert_eq!(json, "\"chiefAlreadyAssigned\"");
     }
 }

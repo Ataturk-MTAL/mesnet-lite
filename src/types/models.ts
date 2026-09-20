@@ -158,6 +158,7 @@ export type RejectionCode =
   | 'hasHistory'
   | 'planningOnly'
   | 'invalidRequest'
+  | 'chiefAlreadyAssigned'
 
 /** `ImpactWarning.code` değerleri. */
 export type WarningCode =

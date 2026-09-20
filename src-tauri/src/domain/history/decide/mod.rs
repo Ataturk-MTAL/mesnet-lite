@@ -6,6 +6,7 @@
 //! `teacher.rs`, `revoke.rs`); bu dosya yalnız ortak türleri, `DecisionContext`
 //! yardımcılarını ve dağıtımı (`decide()`) barındırır.
 
+mod chief;
 mod company;
 mod flags;
 mod revoke;
@@ -255,9 +256,16 @@ pub(super) fn with_pending(ctx: &DecisionContext, pending: &[PlannedEvent]) -> D
     augmented
 }
 
-/// Ortak komut dağıtımı. Her kol kendi dosyasına yönlenir; iş kuralı burada
-/// YOKTUR.
+/// Ortak komut dağıtımı. Her kol kendi dosyasına yönlenir. Tek istisna,
+/// komut türünden bağımsız NET sonuç kuralıdır (alan şefi tekliği, `chief.rs`):
+/// `revoke`/`correct` da şefliği doğurabildiği için kararın tamamına bakılır.
 pub fn decide(ctx: &DecisionContext, req: &ChangeRequest) -> Result<Decision, Rejection> {
+    let decision = dispatch(ctx, req)?;
+    chief::enforce_single_department(ctx, &decision)?;
+    Ok(decision)
+}
+
+fn dispatch(ctx: &DecisionContext, req: &ChangeRequest) -> Result<Decision, Rejection> {
     match &req.command {
         ChangeCommand::CreateStudent { student, company_id } => student::create_student(ctx, req, student, *company_id),
         ChangeCommand::PlaceStudent { student_id, company_id } => student::place_student(ctx, req, *student_id, *company_id),

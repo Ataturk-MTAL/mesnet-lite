@@ -5,7 +5,9 @@
 //!     `Preview`/`Committed` etki özeti) aynıdır;
 //!   - reddedilen istek hiçbir tabloyu değiştirmez;
 //!   - her commit'ten sonra `verify_term` boştur ve tarih aralığı çakışması
-//!     sorgusu 0 satır verir (tetikleyicilerden BAĞIMSIZ bir sorgudur).
+//!     sorgusu 0 satır verir (tetikleyicilerden BAĞIMSIZ bir sorgudur);
+//!   - hiçbir günde birden fazla öğretmen `department` (alan şefi) değildir:
+//!     kural `revoke`/`correct` yoluyla da delinemez.
 //!
 //! Yeni bağımlılık yoktur (`proptest`/`fastrand` kapsam dışı, spec §11).
 
@@ -19,6 +21,7 @@ use super::change_service::{execute_change, ChangeMode, ChangeOutcome};
 use super::change_service_test_support::*;
 use crate::db::projection;
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, TransferTarget};
+use crate::domain::models::ChiefType;
 use crate::domain::scheduling::Slot;
 
 const SEQUENCES: u64 = 50;
@@ -30,6 +33,11 @@ const NONE_DATE_PERCENT: u64 = 5;
 /// Sözleşmeye uygun (gerçek) önceki durumu kullanma olasılığı; kalanı
 /// bilinçli olarak yanlış `from` verir ve `FactNotTrueAtDate` üretir.
 const TRUTHFUL_FROM_PERCENT: u64 = 80;
+/// Yük komutlarında şeflik türü olasılıkları. İki öğretmenle `Department`
+/// sık denendiği için hem geçişler hem `ChiefAlreadyAssigned` redleri oluşur;
+/// kalan pay `None`'dur ve şefliği bırakma yolunu da açık tutar.
+const DEPARTMENT_PERCENT: u64 = 35;
+const WORKSHOP_LAB_PERCENT: u64 = 15;
 
 /// Knuth MMIX doğrusal eşlik üreteci: tohumlu, bağımsız, tekrarlanabilir.
 struct Lcg(u64);
@@ -128,11 +136,20 @@ fn company_command(rng: &mut Lcg, pools: &Pools) -> ChangeCommand {
     }
 }
 
+fn random_chief_type(rng: &mut Lcg) -> ChiefType {
+    match rng.next() % 100 {
+        roll if roll < DEPARTMENT_PERCENT => ChiefType::Department,
+        roll if roll < DEPARTMENT_PERCENT + WORKSHOP_LAB_PERCENT => ChiefType::WorkshopLab,
+        _ => ChiefType::None,
+    }
+}
+
 fn teacher_command(rng: &mut Lcg, pools: &Pools) -> ChangeCommand {
     let teacher_id = rng.pick(&pools.teachers);
     if rng.percent(50) {
         let mut load = standard_load();
         load.other_extra_hours = rng.below(25) as i64;
+        load.chief_type = random_chief_type(rng);
         return ChangeCommand::SetTeacherLoad { teacher_id, load };
     }
     let slots = (0..rng.below(7)).map(|_| Slot::new(1 + rng.below(5) as i64, 1 + rng.below(8) as i64)).collect();
@@ -209,9 +226,36 @@ async fn overlap_count(pool: &SqlitePool) -> i64 {
     total
 }
 
+/// Alan şefliği (`department`) için tetikleyicilerden bağımsız sorgu: iki
+/// FARKLI öğretmenin aynı dönemde örtüşen `department` aralığı sayısı.
+/// (`overlap_count` aynı öğretmenin satırlarına bakar; bu, öğretmenler arası
+/// kuralı denetler.)
+async fn department_overlap_count(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM teacher_load_periods a JOIN teacher_load_periods b
+           ON a.term = b.term AND a.teacher_id < b.teacher_id
+          AND a.chief_type = 'department' AND b.chief_type = 'department'
+          AND a.valid_from < COALESCE(b.valid_to, '9999-12-31')
+          AND b.valid_from < COALESCE(a.valid_to, '9999-12-31')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Sorgunun boş dönmesi, hiç `department` satırı yokken de doğru olurdu;
+/// bu yüzden dizinin bir noktasında gerçekten satır görüldüğü de sayılır.
+async fn department_row_count(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM teacher_load_periods WHERE chief_type = 'department'").fetch_one(pool).await.unwrap()
+}
+
 #[derive(Default)]
 struct Tally {
     committed: usize,
+    /// Commit edilen, `department` yapan `setTeacherLoad` sayısı.
+    committed_department_loads: usize,
+    /// Herhangi bir commit'ten sonra projeksiyonda görülen en fazla `department` satırı.
+    max_department_rows: i64,
     rejected: BTreeMap<String, usize>,
     /// Commit edilen komutların türü (`ChangeCommand`'ın varyant adı).
     committed_kinds: BTreeMap<String, usize>,
@@ -277,6 +321,15 @@ fn note_history_effect(command: &ChangeCommand, outcome: &ChangeOutcome, pools: 
     }
 }
 
+fn makes_department(command: &ChangeCommand) -> bool {
+    matches!(command, ChangeCommand::SetTeacherLoad { load, .. } if load.chief_type == ChiefType::Department)
+}
+
+async fn assert_single_department_per_day(pool: &SqlitePool, seed: u64, step: usize, tally: &mut Tally) {
+    assert_eq!(department_overlap_count(pool).await, 0, "dizi {seed}, adım {step}: aynı günde birden fazla alan şefi var");
+    tally.max_department_rows = tally.max_department_rows.max(department_row_count(pool).await);
+}
+
 async fn run_sequence(seed: u64, tally: &mut Tally) {
     let (w, mut pools) = sequence_world().await;
     let mut rng = Lcg(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(12345));
@@ -288,10 +341,12 @@ async fn run_sequence(seed: u64, tally: &mut Tally) {
         let outcome = run_step(&w, req, seed, step, tally).await;
         if matches!(outcome, ChangeOutcome::Committed { .. }) {
             *tally.committed_kinds.entry(variant_name(&command)).or_default() += 1;
+            tally.committed_department_loads += usize::from(makes_department(&command));
         }
         note_history_effect(&command, &outcome, &mut pools);
         assert_row_actions_were_applied(&w.pool, &command, &outcome, seed, step).await;
         assert_projection_is_consistent(&w.pool, seed, step).await;
+        assert_single_department_per_day(&w.pool, seed, step, tally).await;
     }
 }
 
@@ -314,6 +369,12 @@ async fn p6_random_command_sequences_keep_the_projection_consistent() {
     assert!(rejected * 10 >= total, "red oranı %10'un altında: {rejected}/{total}");
     // Zor yollar gerçekten koşmuş olmalı: geri alma, düzeltme, yerinde
     // işletme oluşturma, zincir etkisi doğuran nakil ve saat.
+    // Alan şefliği kuralı gerçekten sınanmış olmalı: `department` commit
+    // edilmiş, projeksiyonda görülmüş ve en az bir kez reddedilmiş olmalı
+    // (aksi hâlde "çakışma yok" değişmezi boş yere doğru olurdu).
+    assert!(tally.committed_department_loads > 0, "hiç department yükü commit edilmedi: {:?}", tally.committed_kinds);
+    assert!(tally.max_department_rows > 0, "projeksiyonda hiç department satırı görülmedi");
+    assert!(tally.rejected.get("ChiefAlreadyAssigned").copied().unwrap_or(0) > 0, "kural hiç tetiklenmedi: {:?}", tally.rejected);
     for kind in ["Revoke", "Correct", "TransferStudent", "CreateStudent", "SetCompanyHours", "AssignCoordinators", "SetTeacherLoad"] {
         assert!(tally.committed_kinds.get(kind).copied().unwrap_or(0) > 0, "hiç commit edilmemiş komut türü: {kind} ({:?})", tally.committed_kinds);
     }

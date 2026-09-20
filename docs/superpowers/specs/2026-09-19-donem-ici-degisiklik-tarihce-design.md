@@ -318,6 +318,7 @@ request = {
 | `hasHistory` | Kaydın geçmişi var, silinemez; pasif yapılabilir. |
 | `planningOnly` | Dönem başladı, bu işlem yalnız planlamada yapılabilir. |
 | `invalidRequest` | Komuttaki öğrenci, işletme, öğretmen ya da değişiklik kümesi yok; işletme pasif; ya da yerinde oluşturulması gereken satır oluşturulmamış. |
+| `chiefAlreadyAssigned` | Okulda aynı anda en fazla bir alan şefi (`department`) olabilir (okul tek alanla çalışıyor). Yalnız `department`'a geçiş denetlenir; `workshop_lab` sınırsızdır. `conflictingChangeSetIds`, diğer şefin şefliğini kuran kümeyi taşır. |
 
 **`ImpactSummary`:** `{effectiveDate, isPlanning, shadowedUntil | null, primary, automatic, warnings, notices}`
 

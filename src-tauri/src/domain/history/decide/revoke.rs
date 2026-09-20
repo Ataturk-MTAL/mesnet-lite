@@ -41,7 +41,11 @@ fn decide_replacement(ctx: &DecisionContext, req: &ChangeRequest, target_id: i64
         reason: req.reason.clone(),
         command: replacement.clone(),
     };
-    super::decide(&adjusted_ctx, &replacement_req)
+    // `dispatch`, `decide` DEĞİL: alan şefi kuralı (`chief.rs`) düzeltmenin NET
+    // sonucuna `decide` içinde bir kez uygulanır. Yerine geçen komutu hedef
+    // yokmuş gibi bir bağlamda ayrıca denetlemek, ayrılışı geri alıp şefliği
+    // sürdüren bir düzeltmeyi kaçırırdı (önceki durum zaten şeftir).
+    super::dispatch(&adjusted_ctx, &replacement_req)
 }
 
 /// Geri alma olaylarını ve yeni olayları TEK bir karara birleştirir; kümenin
