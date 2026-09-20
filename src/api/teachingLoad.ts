@@ -23,6 +23,13 @@ export interface TeachingLoadBoard {
   term: string
   rows: TeachingLoadRow[]
   /** Σ (haftalık ders saati × grup sayısı) — yalnızca KAYITLI satırlardan. */
+  branchHours: number
+  /**
+   * Alanın şeflerinin planlama-bakım-onarım saatleri toplamı
+   * (alan şefi 10, atölye/laboratuvar şefi 6).
+   */
+  chiefPlanningHours: number
+  /** Toplam havuz: `branchHours + chiefPlanningHours`. */
   poolHours: number
 }
 

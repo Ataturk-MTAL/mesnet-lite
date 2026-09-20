@@ -138,9 +138,11 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
         .unwrap_or(false);
     let cap = statutory_cap(institution_type, is_metropolitan);
 
-    // Havuz artık `settings` ayarlarından değil, döneme bağlı
-    // `term_branch_hours` tablosundan hesaplanır (bkz. migration 0005).
-    let pool_hours = teaching_load::pool_hours_for_term(pool, &term).await?;
+    // Havuz `settings` ayarlarından değil, döneme bağlı `term_branch_hours`
+    // (bkz. migration 0005) ile şeflik projeksiyonundan hesaplanır; şeflik
+    // saatleri dahil TAM havuzdur (OÖKY MADDE 88/2-ç).
+    let as_of = teaching_load::current_as_of(pool, &term).await?;
+    let pool_hours = teaching_load::total_pool_hours(pool, &term, as_of).await?;
 
     let mut board = AssignmentBoard {
         term: term.clone(),
@@ -453,6 +455,10 @@ pub async fn clear_assignments(state: State<'_, AppState>) -> AppResult<Assignme
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::init_pool;
+    use crate::db::teaching_load::TermBranchHoursInput;
+    use crate::db::teaching_load_test_support::{seed_teacher, TERM};
+    use crate::domain::models::ChiefType;
 
     fn settings_map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -520,5 +526,26 @@ mod tests {
         assert_eq!(parse_slot_key("bozuk"), None);
         assert_eq!(parse_slot_key("a-b"), None);
         assert_eq!(parse_slot_key(""), None);
+    }
+
+
+    /// Atama tahtasındaki havuz sayacı da TAM havuzdur: şeflik saatleri
+    /// (alan şefi 10) Σ(saat × grup)'a eklenir.
+    #[tokio::test]
+    async fn assignment_board_pool_includes_chief_hours() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        let row = TermBranchHoursInput {
+            grade: "12/C".into(),
+            branch: "Dal".into(),
+            weekly_hours: 24,
+            group_count: 2,
+        };
+        teaching_load::replace_for_term(&pool, TERM, &[row]).await.unwrap();
+        seed_teacher(&pool, "Alan", ChiefType::Department).await;
+
+        let board = load_board(&AppState { pool }).await.unwrap();
+
+        assert_eq!(board.pool_hours, 24 * 2 + 10);
     }
 }

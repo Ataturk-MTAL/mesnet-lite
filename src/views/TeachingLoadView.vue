@@ -39,7 +39,15 @@
       <template #content>
         <div class="summary">
           <div class="summary-item">
-            <div class="summary-value">{{ livePoolHours }}</div>
+            <div class="summary-value" data-test="branch-hours">{{ liveBranchHours }}</div>
+            <div class="summary-label">{{ labels.teachingLoad.branchHours }}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-value" data-test="chief-hours">{{ chiefPlanningHours }}</div>
+            <div class="summary-label">{{ labels.teachingLoad.chiefHours }}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-value" data-test="pool-hours">{{ livePoolHours }}</div>
             <div class="summary-label">{{ labels.teachingLoad.pool }}</div>
           </div>
         </div>
@@ -202,11 +210,16 @@ const isDirty = computed(() => {
   return saved.some((signature, index) => signature !== draft[index])
 })
 
-// Kaydedilene kadar sunucuya gitmeyen canlı toplam — kullanıcının asıl
-// merak ettiği havuz sayısı budur.
-const livePoolHours = computed(() =>
+// Kaydedilene kadar sunucuya gitmeyen canlı ders saati toplamı.
+const liveBranchHours = computed(() =>
   draftRows.value.reduce((sum, row) => sum + row.weeklyHours * row.groupCount, 0),
 )
+
+// Şeflik saatleri bu ekranda düzenlenmez; sunucudan geldiği gibi gösterilir.
+const chiefPlanningHours = computed(() => board.value?.chiefPlanningHours ?? 0)
+
+// Kullanıcının asıl merak ettiği toplam havuz: canlı ders saatleri + şeflik.
+const livePoolHours = computed(() => liveBranchHours.value + chiefPlanningHours.value)
 
 function rowClass(data: DraftRow): Record<string, boolean> {
   return { 'row-suggested': data.isSuggested }

@@ -1,4 +1,7 @@
+use crate::db::{teachers, terms};
+use crate::domain::terms::today_local;
 use crate::error::{AppError, AppResult};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
@@ -79,6 +82,83 @@ pub async fn pool_hours_for_term(pool: &SqlitePool, term: &str) -> AppResult<i64
     .fetch_one(pool)
     .await?;
     Ok(total.unwrap_or(0))
+}
+
+/// Koordinatörlük toplam ders yükü (havuz) iki kalemden oluşur; ekran ikisini
+/// ayrı göstermek için kırılımı da taşır.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolBreakdown {
+    /// Σ (haftalık ders saati × grup sayısı).
+    pub branch_hours: i64,
+    /// Alanın tüm şeflerinin planlama-bakım-onarım ek ders saatleri toplamı.
+    pub chief_planning_hours: i64,
+}
+
+impl PoolBreakdown {
+    pub fn total(self) -> i64 {
+        self.branch_hours + self.chief_planning_hours
+    }
+}
+
+/// `as_of` gününde geçerli şeflik aralığı olan AKTİF öğretmenlerin
+/// planlama-bakım-onarım ek ders saatleri toplamı.
+///
+/// OÖKY MADDE 88/2-ç ve Norm Kadro Yön. MADDE 6/4'e göre koordinatörlük
+/// toplam ders yükü, şeflerin bu saatleri ile Σ (haftalık ders saati × grup
+/// sayısı)'nın toplamıdır. Saat değerleri `ChiefType::weekly_hours`'tan gelir
+/// (alan şefi 10, atölye/laboratuvar şefi 6); burada sayı tekrarlanmaz.
+///
+/// Şeflik kaynağı `teacher_load_periods` projeksiyonudur, eski
+/// `teachers.chief_type` sütunu DEĞİL: `setTeacherLoad` artık yalnız
+/// projeksiyona yazar ve eski sütun bayatlar. Aralık yarı açıktır
+/// (`valid_from <= as_of < valid_to`); `valid_to` boşsa aralık açıktır.
+pub async fn chief_planning_hours(pool: &SqlitePool, term: &str, as_of: NaiveDate) -> AppResult<i64> {
+    let chief_types: Vec<String> = sqlx::query_scalar(
+        "SELECT p.chief_type
+         FROM teacher_load_periods p
+         JOIN teachers t ON t.id = p.teacher_id
+         WHERE p.term = ?1
+           AND t.is_active = 1
+           AND p.valid_from <= ?2
+           AND (p.valid_to IS NULL OR ?2 < p.valid_to)",
+    )
+    .bind(term)
+    .bind(as_of)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(chief_types
+        .iter()
+        .map(|raw| teachers::parse_chief_type(raw).weekly_hours())
+        .sum())
+}
+
+/// Havuzun kırılımı — havuz hesabının TEK noktası. Havuzu gösteren, dağıtan
+/// ya da aşım uyarısı veren her yer buradan geçer; böylece şeflik saati
+/// kuralı bir yerde unutulamaz.
+pub async fn pool_breakdown(pool: &SqlitePool, term: &str, as_of: NaiveDate) -> AppResult<PoolBreakdown> {
+    Ok(PoolBreakdown {
+        branch_hours: pool_hours_for_term(pool, term).await?,
+        chief_planning_hours: chief_planning_hours(pool, term, as_of).await?,
+    })
+}
+
+/// Tam havuz: şeflik saatleri + Σ (haftalık ders saati × grup sayısı).
+/// İşletme takdiri, otomatik dağıtım ve aşım uyarısı bu değer üzerinden
+/// çalışır; şeflik saati havuzdan çıkarılmaz.
+pub async fn total_pool_hours(pool: &SqlitePool, term: &str, as_of: NaiveDate) -> AppResult<i64> {
+    Ok(pool_breakdown(pool, term, as_of).await?.total())
+}
+
+/// Havuzun hesaplandığı gün: bugün (Europe/Istanbul), dönem aralığına
+/// sıkıştırılmış. Dönem başlamadıysa dönem başı, bittiyse dönem sonu
+/// geçerlidir; şeflik aralıkları dönem içinde tanımlı olduğu için dönem
+/// dışı bir gün asla sorgulanmaz. Dönem kaydı yoksa hata döner (havuzu
+/// sessizce 0 saymak yerine kullanıcıya dönemi seçmesi söylenir).
+pub async fn current_as_of(pool: &SqlitePool, term: &str) -> AppResult<NaiveDate> {
+    let mut conn = pool.acquire().await?;
+    let dates = terms::get_in(&mut conn, term).await?;
+    Ok(dates.default_as_of(today_local()))
 }
 
 fn validate(input: &TermBranchHoursInput) -> AppResult<()> {
@@ -188,7 +268,10 @@ pub async fn copy_term(pool: &SqlitePool, from_term: &str, to_term: &str) -> App
 mod tests {
     use super::*;
     use crate::db::{init_pool, students};
-    use crate::domain::models::NewStudent;
+    use crate::db::teaching_load_test_support::{
+        change_chief_type, deactivate_teacher, seed_teacher, ymd,
+    };
+    use crate::domain::models::{ChiefType, NewStudent};
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     const TERM: &str = "2026-2027/1";
@@ -379,6 +462,106 @@ mod tests {
                 ("12/D".to_string(), "Endüstriyel Bakım Onarım".to_string()),
             ]
         );
+    }
+
+    // --- Şeflik saatleri (MADDE 6/4, OÖKY MADDE 88/2-ç) ---
+
+    fn breakdown(branch_hours: i64, chief_planning_hours: i64) -> PoolBreakdown {
+        PoolBreakdown { branch_hours, chief_planning_hours }
+    }
+
+    /// Alan şefi 10 + atölye/lab şefi 6 saat, Σ(saat × grup)'a EKLENİR.
+    #[tokio::test]
+    async fn pool_adds_department_and_workshop_lab_chief_hours_to_branch_hours() {
+        let (_dir, pool) = test_pool().await;
+        replace_for_term(
+            &pool,
+            TERM,
+            &[row("12/C", "Dal A", 24, 2), row("12/D", "Dal B", 24, 1)],
+        )
+        .await
+        .unwrap();
+        seed_teacher(&pool, "Alan", ChiefType::Department).await;
+        seed_teacher(&pool, "Atolye", ChiefType::WorkshopLab).await;
+        seed_teacher(&pool, "Siradan", ChiefType::None).await;
+
+        let as_of = ymd(2026, 10, 1);
+
+        assert_eq!(chief_planning_hours(&pool, TERM, as_of).await.unwrap(), 10 + 6);
+        assert_eq!(pool_breakdown(&pool, TERM, as_of).await.unwrap(), breakdown(24 * 2 + 24, 16));
+        assert_eq!(total_pool_hours(&pool, TERM, as_of).await.unwrap(), 24 * 2 + 24 + 16);
+    }
+
+    /// Mevcut `pool_hours_for_term` yalnız Σ(saat × grup) olarak kalır.
+    #[tokio::test]
+    async fn branch_hours_sum_ignores_chiefs() {
+        let (_dir, pool) = test_pool().await;
+        replace_for_term(&pool, TERM, &[row("12/C", "Dal A", 24, 2)]).await.unwrap();
+        seed_teacher(&pool, "Alan", ChiefType::Department).await;
+
+        assert_eq!(pool_hours_for_term(&pool, TERM).await.unwrap(), 48);
+    }
+
+    #[tokio::test]
+    async fn pool_is_only_the_branch_sum_when_nobody_is_chief() {
+        let (_dir, pool) = test_pool().await;
+        replace_for_term(&pool, TERM, &[row("12/C", "Dal A", 24, 2)]).await.unwrap();
+        seed_teacher(&pool, "Siradan", ChiefType::None).await;
+
+        let as_of = ymd(2026, 10, 1);
+        assert_eq!(chief_planning_hours(&pool, TERM, as_of).await.unwrap(), 0);
+        assert_eq!(total_pool_hours(&pool, TERM, as_of).await.unwrap(), 48);
+    }
+
+    #[tokio::test]
+    async fn inactive_teachers_chief_hours_are_not_counted() {
+        let (_dir, pool) = test_pool().await;
+        seed_teacher(&pool, "Alan", ChiefType::Department).await;
+        let atolye = seed_teacher(&pool, "Atolye", ChiefType::WorkshopLab).await;
+        deactivate_teacher(&pool, atolye).await;
+
+        assert_eq!(chief_planning_hours(&pool, TERM, ymd(2026, 10, 1)).await.unwrap(), 10);
+    }
+
+    /// `valid_from <= as_of < valid_to`: aralığın başlangıç günü dahil, bitiş
+    /// günü hariçtir.
+    #[tokio::test]
+    async fn chief_hours_outside_the_validity_range_are_not_counted() {
+        let (_dir, pool) = test_pool().await;
+        let alan = seed_teacher(&pool, "Alan", ChiefType::Department).await; // 2026-09-01'den
+        change_chief_type(&pool, alan, ChiefType::None, ymd(2026, 11, 5)).await;
+
+        let hours = |d| chief_planning_hours(&pool, TERM, d);
+        assert_eq!(hours(ymd(2026, 8, 31)).await.unwrap(), 0, "aralıktan önce");
+        assert_eq!(hours(ymd(2026, 9, 1)).await.unwrap(), 10, "başlangıç günü dahil");
+        assert_eq!(hours(ymd(2026, 11, 4)).await.unwrap(), 10, "bitişten önceki gün");
+        assert_eq!(hours(ymd(2026, 11, 5)).await.unwrap(), 0, "bitiş günü hariç");
+    }
+
+    /// Şef değişince iki aralık ardışık olur; her gün doğru aralığı okumalı.
+    #[tokio::test]
+    async fn chief_change_gives_the_right_total_on_each_side_of_the_change_day() {
+        let (_dir, pool) = test_pool().await;
+        let alan = seed_teacher(&pool, "Alan", ChiefType::Department).await;
+        change_chief_type(&pool, alan, ChiefType::WorkshopLab, ymd(2026, 11, 5)).await;
+
+        let hours = |d| chief_planning_hours(&pool, TERM, d);
+        assert_eq!(hours(ymd(2026, 10, 1)).await.unwrap(), 10);
+        assert_eq!(hours(ymd(2026, 11, 5)).await.unwrap(), 6);
+        assert_eq!(hours(ymd(2027, 1, 31)).await.unwrap(), 6, "açık aralık (valid_to boş) dönem sonuna dek");
+    }
+
+    #[tokio::test]
+    async fn chief_hours_are_scoped_to_the_term() {
+        let (_dir, pool) = test_pool().await;
+        seed_teacher(&pool, "Alan", ChiefType::Department).await;
+
+        assert_eq!(chief_planning_hours(&pool, "2027-2028/1", ymd(2027, 10, 1)).await.unwrap(), 0);
+    }
+
+    #[test]
+    fn breakdown_total_is_the_sum_of_both_parts() {
+        assert_eq!(breakdown(72, 16).total(), 88);
     }
 
     /// Migration 0005, önceki dört göçün oluşturduğu eski iki-JSON ayarını

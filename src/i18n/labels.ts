@@ -144,8 +144,10 @@ export const labels = {
   teachingLoad: {
     title: 'Ders Yükü ve Havuz',
     subtitle:
-      'İşletme Saat Ayarlarından ÖNCE yapılır. Okulun ders yükü havuzu (MADDE 15/2) burada girilen sınıf/dal satırlarının toplamıdır: Σ (haftalık ders saati × grup sayısı).',
+      'İşletme Saat Ayarlarından ÖNCE yapılır. Okulun ders yükü havuzu (MADDE 15/2), burada girilen sınıf/dal satırlarının Σ (haftalık ders saati × grup sayısı) toplamı ile alan/atölye/laboratuvar şeflerinin planlama, bakım ve onarım saatlerinin toplamıdır (Norm Kadro Yön. md. 6/4).',
     pool: 'Toplam Havuz',
+    branchHours: 'Ders saatleri',
+    chiefHours: 'Şeflik saatleri',
     poolHint: 'Kaydedilmemiş satır değişiklikleri bu sayıya dahildir.',
     grade: 'Sınıf',
     branch: 'Dal',

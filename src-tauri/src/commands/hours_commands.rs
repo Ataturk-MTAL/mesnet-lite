@@ -4,6 +4,7 @@ use crate::db::teaching_load::{self, TermBranchHoursInput};
 use crate::db::{companies, company_hours, hour_rules, settings, students, AppState};
 use crate::domain::hour_distribution::{distribute, DistributionCandidate, DistributionOutcome};
 use crate::error::AppResult;
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use tauri::State;
@@ -39,7 +40,8 @@ pub struct HoursRow {
 pub struct HoursBoard {
     pub term: String,
     pub rows: Vec<HoursRow>,
-    /// Okulun ders yükü havuzu (MADDE 15/2). Ayar girilmemişse 0.
+    /// Koordinatörlük toplam ders yükü (havuz): şeflik saatleri + Σ (haftalık
+    /// ders saati × grup sayısı) (OÖKY MADDE 88/2-ç). Ayar girilmemişse 0.
     pub pool_hours: i64,
     /// Takdir edilenlerin toplamı.
     pub total_awarded: i64,
@@ -56,9 +58,10 @@ async fn load_board(state: &AppState) -> AppResult<HoursBoard> {
     let pool = &state.pool;
     let all_settings = settings::get_all(pool).await?;
     let term = all_settings.get("active_term").cloned().unwrap_or_default();
-    // Havuz artık `settings` ayarlarından değil, döneme bağlı
-    // `term_branch_hours` tablosundan hesaplanır (bkz. migration 0005).
-    let pool_hours = teaching_load::pool_hours_for_term(pool, &term).await?;
+    // Havuz `settings` ayarlarından değil, döneme bağlı `term_branch_hours`
+    // (bkz. migration 0005) ile şeflik projeksiyonundan hesaplanır.
+    let as_of = teaching_load::current_as_of(pool, &term).await?;
+    let pool_hours = teaching_load::total_pool_hours(pool, &term, as_of).await?;
 
     let all_companies = companies::list(pool).await?;
     let rules = hour_rules::list(pool).await?;
@@ -169,7 +172,18 @@ pub async fn auto_distribute_hours(
     rows: Vec<AutoDistributeRow>,
 ) -> AppResult<DistributionOutcome> {
     let term = settings::get_active_term(&state.pool).await?;
-    let pool_hours = teaching_load::pool_hours_for_term(&state.pool, &term).await?;
+    distribute_for_term(&state.pool, &term, rows).await
+}
+
+/// Şeflik saatleri dahil TAM havuzu paylaştırır: işletme takdiri havuzdan
+/// şeflik saati çıkarılmadan hesaplanır (işletme kararı).
+async fn distribute_for_term(
+    pool: &sqlx::SqlitePool,
+    term: &str,
+    rows: Vec<AutoDistributeRow>,
+) -> AppResult<DistributionOutcome> {
+    let as_of = teaching_load::current_as_of(pool, term).await?;
+    let pool_hours = teaching_load::total_pool_hours(pool, term, as_of).await?;
 
     let candidates: Vec<DistributionCandidate> = rows
         .into_iter()
@@ -208,9 +222,14 @@ pub struct TeachingLoadRow {
 pub struct TeachingLoadBoard {
     pub term: String,
     pub rows: Vec<TeachingLoadRow>,
+    /// Koordinatörlük toplam ders yükü: `branch_hours + chief_planning_hours`
+    /// (OÖKY MADDE 88/2-ç, Norm Kadro Yön. MADDE 6/4).
+    pub pool_hours: i64,
     /// Σ (haftalık ders saati × grup sayısı) — yalnızca KAYITLI satırlardan;
     /// öneri satırları henüz kaydedilmediği için havuza katkı vermez.
-    pub pool_hours: i64,
+    pub branch_hours: i64,
+    /// Alanın tüm şeflerinin planlama-bakım-onarım ek ders saatleri toplamı.
+    pub chief_planning_hours: i64,
 }
 
 /// Kayıtlı satırlarla öğrenci kayıtlarından türeyen öneri satırlarını
@@ -256,15 +275,18 @@ fn merge_with_suggestions(
 async fn build_teaching_load_board(
     pool: &sqlx::SqlitePool,
     term: &str,
+    as_of: NaiveDate,
 ) -> AppResult<TeachingLoadBoard> {
     let existing = teaching_load::list_for_term(pool, term).await?;
     let student_pairs = teaching_load::distinct_branches_from_students(pool, term).await?;
-    let pool_hours = teaching_load::pool_hours_for_term(pool, term).await?;
+    let breakdown = teaching_load::pool_breakdown(pool, term, as_of).await?;
 
     Ok(TeachingLoadBoard {
         term: term.to_string(),
         rows: merge_with_suggestions(existing, student_pairs),
-        pool_hours,
+        pool_hours: breakdown.total(),
+        branch_hours: breakdown.branch_hours,
+        chief_planning_hours: breakdown.chief_planning_hours,
     })
 }
 
@@ -273,7 +295,8 @@ async fn build_teaching_load_board(
 #[tauri::command]
 pub async fn get_teaching_load_board(state: State<'_, AppState>) -> AppResult<TeachingLoadBoard> {
     let term = settings::get_active_term(&state.pool).await?;
-    build_teaching_load_board(&state.pool, &term).await
+    let as_of = teaching_load::current_as_of(&state.pool, &term).await?;
+    build_teaching_load_board(&state.pool, &term, as_of).await
 }
 
 /// Aktif dönemin ders yükü satırlarını TAMAMEN değiştirir (kısmi güncelleme yok).
@@ -284,12 +307,17 @@ pub async fn save_teaching_load(
 ) -> AppResult<TeachingLoadBoard> {
     let term = settings::get_active_term(&state.pool).await?;
     teaching_load::replace_for_term(&state.pool, &term, &rows).await?;
-    build_teaching_load_board(&state.pool, &term).await
+    let as_of = teaching_load::current_as_of(&state.pool, &term).await?;
+    build_teaching_load_board(&state.pool, &term, as_of).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::init_pool;
+    use crate::db::teaching_load_test_support::{seed_teacher, ymd, TERM};
+    use crate::domain::models::ChiefType;
+    use sqlx::SqlitePool;
     use teaching_load::TermBranchHours;
 
     fn saved(id: i64, grade: &str, branch: &str, weekly: i64, groups: i64) -> TermBranchHours {
@@ -355,5 +383,87 @@ mod tests {
 
         assert_eq!(rows[0].grade, "12/C");
         assert_eq!(rows[1].grade, "12/D");
+    }
+
+    async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        (dir, pool)
+    }
+
+    /// 24×2 + 24×1 = 72 saatlik Σ ve alan şefi (10) + atölye şefi (6) = 16.
+    async fn pool_with_chiefs() -> (tempfile::TempDir, SqlitePool) {
+        let (dir, pool) = test_pool().await;
+        let input = |grade: &str, weekly, groups| TermBranchHoursInput {
+            grade: grade.into(),
+            branch: "Dal".into(),
+            weekly_hours: weekly,
+            group_count: groups,
+        };
+        teaching_load::replace_for_term(&pool, TERM, &[input("12/C", 24, 2), input("12/D", 24, 1)])
+            .await
+            .unwrap();
+        seed_teacher(&pool, "Alan", ChiefType::Department).await;
+        seed_teacher(&pool, "Atolye", ChiefType::WorkshopLab).await;
+        (dir, pool)
+    }
+
+    /// Ders yükü tahtası: `poolHours` toplamdır, iki kalemi ayrı da verir.
+    #[tokio::test]
+    async fn teaching_load_board_pool_is_branch_hours_plus_chief_hours() {
+        let (_dir, pool) = pool_with_chiefs().await;
+
+        let board = build_teaching_load_board(&pool, TERM, ymd(2026, 10, 1)).await.unwrap();
+
+        assert_eq!(board.branch_hours, 72);
+        assert_eq!(board.chief_planning_hours, 16);
+        assert_eq!(board.pool_hours, 88);
+        assert_eq!(board.branch_hours + board.chief_planning_hours, board.pool_hours);
+    }
+
+    /// İşletme takdir tahtası ve aşım uyarısı TAM havuza (şeflik dahil) bakar.
+    #[tokio::test]
+    async fn hours_board_pool_includes_chief_hours() {
+        let (_dir, pool) = pool_with_chiefs().await;
+
+        let board = load_board(&AppState { pool }).await.unwrap();
+
+        assert_eq!(board.pool_hours, 72 + 16);
+    }
+
+    /// Otomatik dağıtım tam havuzu paylaştırır: tek işletmenin tavanı havuzdan
+    /// büyükse dağıtılan saat şeflik dahil toplam havuza eşit olmalı.
+    #[tokio::test]
+    async fn auto_distribute_shares_the_full_pool_including_chief_hours() {
+        let (_dir, pool) = pool_with_chiefs().await;
+        let rows = vec![AutoDistributeRow {
+            company_id: 1,
+            max_hours: 1000,
+            student_count: 5,
+            is_locked: false,
+            current_awarded: 0,
+            is_honorary: false,
+        }];
+
+        let outcome = distribute_for_term(&pool, TERM, rows).await.unwrap();
+
+        assert_eq!(outcome.distributed_hours, 72 + 16);
+    }
+
+    /// Şeflik yokken havuz yalnız Σ(saat × grup); kayıtlı satırlar bozulmaz.
+    #[tokio::test]
+    async fn teaching_load_board_pool_is_only_the_branch_sum_without_chiefs() {
+        let (_dir, pool) = test_pool().await;
+        teaching_load::replace_for_term(
+            &pool,
+            TERM,
+            &[TermBranchHoursInput { grade: "12/C".into(), branch: "Dal".into(), weekly_hours: 24, group_count: 2 }],
+        )
+        .await
+        .unwrap();
+
+        let board = build_teaching_load_board(&pool, TERM, ymd(2026, 10, 1)).await.unwrap();
+
+        assert_eq!((board.branch_hours, board.chief_planning_hours, board.pool_hours), (48, 0, 48));
     }
 }

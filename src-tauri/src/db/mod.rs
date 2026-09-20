@@ -16,6 +16,8 @@ pub mod settings;
 pub mod students;
 pub mod teachers;
 pub mod teaching_load;
+#[cfg(test)]
+pub(crate) mod teaching_load_test_support;
 pub mod terms;
 
 /// Tauri yönetilen durumu. Komutlar veritabanı havuzuna buradan erişir.
