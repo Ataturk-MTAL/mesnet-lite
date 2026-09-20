@@ -44,10 +44,10 @@
               {{ labels.availability.historyEffectiveDate }}: {{ entry.effectiveDate }}
             </div>
             <div class="schedule-history-reason">{{ entry.reason }}</div>
-            <div class="schedule-history-meta">
-              {{ labels.changeHistory.actor }}: {{ entry.actor }} · {{ labels.changeHistory.recordedAt }}:
-              {{ entry.recordedAt }}
-            </div>
+          </div>
+          <div class="schedule-history-meta">
+            <span>{{ labels.changeHistory.actor }}: {{ entry.actor }}</span>
+            <span>{{ labels.changeHistory.recordedAt }}: {{ entry.recordedAt }}</span>
           </div>
 
           <template v-if="entry.changeSetId === activeEntryId">
@@ -302,8 +302,9 @@ watch(
   .schedule-history-body { transition: none; }
 }
 .schedule-history-effective { font-weight: 600; font-size: 0.9375rem; }
-.schedule-history-reason { font-size: 0.875rem; }
-.schedule-history-meta { color: var(--p-text-muted-color); font-size: 0.75rem; }
+.schedule-history-reason { font-size: 0.875rem; overflow-wrap: anywhere; }
+.schedule-history-meta { display: flex; flex-direction: column; gap: 0.125rem; color: var(--p-text-muted-color); font-size: 0.75rem; overflow-wrap: anywhere; }
+.schedule-history-item--muted .schedule-history-meta { opacity: 0.75; }
 .schedule-history-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .schedule-history-hint { color: var(--p-text-muted-color); font-size: 0.75rem; }
 .schedule-history-more { margin-top: 0.75rem; }

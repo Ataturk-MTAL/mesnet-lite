@@ -6,7 +6,7 @@
       <template #title>{{ labels.settings.schoolSection }}</template>
       <template #content>
         <div class="grid">
-          <div class="field">
+          <div class="field field--wide">
             <label for="school-name">{{ labels.settings.schoolName }}</label>
             <InputText id="school-name" v-model="form.schoolName" />
           </div>
@@ -76,7 +76,7 @@
         <div class="grid">
           <div class="field">
             <label for="day-start">{{ labels.settings.dayStartHour }}</label>
-            <InputNumber id="day-start" v-model="form.dayStartHour" :min="0" :max="23" />
+            <InputNumber id="day-start" v-model="form.dayStartHour" :min="0" :max="23" fluid />
           </div>
           <div class="field">
             <label for="max-daily-lessons">{{ labels.settings.maxDailyLessons }}</label>
@@ -85,6 +85,7 @@
               v-model="form.maxDailyLessons"
               :min="MIN_DAILY_LESSONS"
               :max="maxLessonsUpperBound"
+              fluid
               :aria-label="labels.settings.maxDailyLessons"
             />
             <small class="hint">{{ labels.settings.maxDailyLessonsHint }}</small>
@@ -259,8 +260,10 @@ onMounted(load)
 .page { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
 .page-title { font-size: 1.5rem; font-weight: 600; margin: 0; }
 .grid { display: flex; flex-wrap: wrap; gap: 1rem; }
-.field { display: flex; flex-direction: column; gap: 0.375rem; min-width: 16rem; }
-.field--inline { flex-direction: row; align-items: center; gap: 0.5rem; }
+.field { display: flex; flex-direction: column; gap: 0.375rem; flex: 1 1 16rem; max-width: 26rem; min-width: 0; }
+/* Okul adı uzun olabilir; diğer alanlardan geniş tutulur ki kırpılmasın. */
+.field--wide { flex-basis: 24rem; max-width: 40rem; }
+.field--inline { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 0.5rem; }
 label { font-size: 0.875rem; font-weight: 500; }
 .hint { color: var(--p-text-muted-color); font-size: 0.75rem; }
 .cap-note { margin-top: 1rem; }

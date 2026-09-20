@@ -70,7 +70,7 @@
             />
           </div>
 
-          <Message v-if="isCorrecting" severity="info" :closable="false" data-testid="availability-correcting-banner">
+          <Message v-if="isCorrecting" class="correcting-message" severity="info" :closable="false" data-testid="availability-correcting-banner">
             <div class="correcting-banner">
               <div class="correcting-text">
                 <strong>{{ labels.availability.correcting }}</strong>
@@ -548,6 +548,9 @@ onMounted(async () => {
 @media (min-width: 72rem) {
   .teacher-layout--with-history { grid-template-columns: minmax(0, 1fr) 22rem; }
 }
+/* Message metni içeriği kadar dar kalır; Vazgeç sağa yaslansın diye satırı doldurur. */
+.correcting-message { margin-top: 0.75rem; }
+.correcting-message :deep(.p-message-text) { flex: 1; }
 .correcting-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; width: 100%; }
 .correcting-text { display: flex; flex-direction: column; gap: 0.125rem; }
 

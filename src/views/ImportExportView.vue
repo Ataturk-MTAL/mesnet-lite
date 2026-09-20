@@ -128,26 +128,28 @@
       <template #title>{{ labels.nav.groupReports }}</template>
       <template #content>
         <div class="report-row">
-          <Button
-            :label="labels.reports.commissionMinutesPdf"
-            :aria-label="labels.reports.commissionMinutesPdf"
-            icon="pi pi-file-pdf"
-            severity="secondary"
-            outlined
-            data-testid="commission-minutes-pdf-button"
-            :loading="isPrintingMinutesPdf"
-            @click="exportCommissionMinutesPdf"
-          />
-          <Button
-            :label="labels.reports.commissionMinutesXlsx"
-            :aria-label="labels.reports.commissionMinutesXlsx"
-            icon="pi pi-file-excel"
-            severity="secondary"
-            outlined
-            data-testid="commission-minutes-xlsx-button"
-            :loading="isExportingMinutesXlsx"
-            @click="exportCommissionMinutesXlsx"
-          />
+          <div class="report-actions">
+            <Button
+              :label="labels.reports.commissionMinutesPdf"
+              :aria-label="labels.reports.commissionMinutesPdf"
+              icon="pi pi-file-pdf"
+              severity="secondary"
+              outlined
+              data-testid="commission-minutes-pdf-button"
+              :loading="isPrintingMinutesPdf"
+              @click="exportCommissionMinutesPdf"
+            />
+            <Button
+              :label="labels.reports.commissionMinutesXlsx"
+              :aria-label="labels.reports.commissionMinutesXlsx"
+              icon="pi pi-file-excel"
+              severity="secondary"
+              outlined
+              data-testid="commission-minutes-xlsx-button"
+              :loading="isExportingMinutesXlsx"
+              @click="exportCommissionMinutesXlsx"
+            />
+          </div>
           <small class="hint">{{ labels.reports.commissionMinutesNote }}</small>
         </div>
 
@@ -334,7 +336,10 @@ async function applyImport(): Promise<void> {
 .file-row { display: flex; align-items: center; gap: 1rem; }
 .file-input { display: none; }
 .file-name { font-size: 0.875rem; color: var(--p-text-muted-color); }
-.report-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.75rem; }
+.report-row { display: flex; flex-direction: column; align-items: flex-start; gap: 0.375rem; margin-bottom: 1rem; }
+.report-row:last-child { margin-bottom: 0; }
+.report-row .hint { margin-top: 0; }
+.report-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
 .hint { display: block; margin-top: 0.5rem; color: var(--p-text-muted-color); font-size: 0.75rem; }
 .policy-select { min-width: 12rem; }
 .muted { color: var(--p-text-muted-color); }
