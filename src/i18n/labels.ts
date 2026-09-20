@@ -151,6 +151,13 @@ export const labels = {
     branch: 'Dal',
     weeklyHours: 'Haftalık Ders Saati',
     groupCount: 'Grup Sayısı',
+    groupAuto: 'Otomatik',
+    groupManual: 'Elle',
+    groupResetToAuto: 'Otomatiğe dön',
+    groupCountNote:
+      "Grup sayısı, dönemdeki öğrenci sayısından Norm Kadro Yön. md. 22'ye göre otomatik hesaplanır. Değiştirirseniz 'Elle' olarak işaretlenir ve öğrenci sayısı değişse de korunur.",
+    groupCountNewRowHint:
+      'Yeni eklenen satırın grup sayısı geçici olarak 1 görünür; kaydedince öğrenci sayısına göre sunucu hesaplar ve tabloya yansır.',
     contribution: 'Havuza Katkı',
     status: 'Durum',
     suggested: 'Öneri',

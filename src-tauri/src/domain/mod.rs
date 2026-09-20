@@ -1,4 +1,5 @@
 pub mod allocation;
+pub mod group_count;
 pub mod hour_distribution;
 pub mod hour_rules;
 pub mod history;

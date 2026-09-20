@@ -1,6 +1,6 @@
 use crate::db::company_hours::HoursInput;
 use crate::db::hour_rules::select_narrowest;
-use crate::db::teaching_load::{self, TermBranchHoursInput};
+use crate::db::teaching_load::{self, BranchStudentCounts, TermBranchHoursInput};
 use crate::db::{companies, company_hours, hour_rules, settings, students, AppState};
 use crate::domain::hour_distribution::{distribute, DistributionCandidate, DistributionOutcome};
 use crate::error::AppResult;
@@ -209,7 +209,15 @@ pub struct TeachingLoadRow {
     pub grade: String,
     pub branch: String,
     pub weekly_hours: i64,
+    /// ETKİN grup sayısı: elle satırda saklanan değer, otomatik satırda
+    /// `auto_group_count` (havuz bu değerle hesaplanır).
     pub group_count: i64,
+    /// Öğrenci sayısından Norm Kadro Yön. MADDE 22/1-ç tablosuyla hesaplanan
+    /// grup sayısı. Satır elle olsa bile gösterilir; kullanıcı "otomatiğe
+    /// dön" derken neye döneceğini görür.
+    pub auto_group_count: i64,
+    /// Grup sayısı elle mi girildi? Elle değilse öğrenci sayısını izler.
+    pub is_group_manual: bool,
     /// Bu satır öğrenci kayıtlarından türetilen bir ÖNERİDİR, henüz
     /// kaydedilmedi — ekran kullanıcıya boru işaretli anahtarı elle
     /// yazdırmamak için bunu önceden doldurur.
@@ -225,8 +233,8 @@ pub struct TeachingLoadBoard {
     /// Koordinatörlük toplam ders yükü: `branch_hours + chief_planning_hours`
     /// (OÖKY MADDE 88/2-ç, Norm Kadro Yön. MADDE 6/4).
     pub pool_hours: i64,
-    /// Σ (haftalık ders saati × grup sayısı) — yalnızca KAYITLI satırlardan;
-    /// öneri satırları henüz kaydedilmediği için havuza katkı vermez.
+    /// Σ (haftalık ders saati × etkin grup sayısı) — yalnızca KAYITLI
+    /// satırlardan; öneri satırları henüz kaydedilmediği için havuza katkı vermez.
     pub branch_hours: i64,
     /// Alanın tüm şeflerinin planlama-bakım-onarım ek ders saatleri toplamı.
     pub chief_planning_hours: i64,
@@ -234,21 +242,27 @@ pub struct TeachingLoadBoard {
 
 /// Kayıtlı satırlarla öğrenci kayıtlarından türeyen öneri satırlarını
 /// birleştirir. Zaten kayıtlı bir (sınıf, dal) çifti için öneri EKLENMEZ.
+/// Etkin ve otomatik grup sayıları `student_counts`'tan hesaplanır; kural
+/// `teaching_load::effective_group_count`'ta durur, burada tekrarlanmaz.
 fn merge_with_suggestions(
     existing: Vec<teaching_load::TermBranchHours>,
     student_pairs: Vec<(String, String)>,
+    student_counts: &BranchStudentCounts,
 ) -> Vec<TeachingLoadRow> {
     let mut known: BTreeSet<(String, String)> = BTreeSet::new();
     let mut rows: Vec<TeachingLoadRow> = existing
         .into_iter()
         .map(|saved| {
             known.insert((saved.grade.clone(), saved.branch.clone()));
+            let auto = teaching_load::auto_group_count(student_counts, &saved.grade, &saved.branch);
             TeachingLoadRow {
                 id: Some(saved.id),
+                weekly_hours: saved.weekly_hours,
+                group_count: teaching_load::effective_group_count(&saved, auto),
+                auto_group_count: auto,
+                is_group_manual: saved.is_group_manual,
                 grade: saved.grade,
                 branch: saved.branch,
-                weekly_hours: saved.weekly_hours,
-                group_count: saved.group_count,
                 is_suggested: false,
             }
         })
@@ -258,12 +272,15 @@ fn merge_with_suggestions(
         if known.contains(&(grade.clone(), branch.clone())) {
             continue;
         }
+        let auto = teaching_load::auto_group_count(student_counts, &grade, &branch);
         rows.push(TeachingLoadRow {
             id: None,
             grade,
             branch,
             weekly_hours: 0,
-            group_count: 0,
+            group_count: auto,
+            auto_group_count: auto,
+            is_group_manual: false,
             is_suggested: true,
         });
     }
@@ -279,11 +296,12 @@ async fn build_teaching_load_board(
 ) -> AppResult<TeachingLoadBoard> {
     let existing = teaching_load::list_for_term(pool, term).await?;
     let student_pairs = teaching_load::distinct_branches_from_students(pool, term).await?;
+    let student_counts = teaching_load::branch_student_counts(pool, term).await?;
     let breakdown = teaching_load::pool_breakdown(pool, term, as_of).await?;
 
     Ok(TeachingLoadBoard {
         term: term.to_string(),
-        rows: merge_with_suggestions(existing, student_pairs),
+        rows: merge_with_suggestions(existing, student_pairs, &student_counts),
         pool_hours: breakdown.total(),
         branch_hours: breakdown.branch_hours,
         chief_planning_hours: breakdown.chief_planning_hours,
@@ -328,6 +346,7 @@ mod tests {
             branch: branch.into(),
             weekly_hours: weekly,
             group_count: groups,
+            is_group_manual: true,
             created_at: "2026-09-01T00:00:00Z".into(),
             updated_at: "2026-09-01T00:00:00Z".into(),
         }
@@ -336,7 +355,7 @@ mod tests {
     #[test]
     fn merge_marks_saved_rows_as_not_suggested() {
         let existing = vec![saved(1, "12/C", "Elektronik Haberleşme", 24, 2)];
-        let rows = merge_with_suggestions(existing, vec![]);
+        let rows = merge_with_suggestions(existing, vec![], &BranchStudentCounts::new());
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, Some(1));
@@ -349,6 +368,7 @@ mod tests {
         let rows = merge_with_suggestions(
             vec![],
             vec![("12/D".to_string(), "Endüstriyel Bakım Onarım".to_string())],
+            &BranchStudentCounts::new(),
         );
 
         assert_eq!(rows.len(), 1);
@@ -365,6 +385,7 @@ mod tests {
         let rows = merge_with_suggestions(
             existing,
             vec![("12/C".to_string(), "Elektronik Haberleşme".to_string())],
+            &BranchStudentCounts::new(),
         );
 
         assert_eq!(rows.len(), 1, "aynı çift için ikinci satır eklenmemeli");
@@ -379,6 +400,7 @@ mod tests {
                 ("12/D".to_string(), "Dal B".to_string()),
                 ("12/C".to_string(), "Dal A".to_string()),
             ],
+            &BranchStudentCounts::new(),
         );
 
         assert_eq!(rows[0].grade, "12/C");
@@ -399,6 +421,7 @@ mod tests {
             branch: "Dal".into(),
             weekly_hours: weekly,
             group_count: groups,
+            is_group_manual: true,
         };
         teaching_load::replace_for_term(&pool, TERM, &[input("12/C", 24, 2), input("12/D", 24, 1)])
             .await
@@ -457,7 +480,7 @@ mod tests {
         teaching_load::replace_for_term(
             &pool,
             TERM,
-            &[TermBranchHoursInput { grade: "12/C".into(), branch: "Dal".into(), weekly_hours: 24, group_count: 2 }],
+            &[TermBranchHoursInput { grade: "12/C".into(), branch: "Dal".into(), weekly_hours: 24, group_count: 2, is_group_manual: true }],
         )
         .await
         .unwrap();
@@ -465,5 +488,157 @@ mod tests {
         let board = build_teaching_load_board(&pool, TERM, ymd(2026, 10, 1)).await.unwrap();
 
         assert_eq!((board.branch_hours, board.chief_planning_hours, board.pool_hours), (48, 0, 48));
+    }
+
+    // --- Otomatik grup sayısı (Norm Kadro Yön. MADDE 22/1-ç, migration 0007) ---
+
+    fn counts(entries: &[(&str, &str, i64)]) -> BranchStudentCounts {
+        entries
+            .iter()
+            .map(|(grade, branch, n)| ((grade.to_string(), branch.to_string()), *n))
+            .collect()
+    }
+
+    fn auto_input(grade: &str, branch: &str, weekly: i64) -> TermBranchHoursInput {
+        TermBranchHoursInput {
+            grade: grade.into(),
+            branch: branch.into(),
+            weekly_hours: weekly,
+            group_count: 99, // otomatik satırda yok sayılmalı
+            is_group_manual: false,
+        }
+    }
+
+    async fn n_students(pool: &SqlitePool, grade: &str, branch: &str, count: usize) {
+        for _ in 0..count {
+            crate::db::students::create(
+                pool,
+                &crate::domain::models::NewStudent {
+                    first_name: "Test".into(),
+                    last_name: "Ogrenci".into(),
+                    student_no: None,
+                    grade: grade.into(),
+                    branch: branch.into(),
+                    company_id: None,
+                    submitted_at: None,
+                    term: TERM.into(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    /// Öneri satırı (kayıtsız): grup sayısı tablodan gelir, saat 0 kalır.
+    #[test]
+    fn merge_suggestion_carries_the_automatic_group_count_and_zero_hours() {
+        let rows = merge_with_suggestions(
+            vec![],
+            vec![("12/D".to_string(), "Dal B".to_string())],
+            &counts(&[("12/D", "Dal B", 17)]),
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].group_count, 2);
+        assert_eq!(rows[0].auto_group_count, 2);
+        assert!(!rows[0].is_group_manual);
+        assert_eq!(rows[0].weekly_hours, 0);
+    }
+
+    /// Otomatik kayıtlı satır: `groupCount` etkin (hesaplanan) değerdir,
+    /// saklanan önbellek değil.
+    #[test]
+    fn merge_automatic_saved_row_shows_the_computed_group_count_not_the_cache() {
+        let mut stored = saved(1, "12/C", "Dal A", 24, 1);
+        stored.is_group_manual = false;
+
+        let rows = merge_with_suggestions(vec![stored], vec![], &counts(&[("12/C", "Dal A", 20)]));
+
+        assert_eq!(rows[0].group_count, 2, "önbellek 1 ama 20 öğrenci ⇒ 2 grup");
+        assert_eq!(rows[0].auto_group_count, 2);
+        assert!(!rows[0].is_group_manual);
+    }
+
+    /// Elle kayıtlı satır: `groupCount` saklanan değerdir; `autoGroupCount`
+    /// yine tablodan hesaplanıp gösterilir ("otomatiğe dön" önizlemesi).
+    #[test]
+    fn merge_manual_saved_row_keeps_the_stored_count_and_still_reports_the_auto_one() {
+        let rows = merge_with_suggestions(
+            vec![saved(1, "12/C", "Dal A", 24, 3)],
+            vec![],
+            &counts(&[("12/C", "Dal A", 16)]),
+        );
+
+        assert_eq!(rows[0].group_count, 3);
+        assert_eq!(rows[0].auto_group_count, 1);
+        assert!(rows[0].is_group_manual);
+    }
+
+    /// Gerçek senaryo tahtada: 12/C 16 öğrenci, 12/D'de iki dal 7 ve 9 öğrenci,
+    /// hepsi otomatik, ders saati 24 ⇒ Σ 72; atölye şefi 6 ile toplam 78.
+    #[tokio::test]
+    async fn teaching_load_board_real_scenario_is_72_branch_hours_and_78_in_total() {
+        let (_dir, pool) = test_pool().await;
+        n_students(&pool, "12/C", "Elektronik Haberleşme", 16).await;
+        n_students(&pool, "12/D", "Endüstriyel Bakım Onarım", 7).await;
+        n_students(&pool, "12/D", "Bilişim Teknolojileri", 9).await;
+        teaching_load::replace_for_term(
+            &pool,
+            TERM,
+            &[
+                auto_input("12/C", "Elektronik Haberleşme", 24),
+                auto_input("12/D", "Endüstriyel Bakım Onarım", 24),
+                auto_input("12/D", "Bilişim Teknolojileri", 24),
+            ],
+        )
+        .await
+        .unwrap();
+        seed_teacher(&pool, "Atolye", ChiefType::WorkshopLab).await;
+
+        let board = build_teaching_load_board(&pool, TERM, ymd(2026, 10, 1)).await.unwrap();
+
+        assert_eq!((board.branch_hours, board.chief_planning_hours, board.pool_hours), (72, 6, 78));
+        assert!(board.rows.iter().all(|r| r.group_count == 1 && r.auto_group_count == 1));
+        assert!(board.rows.iter().all(|r| !r.is_group_manual && !r.is_suggested));
+    }
+
+    /// Kaydedilmemiş öneri satırı `autoGroupCount` ile dolar ama saati 0
+    /// olduğu için havuza katkı vermez.
+    #[tokio::test]
+    async fn suggested_rows_are_filled_with_the_auto_count_and_add_nothing_to_the_pool() {
+        let (_dir, pool) = test_pool().await;
+        n_students(&pool, "12/C", "Dal A", 20).await;
+
+        let board = build_teaching_load_board(&pool, TERM, ymd(2026, 10, 1)).await.unwrap();
+
+        assert_eq!(board.rows.len(), 1);
+        let suggested = &board.rows[0];
+        assert!(suggested.is_suggested && !suggested.is_group_manual);
+        assert_eq!((suggested.group_count, suggested.auto_group_count), (2, 2));
+        assert_eq!(suggested.weekly_hours, 0);
+        assert_eq!((board.branch_hours, board.pool_hours), (0, 0));
+    }
+
+    /// Otomatik kayıtlı satır tahtada öğrenci sayısını izler; elle satır izlemez.
+    #[tokio::test]
+    async fn board_shows_automatic_rows_following_students_and_manual_rows_fixed() {
+        let (_dir, pool) = test_pool().await;
+        n_students(&pool, "12/C", "Dal A", 16).await;
+        n_students(&pool, "12/D", "Dal B", 16).await;
+        let mut manual = auto_input("12/D", "Dal B", 24);
+        manual.is_group_manual = true;
+        manual.group_count = 3;
+        teaching_load::replace_for_term(&pool, TERM, &[auto_input("12/C", "Dal A", 24), manual])
+            .await
+            .unwrap();
+        n_students(&pool, "12/C", "Dal A", 1).await;
+        n_students(&pool, "12/D", "Dal B", 1).await;
+
+        let board = build_teaching_load_board(&pool, TERM, ymd(2026, 10, 1)).await.unwrap();
+
+        assert_eq!(board.rows[0].group_count, 2, "12/C otomatik: 17 öğrenci ⇒ 2");
+        assert_eq!(board.rows[1].group_count, 3, "12/D elle: 3 korunur");
+        assert_eq!(board.rows[1].auto_group_count, 2);
+        assert_eq!(board.branch_hours, 24 * 2 + 24 * 3);
     }
 }

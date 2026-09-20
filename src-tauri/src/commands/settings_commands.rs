@@ -298,6 +298,7 @@ mod tests {
                 branch: "Elektronik Haberleşme".into(),
                 weekly_hours: 24,
                 group_count: 2,
+                is_group_manual: true,
             }],
         )
         .await
@@ -332,6 +333,7 @@ mod tests {
                 branch: "Kaynak Dal".into(),
                 weekly_hours: 24,
                 group_count: 2,
+                is_group_manual: true,
             }],
         )
         .await
@@ -344,6 +346,7 @@ mod tests {
                 branch: "Zaten Var Olan Dal".into(),
                 weekly_hours: 10,
                 group_count: 1,
+                is_group_manual: true,
             }],
         )
         .await

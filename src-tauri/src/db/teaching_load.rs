@@ -1,16 +1,22 @@
 use crate::db::{teachers, terms};
+use crate::domain::group_count;
 use crate::domain::terms::today_local;
 use crate::error::{AppError, AppResult};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::collections::BTreeMap;
 
 /// Bir dönemdeki sınıf+dal için haftalık ders saati ve grup sayısı.
 ///
 /// Okulun ders yükü havuzu (MADDE 15/2) bu satırların toplamıdır:
-/// Σ (haftalık ders saati × grup sayısı). Saat ile grup sayısı TEK satırda
-/// durur; eski iki-JSON tasarımındaki anahtar eşleşmezliği (bkz. migration
-/// 0005) burada yapısal olarak imkânsızdır.
+/// Σ (haftalık ders saati × ETKİN grup sayısı). Saat ile grup sayısı TEK
+/// satırda durur; eski iki-JSON tasarımındaki anahtar eşleşmezliği (bkz.
+/// migration 0005) burada yapısal olarak imkânsızdır.
+///
+/// `group_count` her zaman etkin değer DEĞİLDİR: `is_group_manual` false ise
+/// etkin değer öğrenci sayısından okuma anında hesaplanır ve `group_count`
+/// yalnız önbellektir (bkz. migration 0007, `effective_group_count`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct TermBranchHours {
@@ -20,6 +26,8 @@ pub struct TermBranchHours {
     pub branch: String,
     pub weekly_hours: i64,
     pub group_count: i64,
+    /// Grup sayısı kullanıcı tarafından elle mi girildi (migration 0007)?
+    pub is_group_manual: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -31,11 +39,16 @@ pub struct TermBranchHoursInput {
     pub grade: String,
     pub branch: String,
     pub weekly_hours: i64,
+    /// Yalnız `is_group_manual` true iken anlamlıdır; otomatik satırda
+    /// istemcinin gönderdiği değer yok sayılır (kural tek yerde: sunucu).
     pub group_count: i64,
+    /// Eksikse false: eski istemciler ve otomatik satırlar bu değeri yollamaz.
+    #[serde(default)]
+    pub is_group_manual: bool,
 }
 
 const SELECT_COLUMNS: &str =
-    "id, term, grade, branch, weekly_hours, group_count, created_at, updated_at";
+    "id, term, grade, branch, weekly_hours, group_count, is_group_manual, created_at, updated_at";
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
@@ -53,17 +66,22 @@ pub async fn list_for_term(pool: &SqlitePool, term: &str) -> AppResult<Vec<TermB
         .await?)
 }
 
-/// Öğrenci kayıtlarından türeyen, o dönemde en az bir öğrencisi olan tüm
-/// (sınıf, dal) çiftleri. Ders yükü ekranı henüz satırı olmayan çiftler için
-/// öneri satırı göstermek üzere bunu kullanır — kullanıcı boru işaretli
-/// bileşik anahtarı elle yazmak zorunda kalmamalı.
-pub async fn distinct_branches_from_students(
+/// (sınıf, dal) çiftinin öğrenci sayısı. Anahtar, öğrenci kaydındaki metnin
+/// aynısıdır (büyük/küçük harf ve boşluk dahil): satırlarla eşleştirme de
+/// `merge_with_suggestions`'daki gibi birebir eşitliktir.
+pub type BranchStudentCounts = BTreeMap<(String, String), i64>;
+
+/// Öğrenci kayıtlarından türeyen (sınıf, dal, öğrenci sayısı) üçlüleri.
+/// Filtre TEK yerde durur: dönem eşleşir, sınıf ve dal boş değildir. Hem
+/// öneri satırları hem otomatik grup sayısı buradan beslenir.
+pub async fn student_counts_by_branch(
     pool: &SqlitePool,
     term: &str,
-) -> AppResult<Vec<(String, String)>> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT DISTINCT grade, branch FROM students
+) -> AppResult<Vec<(String, String, i64)>> {
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT grade, branch, COUNT(*) FROM students
          WHERE term = ?1 AND grade <> '' AND branch <> ''
+         GROUP BY grade, branch
          ORDER BY grade COLLATE NOCASE, branch COLLATE NOCASE",
     )
     .bind(term)
@@ -72,23 +90,71 @@ pub async fn distinct_branches_from_students(
     Ok(rows)
 }
 
-/// Dönemin ders yükü havuzu: Σ (haftalık ders saati × grup sayısı).
-/// Satır yoksa 0 döner; bu "sınırsız" değil "henüz tanımlanmamış" demektir.
-pub async fn pool_hours_for_term(pool: &SqlitePool, term: &str) -> AppResult<i64> {
-    let total: Option<i64> = sqlx::query_scalar(
-        "SELECT SUM(weekly_hours * group_count) FROM term_branch_hours WHERE term = ?1",
-    )
-    .bind(term)
-    .fetch_one(pool)
-    .await?;
-    Ok(total.unwrap_or(0))
+/// `student_counts_by_branch` sonucunu arama tablosuna çevirir.
+pub async fn branch_student_counts(pool: &SqlitePool, term: &str) -> AppResult<BranchStudentCounts> {
+    Ok(student_counts_by_branch(pool, term)
+        .await?
+        .into_iter()
+        .map(|(grade, branch, count)| ((grade, branch), count))
+        .collect())
+}
+
+/// Öğrenci kayıtlarından türeyen, o dönemde en az bir öğrencisi olan tüm
+/// (sınıf, dal) çiftleri. Ders yükü ekranı henüz satırı olmayan çiftler için
+/// öneri satırı göstermek üzere bunu kullanır — kullanıcı boru işaretli
+/// bileşik anahtarı elle yazmak zorunda kalmamalı.
+pub async fn distinct_branches_from_students(
+    pool: &SqlitePool,
+    term: &str,
+) -> AppResult<Vec<(String, String)>> {
+    Ok(student_counts_by_branch(pool, term)
+        .await?
+        .into_iter()
+        .map(|(grade, branch, _)| (grade, branch))
+        .collect())
+}
+
+/// Tabloya (Norm Kadro Yön. MADDE 22/1-ç) göre hesaplanan otomatik grup
+/// sayısı. Öğrencisi olmayan çift 0 grup verir.
+pub fn auto_group_count(counts: &BranchStudentCounts, grade: &str, branch: &str) -> i64 {
+    let students = counts
+        .get(&(grade.to_string(), branch.to_string()))
+        .copied()
+        .unwrap_or(0);
+    group_count::groups_for_grade(grade, students)
+}
+
+/// Havuzda ve ekranda kullanılan ETKİN grup sayısı: elle satırda saklanan
+/// değer, otomatik satırda öğrenci sayısından hesaplanan değer. Bu kural
+/// tek noktadadır; havuz da ekran da buradan geçer.
+pub fn effective_group_count(saved: &TermBranchHours, auto: i64) -> i64 {
+    if saved.is_group_manual {
+        saved.group_count
+    } else {
+        auto
+    }
+}
+
+/// Σ (haftalık ders saati × ETKİN grup sayısı). Satır yoksa 0 döner; bu
+/// "sınırsız" değil "henüz tanımlanmamış" demektir. Otomatik satırın etkin
+/// grup sayısı 0 olabilir (öğrencisiz şube havuza katkı vermez).
+pub async fn effective_branch_hours(pool: &SqlitePool, term: &str) -> AppResult<i64> {
+    let rows = list_for_term(pool, term).await?;
+    let counts = branch_student_counts(pool, term).await?;
+    Ok(rows
+        .iter()
+        .map(|saved| {
+            let auto = auto_group_count(&counts, &saved.grade, &saved.branch);
+            saved.weekly_hours * effective_group_count(saved, auto)
+        })
+        .sum())
 }
 
 /// Koordinatörlük toplam ders yükü (havuz) iki kalemden oluşur; ekran ikisini
 /// ayrı göstermek için kırılımı da taşır.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PoolBreakdown {
-    /// Σ (haftalık ders saati × grup sayısı).
+    /// Σ (haftalık ders saati × ETKİN grup sayısı); bkz. `effective_branch_hours`.
     pub branch_hours: i64,
     /// Alanın tüm şeflerinin planlama-bakım-onarım ek ders saatleri toplamı.
     pub chief_planning_hours: i64,
@@ -138,12 +204,12 @@ pub async fn chief_planning_hours(pool: &SqlitePool, term: &str, as_of: NaiveDat
 /// kuralı bir yerde unutulamaz.
 pub async fn pool_breakdown(pool: &SqlitePool, term: &str, as_of: NaiveDate) -> AppResult<PoolBreakdown> {
     Ok(PoolBreakdown {
-        branch_hours: pool_hours_for_term(pool, term).await?,
+        branch_hours: effective_branch_hours(pool, term).await?,
         chief_planning_hours: chief_planning_hours(pool, term, as_of).await?,
     })
 }
 
-/// Tam havuz: şeflik saatleri + Σ (haftalık ders saati × grup sayısı).
+/// Tam havuz: şeflik saatleri + Σ (haftalık ders saati × etkin grup sayısı).
 /// İşletme takdiri, otomatik dağıtım ve aşım uyarısı bu değer üzerinden
 /// çalışır; şeflik saati havuzdan çıkarılmaz.
 pub async fn total_pool_hours(pool: &SqlitePool, term: &str, as_of: NaiveDate) -> AppResult<i64> {
@@ -173,10 +239,25 @@ fn validate(input: &TermBranchHoursInput) -> AppResult<()> {
             "Haftalık ders saati sıfırdan büyük olmalı".into(),
         ));
     }
-    if input.group_count <= 0 {
+    // Otomatik satırda istemcinin grup sayısı zaten yok sayılır; 0 öğrenci de
+    // geçerlidir (öğrencisiz şube havuza 0 katar). Yalnız elle girilen değer
+    // doğrulanır.
+    if input.is_group_manual && input.group_count <= 0 {
         return Err(AppError::Validation("Grup sayısı en az 1 olmalı".into()));
     }
     Ok(())
+}
+
+/// Satıra yazılacak `group_count`. Elle satırda istemcinin değeridir.
+/// Otomatik satırda istemcinin değeri YOK SAYILIR: sunucu hesaplananı
+/// önbellek olarak yazar. Öğrencisiz satırda önbellek en az 1'dir (satır
+/// elle moda çevrilirse başlangıç değeri geçerli olsun); ETKİN değer yine
+/// okuma anında hesaplanır ve 0 olabilir.
+fn stored_group_count(row: &TermBranchHoursInput, counts: &BranchStudentCounts) -> i64 {
+    if row.is_group_manual {
+        return row.group_count;
+    }
+    auto_group_count(counts, &row.grade, &row.branch).max(1)
 }
 
 /// Bir dönemin ders yükü satırlarını TAMAMEN değiştirir.
@@ -205,6 +286,8 @@ pub async fn replace_for_term(
         }
     }
 
+    let counts = branch_student_counts(pool, term).await?;
+
     let mut tx = pool.begin().await?;
     let now = now_iso();
 
@@ -216,14 +299,16 @@ pub async fn replace_for_term(
     for row in rows {
         sqlx::query(
             "INSERT INTO term_branch_hours
-                (term, grade, branch, weekly_hours, group_count, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                (term, grade, branch, weekly_hours, group_count, is_group_manual,
+                 created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
         )
         .bind(term)
         .bind(&row.grade)
         .bind(&row.branch)
         .bind(row.weekly_hours)
-        .bind(row.group_count)
+        .bind(stored_group_count(row, &counts))
+        .bind(row.is_group_manual)
         .bind(&now)
         .execute(&mut *tx)
         .await?;
@@ -251,8 +336,9 @@ pub async fn copy_term(pool: &SqlitePool, from_term: &str, to_term: &str) -> App
     let now = now_iso();
     sqlx::query(
         "INSERT INTO term_branch_hours
-            (term, grade, branch, weekly_hours, group_count, created_at, updated_at)
-         SELECT ?1, grade, branch, weekly_hours, group_count, ?2, ?2
+            (term, grade, branch, weekly_hours, group_count, is_group_manual,
+             created_at, updated_at)
+         SELECT ?1, grade, branch, weekly_hours, group_count, is_group_manual, ?2, ?2
          FROM term_branch_hours WHERE term = ?3",
     )
     .bind(to_term)
@@ -274,20 +360,21 @@ mod tests {
     use crate::domain::models::{ChiefType, NewStudent};
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-    const TERM: &str = "2026-2027/1";
+    pub(super) const TERM: &str = "2026-2027/1";
 
-    async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
+    pub(super) async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
         let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
         (dir, pool)
     }
 
-    fn row(grade: &str, branch: &str, weekly: i64, groups: i64) -> TermBranchHoursInput {
+    pub(super) fn row(grade: &str, branch: &str, weekly: i64, groups: i64) -> TermBranchHoursInput {
         TermBranchHoursInput {
             grade: grade.into(),
             branch: branch.into(),
             weekly_hours: weekly,
             group_count: groups,
+            is_group_manual: true,
         }
     }
 
@@ -343,27 +430,6 @@ mod tests {
 
         assert_eq!(list_for_term(&pool, TERM).await.unwrap().len(), 1);
         assert_eq!(list_for_term(&pool, "2027-2028/1").await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn pool_hours_is_the_sum_of_weekly_hours_times_group_counts() {
-        let (_dir, pool) = test_pool().await;
-
-        replace_for_term(
-            &pool,
-            TERM,
-            &[row("12/C", "Dal A", 24, 2), row("12/D", "Dal B", 24, 1)],
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(pool_hours_for_term(&pool, TERM).await.unwrap(), 24 * 2 + 24);
-    }
-
-    #[tokio::test]
-    async fn pool_hours_is_zero_when_term_has_no_rows() {
-        let (_dir, pool) = test_pool().await;
-        assert_eq!(pool_hours_for_term(&pool, TERM).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -428,7 +494,7 @@ mod tests {
         assert_eq!(target[0].grade, "12/D", "mevcut kayıt korunmalı");
     }
 
-    async fn a_student(pool: &SqlitePool, grade: &str, branch: &str, term: &str) {
+    pub(super) async fn a_student(pool: &SqlitePool, grade: &str, branch: &str, term: &str) {
         students::create(
             pool,
             &NewStudent {
@@ -466,7 +532,7 @@ mod tests {
 
     // --- Şeflik saatleri (MADDE 6/4, OÖKY MADDE 88/2-ç) ---
 
-    fn breakdown(branch_hours: i64, chief_planning_hours: i64) -> PoolBreakdown {
+    pub(super) fn breakdown(branch_hours: i64, chief_planning_hours: i64) -> PoolBreakdown {
         PoolBreakdown { branch_hours, chief_planning_hours }
     }
 
@@ -490,16 +556,6 @@ mod tests {
         assert_eq!(chief_planning_hours(&pool, TERM, as_of).await.unwrap(), 10 + 6);
         assert_eq!(pool_breakdown(&pool, TERM, as_of).await.unwrap(), breakdown(24 * 2 + 24, 16));
         assert_eq!(total_pool_hours(&pool, TERM, as_of).await.unwrap(), 24 * 2 + 24 + 16);
-    }
-
-    /// Mevcut `pool_hours_for_term` yalnız Σ(saat × grup) olarak kalır.
-    #[tokio::test]
-    async fn branch_hours_sum_ignores_chiefs() {
-        let (_dir, pool) = test_pool().await;
-        replace_for_term(&pool, TERM, &[row("12/C", "Dal A", 24, 2)]).await.unwrap();
-        seed_teacher(&pool, "Alan", ChiefType::Department).await;
-
-        assert_eq!(pool_hours_for_term(&pool, TERM).await.unwrap(), 48);
     }
 
     #[tokio::test]
@@ -609,9 +665,10 @@ mod tests {
         let sql = std::fs::read_to_string("migrations/0005_term_branch_hours.sql").unwrap();
         sqlx::raw_sql(&sql).execute(&pool).await.unwrap();
 
-        let rows = sqlx::query_as::<_, TermBranchHours>(&format!(
-            "SELECT {SELECT_COLUMNS} FROM term_branch_hours ORDER BY grade"
-        ))
+        let rows = sqlx::query_as::<_, TermBranchHours>(
+            "SELECT id, term, grade, branch, weekly_hours, group_count, 0 AS is_group_manual,
+                    created_at, updated_at FROM term_branch_hours ORDER BY grade",
+        )
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -632,3 +689,6 @@ mod tests {
         assert_eq!(remaining, 0, "eski ayar anahtarları silinmeli");
     }
 }
+
+#[cfg(test)]
+mod auto_group_tests;

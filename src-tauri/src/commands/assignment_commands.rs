@@ -540,6 +540,7 @@ mod tests {
             branch: "Dal".into(),
             weekly_hours: 24,
             group_count: 2,
+            is_group_manual: true,
         };
         teaching_load::replace_for_term(&pool, TERM, &[row]).await.unwrap();
         seed_teacher(&pool, "Alan", ChiefType::Department).await;

@@ -203,6 +203,7 @@ mod tests {
                 branch: "Elektronik Haberleşme".into(),
                 weekly_hours: 24,
                 group_count: 2,
+                is_group_manual: true,
             }],
         )
         .await
@@ -228,6 +229,7 @@ mod tests {
                 branch: "Dal".into(),
                 weekly_hours: 20,
                 group_count: 1,
+                is_group_manual: true,
             }],
         )
         .await
@@ -240,6 +242,7 @@ mod tests {
                 branch: "Dal 2".into(),
                 weekly_hours: 20,
                 group_count: 1,
+                is_group_manual: true,
             }],
         )
         .await

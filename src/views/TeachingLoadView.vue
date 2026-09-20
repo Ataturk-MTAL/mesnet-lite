@@ -24,6 +24,9 @@
     </div>
 
     <Message severity="secondary" :closable="false">{{ labels.teachingLoad.subtitle }}</Message>
+    <Message severity="info" :closable="false" data-test="group-note">
+      {{ labels.teachingLoad.groupCountNote }}
+    </Message>
 
     <Message
       v-for="(error, index) in validationErrors"
@@ -61,12 +64,14 @@
       dataKey="key"
       stripedRows
       :rowClass="rowClass"
+      tableStyle="min-width: 50rem"
     >
       <template #empty>{{ labels.teachingLoad.empty }}</template>
 
-      <Column :header="labels.teachingLoad.grade">
+      <Column :header="labels.teachingLoad.grade" headerStyle="min-width: 6rem">
         <template #body="{ data }: { data: DraftRow }">
           <InputText
+            fluid
             :model-value="data.grade"
             :aria-label="labels.teachingLoad.grade"
             @update:model-value="(value: string | undefined) => updateRow(data.key, { grade: value ?? '' })"
@@ -74,9 +79,10 @@
         </template>
       </Column>
 
-      <Column :header="labels.teachingLoad.branch">
+      <Column :header="labels.teachingLoad.branch" headerStyle="min-width: 15rem; width: 36%">
         <template #body="{ data }: { data: DraftRow }">
           <InputText
+            fluid
             :model-value="data.branch"
             :aria-label="labels.teachingLoad.branch"
             @update:model-value="(value: string | undefined) => updateRow(data.key, { branch: value ?? '' })"
@@ -84,31 +90,54 @@
         </template>
       </Column>
 
-      <Column :header="labels.teachingLoad.weeklyHours">
+      <Column :header="labels.teachingLoad.weeklyHours" headerStyle="min-width: 8.5rem">
         <template #body="{ data }: { data: DraftRow }">
-          <InputNumber
-            :model-value="data.weeklyHours"
-            :min="0"
-            showButtons
-            buttonLayout="horizontal"
-            class="hours-input"
-            :aria-label="labels.teachingLoad.weeklyHours"
-            @update:model-value="(value: number | null) => updateRow(data.key, { weeklyHours: value ?? 0 })"
-          />
+          <div class="number-box">
+            <InputNumber
+              fluid
+              :model-value="data.weeklyHours"
+              :min="0"
+              showButtons
+              :aria-label="labels.teachingLoad.weeklyHours"
+              @update:model-value="(value: number | null) => updateRow(data.key, { weeklyHours: value ?? 0 })"
+            />
+          </div>
         </template>
       </Column>
 
-      <Column :header="labels.teachingLoad.groupCount">
+      <Column :header="labels.teachingLoad.groupCount" headerStyle="min-width: 8.5rem">
         <template #body="{ data }: { data: DraftRow }">
-          <InputNumber
-            :model-value="data.groupCount"
-            :min="0"
-            showButtons
-            buttonLayout="horizontal"
-            class="hours-input"
-            :aria-label="labels.teachingLoad.groupCount"
-            @update:model-value="(value: number | null) => updateRow(data.key, { groupCount: value ?? 0 })"
-          />
+          <div class="group-cell">
+            <div class="number-box">
+              <InputNumber
+                fluid
+                :model-value="data.groupCount"
+                :min="0"
+                showButtons
+                :aria-label="labels.teachingLoad.groupCount"
+                @update:model-value="(value: number | null) => setGroupCount(data.key, value ?? 0)"
+              />
+            </div>
+            <div class="group-meta">
+              <Tag
+                :value="data.isGroupManual ? labels.teachingLoad.groupManual : labels.teachingLoad.groupAuto"
+                :severity="data.isGroupManual ? 'warn' : 'secondary'"
+                data-test="group-mode"
+              />
+              <Button
+                v-if="data.isGroupManual"
+                icon="pi pi-undo"
+                severity="secondary"
+                text
+                rounded
+                size="small"
+                data-test="group-reset"
+                :aria-label="labels.teachingLoad.groupResetToAuto"
+                v-tooltip.top="labels.teachingLoad.groupResetToAuto"
+                @click="resetGroupToAuto(data.key)"
+              />
+            </div>
+          </div>
         </template>
       </Column>
 
@@ -145,6 +174,10 @@
       </Column>
     </DataTable>
 
+    <small v-if="hasNewRows" class="hint" data-test="new-row-hint">
+      {{ labels.teachingLoad.groupCountNewRowHint }}
+    </small>
+
     <div class="footer-actions">
       <span class="muted">{{ labels.teachingLoad.savedHint }}</span>
       <RouterLink to="/company-hours">
@@ -175,7 +208,12 @@ import { activeTerm } from '../composables/useTerm'
  *  string gerekir. */
 interface DraftRow extends TeachingLoadRow {
   key: string
+  /** "Satır Ekle" ile eklendi, henüz kaydedilmedi; grup sayısını sunucu hesaplayacak. */
+  isNew: boolean
 }
+
+/** Yeni satırın geçici grup sayısı — sunucu kaydedince gerçek değeri hesaplar. */
+const NEW_ROW_PLACEHOLDER_GROUPS = 1
 
 const toast = useToast()
 const confirm = useConfirm()
@@ -194,13 +232,18 @@ function nextKey(): string {
 }
 
 function toDraftRows(rows: TeachingLoadRow[]): DraftRow[] {
-  return rows.map((row) => ({ ...row, key: nextKey() }))
+  return rows.map((row) => ({ ...row, key: nextKey(), isNew: false }))
 }
 
 /** Sıra bağımsız karşılaştırma imzası — satır kimliği yerine içeriğe bakar,
  *  çünkü kullanıcı sınıf/dal metnini de değiştirebilir. */
-function rowSignature(row: Pick<TeachingLoadRow, 'grade' | 'branch' | 'weeklyHours' | 'groupCount'>): string {
-  return `${row.grade.trim().toLocaleLowerCase('tr')}|${row.branch.trim().toLocaleLowerCase('tr')}|${row.weeklyHours}|${row.groupCount}`
+function rowSignature(
+  row: Pick<TeachingLoadRow, 'grade' | 'branch' | 'weeklyHours' | 'groupCount' | 'isGroupManual'>,
+): string {
+  const grade = row.grade.trim().toLocaleLowerCase('tr')
+  const branch = row.branch.trim().toLocaleLowerCase('tr')
+  const groups = row.isGroupManual ? `manual:${row.groupCount}` : 'auto'
+  return `${grade}|${branch}|${row.weeklyHours}|${groups}`
 }
 
 const isDirty = computed(() => {
@@ -209,6 +252,8 @@ const isDirty = computed(() => {
   if (saved.length !== draft.length) return true
   return saved.some((signature, index) => signature !== draft[index])
 })
+
+const hasNewRows = computed(() => draftRows.value.some((row) => row.isNew))
 
 // Kaydedilene kadar sunucuya gitmeyen canlı ders saati toplamı.
 const liveBranchHours = computed(() =>
@@ -230,14 +275,44 @@ function showError(error: unknown): void {
   toast.add({ severity: 'error', summary: labels.common.error, detail, life: 8000 })
 }
 
-function updateRow(key: string, patch: Partial<Omit<DraftRow, 'key' | 'id' | 'isSuggested'>>): void {
+type RowPatch = Partial<Pick<DraftRow, 'grade' | 'branch' | 'weeklyHours'>>
+
+function patchRow(key: string, patch: Partial<DraftRow>): void {
   draftRows.value = draftRows.value.map((row) => (row.key === key ? { ...row, ...patch } : row))
+}
+
+function updateRow(key: string, patch: RowPatch): void {
+  patchRow(key, patch)
+}
+
+/** Sayı gerçekten değişince satır elle işaretlenir; değer aynıysa hiçbir şey yazılmaz. */
+function setGroupCount(key: string, value: number): void {
+  const current = draftRows.value.find((row) => row.key === key)
+  if (!current || current.groupCount === value) return
+  patchRow(key, { groupCount: value, isGroupManual: true })
+}
+
+function resetGroupToAuto(key: string): void {
+  const current = draftRows.value.find((row) => row.key === key)
+  if (!current) return
+  patchRow(key, { groupCount: current.autoGroupCount, isGroupManual: false })
 }
 
 function addRow(): void {
   draftRows.value = [
     ...draftRows.value,
-    { key: nextKey(), id: null, grade: '', branch: '', weeklyHours: 0, groupCount: 0, isSuggested: false },
+    {
+      key: nextKey(),
+      id: null,
+      grade: '',
+      branch: '',
+      weeklyHours: 0,
+      groupCount: NEW_ROW_PLACEHOLDER_GROUPS,
+      autoGroupCount: NEW_ROW_PLACEHOLDER_GROUPS,
+      isGroupManual: false,
+      isSuggested: false,
+      isNew: true,
+    },
   ]
 }
 
@@ -314,6 +389,7 @@ async function save(): Promise<void> {
       branch: row.branch.trim(),
       weeklyHours: row.weeklyHours,
       groupCount: row.groupCount,
+      isGroupManual: row.isGroupManual,
     }))
     applyBoard(await teachingLoadApi.save(payload))
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
@@ -375,7 +451,9 @@ onMounted(load)
 .summary-value { font-size: 1.5rem; font-weight: 700; line-height: 1.1; }
 .summary-label { font-size: 0.8125rem; color: var(--p-text-muted-color); margin-top: 0.125rem; }
 
-.hours-input { width: 9rem; }
+.number-box { width: 6.5rem; }
+.group-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 0.25rem; }
+.group-meta { display: flex; align-items: center; gap: 0.25rem; }
 .hint { display: block; margin-top: 0.5rem; color: var(--p-text-muted-color); }
 .muted { color: var(--p-text-muted-color); font-size: 0.8125rem; }
 .footer-actions {

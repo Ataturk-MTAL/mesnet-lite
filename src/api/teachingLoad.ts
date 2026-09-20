@@ -10,7 +10,12 @@ export interface TeachingLoadRow {
   grade: string
   branch: string
   weeklyHours: number
+  /** Etkin grup sayısı: elle girilmişse o değer, değilse tabloya göre hesaplanan. */
   groupCount: number
+  /** Öğrenci sayısından Norm Kadro Yön. md. 22 tablosuyla hesaplanan grup sayısı. */
+  autoGroupCount: number
+  /** `true` ise grup sayısı kullanıcı tarafından elle girilmiştir ve korunur. */
+  isGroupManual: boolean
   /**
    * `true` ise bu satır o dönemin ÖĞRENCİ kayıtlarından türetildi, henüz
    * kaydedilmedi (`id === null`, `weeklyHours`/`groupCount` sıfır).
@@ -39,6 +44,8 @@ export interface TeachingLoadInput {
   branch: string
   weeklyHours: number
   groupCount: number
+  /** `false` ise sunucu `groupCount`'u yok sayar ve kendi hesabını kullanır. */
+  isGroupManual: boolean
 }
 
 export const teachingLoadApi = {
