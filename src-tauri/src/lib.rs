@@ -66,6 +66,12 @@ pub fn run() {
             commands::availability_commands::save_teacher_availability,
             commands::availability_commands::save_class_days,
             commands::availability_commands::copy_schedule_from_term,
+            commands::history_commands::preview_change,
+            commands::history_commands::commit_change,
+            commands::history_commands::list_history,
+            commands::history_commands::get_subject_history,
+            commands::term_commands::list_terms_with_dates,
+            commands::term_commands::update_term_dates,
         ])
         .run(tauri::generate_context!())
         .expect("Uygulama başlatılamadı");
