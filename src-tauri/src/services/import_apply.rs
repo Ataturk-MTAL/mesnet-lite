@@ -378,21 +378,17 @@ mod tests {
         assert_eq!(students::list(&pool).await.unwrap().len(), 1);
     }
 
-    /// Gerçek JotForm dışa aktarımını baştan sona içe aktarır.
-    /// Dosya depoda yoksa test atlanır, böylece CSV olmadan da `cargo test` yeşil kalır.
+    /// Gerçek JotForm dışa aktarımını baştan sona içe aktarır. Dosya
+    /// `data/` klasöründe yoksa test atlanır (depoya commit edilmez, bkz.
+    /// `.gitignore`: `/data`), böylece CSV olmadan da `cargo test` yeşil
+    /// kalır — ama atlama `real_export_fixture::find_real_export` içinde
+    /// `eprintln!` ile açıkça bildirilir.
     #[tokio::test]
     async fn imports_the_real_jotform_export_end_to_end() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-
-        let Some(csv_path) = std::fs::read_dir(&root).ok().and_then(|entries| {
-            entries
-                .flatten()
-                .map(|e| e.path())
-                .find(|p| p.extension().is_some_and(|e| e == "csv"))
-        }) else {
+        let Some(csv_path) = crate::services::real_export_fixture::find_real_export(
+            "csv",
+            "ATLANDI: data/ klasöründe gerçek JotForm CSV'si yok",
+        ) else {
             return;
         };
 

@@ -10,3 +10,4 @@
 # Tauri / Node
 /dist/
 /src-tauri/gen/
+/data

@@ -306,21 +306,17 @@ mod tests {
         assert!(parsed.errors[0].contains("işletme adı boş"));
     }
 
-    /// Gerçek JotForm dışa aktarımına karşı doğrulama. Dosya depoda yoksa test atlanır,
-    /// böylece CSV olmadan da `cargo test` yeşil kalır.
+    /// Gerçek JotForm dışa aktarımına karşı doğrulama. Dosya `data/`
+    /// klasöründe yoksa test atlanır (depoya commit edilmez, bkz.
+    /// `.gitignore`: `/data`), böylece CSV olmadan da `cargo test` yeşil
+    /// kalır — ama atlama `real_export_fixture::find_real_export` içinde
+    /// `eprintln!` ile açıkça bildirilir.
     #[test]
     fn parses_the_real_jotform_export_when_present() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-
-        let Some(csv_path) = std::fs::read_dir(&root).ok().and_then(|entries| {
-            entries
-                .flatten()
-                .map(|e| e.path())
-                .find(|p| p.extension().is_some_and(|e| e == "csv"))
-        }) else {
+        let Some(csv_path) = crate::services::real_export_fixture::find_real_export(
+            "csv",
+            "ATLANDI: data/ klasöründe gerçek JotForm CSV'si yok",
+        ) else {
             return;
         };
 
