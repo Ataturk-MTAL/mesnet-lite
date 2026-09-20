@@ -99,8 +99,6 @@ export const labels = {
     branchesHint: 'Öğretmenin koordinatörlük yapabileceği dallar. Yazıp Enter ile ekleyin.',
     capacityWarning:
       'Azami ek ders, şeflik saatinden küçük olamaz. Şeflik saati bu tavanın içinden düşer (MADDE 6/4).',
-    totalCapacity: 'Toplam koordinatörlük kapasitesi',
-    activeTeachers: 'aktif öğretmen',
     deleteConfirm: 'Bu öğretmeni silmek istediğinize emin misiniz? Atamaları da silinir.',
   },
   chiefType: {
@@ -253,6 +251,21 @@ export const labels = {
     copiedPartial: 'Kısmen kopyalandı: bu dönemde zaten kayıt olan tür atlandı.',
     noTeachers: 'Aktif öğretmen yok.',
     noClasses: 'Bu dönemde öğrenci kaydı yok.',
+    historyTitle: 'Program Geçmişi',
+    historyEmpty: 'Bu öğretmen için kayıtlı program değişikliği yok.',
+    historyEffectiveDate: 'Yürürlük',
+    historyActiveBadge: 'Etkin',
+    historyRevocationBadge: 'Geri Alma Kaydı',
+    historyCorrectionBadge: 'Düzeltme',
+    historyEdit: 'Düzenle',
+    historyDelete: 'Geçmişten Sil',
+    historyNotRevocableHint:
+      'Bu değişiklik geri alınamıyor; örneğin önceki aya düşen değişiklikler geri alınamaz.',
+    historyDeleteConfirm: 'Bu değişiklik geçmişten silinsin mi? Öğretmen bir önceki program durumuna döner.',
+    correcting: 'Son değişiklik düzeltiliyor',
+    correctingHint: 'Izgarayı düzenleyip kaydedin; yürürlük tarihi ve gerekçe kaydederken sorulur.',
+    cancelCorrection: 'Vazgeç',
+    saveCorrection: 'Düzeltmeyi Kaydet',
   },
   reports: {
     commissionMinutesPdf: 'Komisyon Tutanağı (PDF)',
@@ -361,8 +374,9 @@ export const labels = {
       'Okul konumu mesafe hesabında kullanılmaz; harita odağı ve dağıtım önerisinde kümeleme referansıdır.',
     dayRangeSection: 'Gün Aralığı',
     dayStartHour: 'Gün Başlangıç Saati',
-    dayEndHour: 'Gün Bitiş Saati',
-    dayRangeInvalid: 'Bitiş saati başlangıç saatinden büyük olmalı.',
+    maxDailyLessons: 'Günlük Azami Ders Saati Sayısı',
+    maxDailyLessonsHint: 'Izgara ve tablolar başlangıç saatinden itibaren bu kadar saat gösterir.',
+    maxDailyLessonsInvalid: "Ders saati sayısı en az 1 olmalı; başlangıç saati ile toplamı 24'ü aşamaz.",
   },
   termManagement: {
     title: 'Dönem Yönetimi',
@@ -470,6 +484,7 @@ export const labels = {
     reason: 'Gerekçe',
     reasonPlaceholder: 'Bu değişikliğin gerekçesini yazın',
     reasonRequired: 'Gerekçe girilmeden kaydedilemez.',
+    changeDetailsTitle: 'Değişikliği Kaydet',
     useSuggestedDate: "Ayın 1'inden gir",
     previousMonthClosedHint: (firstOfMonth: string) =>
       `Bu ayın puantajı ilçeye gönderildi; en erken ${firstOfMonth} ile girebilirsiniz.`,

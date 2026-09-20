@@ -5,12 +5,6 @@
       <Button :label="labels.common.add" icon="pi pi-plus" @click="openCreate" />
     </div>
 
-    <Message v-if="teachers.length > 0" severity="info" :closable="false">
-      {{ labels.teacher.totalCapacity }}: <strong>{{ totalCapacity }}</strong>
-      {{ labels.settings.hoursPerWeek }} —
-      {{ activeCount }} {{ labels.teacher.activeTeachers }}
-    </Message>
-
     <DataTable
       :value="teachers"
       :loading="isLoading"
@@ -106,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import TeacherFormDialog from '../components/teacher/TeacherFormDialog.vue'
@@ -132,13 +126,6 @@ const selected = ref<TeacherWithCapacity | null>(null)
 const term = ref<TermWithDates | null>(null)
 const isLoadDialogOpen = ref(false)
 const loadSelected = ref<TeacherWithCapacity | null>(null)
-
-const activeCount = computed(() => teachers.value.filter((t) => t.isActive === 1).length)
-
-// Yalnızca aktif öğretmenler dağıtıma girer; toplam kapasite onlardan hesaplanır.
-const totalCapacity = computed(() =>
-  teachers.value.filter((t) => t.isActive === 1).reduce((sum, t) => sum + t.capacity, 0),
-)
 
 function capacityPercent(teacher: TeacherWithCapacity): number {
   if (teacher.statutoryCap <= 0) return 0

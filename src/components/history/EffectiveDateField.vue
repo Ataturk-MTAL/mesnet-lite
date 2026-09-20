@@ -12,7 +12,7 @@
       :aria-label="label"
       data-testid="effective-date-picker"
     />
-    <small v-if="isEmpty" class="field-error">{{ labels.effectiveDateField.required }}</small>
+    <small v-if="isEmpty && showError" class="field-error">{{ labels.effectiveDateField.required }}</small>
     <small v-else class="hint">{{ labels.effectiveDateField.hint(term.earliestAllowedDate) }}</small>
   </div>
 </template>
@@ -23,12 +23,17 @@ import { labels } from '../../i18n/labels'
 import type { TermWithDates } from '../../types/models'
 import { dateToIso, isoToDate, type DatePickerModelValue } from '../../utils/isoDate'
 
-const props = defineProps<{
-  modelValue: string | null
-  /** Çözülmüş etiket metni; anahtar değil. Çağıran `labels.effectiveDateField.*`'ten seçip geçirir. */
-  label: string
-  term: TermWithDates
-}>()
+const props = withDefaults(
+  defineProps<{
+    modelValue: string | null
+    /** Çözülmüş etiket metni; anahtar değil. Çağıran `labels.effectiveDateField.*`'ten seçip geçirir. */
+    label: string
+    term: TermWithDates
+    /** Alan boşken "zorunludur" uyarısını gösterir; çağıran, kullanıcı denemeden önce `false` verebilir. */
+    showError?: boolean
+  }>(),
+  { showError: true },
+)
 
 const emit = defineEmits<{ 'update:modelValue': [value: string | null] }>()
 

@@ -18,8 +18,9 @@
       {{ warning }}
     </Message>
 
-    <!-- Öğretmen boş saatleri -->
-    <Card>
+    <!-- Öğretmen boş saatleri (solda) ve program geçmişi (sağda; dar ekranda altta) -->
+    <div class="teacher-layout" :class="{ 'teacher-layout--with-history': showHistory }">
+    <Card class="teacher-card">
       <template #title>{{ labels.availability.teacherSection }}</template>
       <template #content>
         <div v-if="(board?.teachers.length ?? 0) === 0" class="empty">
@@ -60,32 +61,32 @@
               @click="clearAllSlots"
             />
             <Button
-              :label="labels.availability.saveTeacher"
+              :label="isCorrecting ? labels.availability.saveCorrection : labels.availability.saveTeacher"
               icon="pi pi-check"
-              :disabled="!selectedTeacher || !teacherDirty || !canSaveTeacherSchedule"
+              :disabled="!canSaveTeacher"
               :loading="isSavingTeacher"
               data-testid="availability-save-teacher-button"
               @click="saveTeacher"
             />
           </div>
 
-          <!-- Dönem başladıysa program değişikliği tarihçeye yazılır; yürürlük
-               tarihi ve gerekçe istenir. EffectiveDateField planlamada zaten gizlenir. -->
-          <div v-if="term && !term.isPlanning" class="schedule-change-fields">
-            <EffectiveDateField v-model="scheduleEffectiveDate" :label="labels.effectiveDateField.generic" :term="term" />
-            <div class="field">
-              <label for="availability-reason">{{ labels.history.reason }}</label>
-              <Textarea
-                id="availability-reason"
-                v-model="scheduleReason"
-                rows="2"
-                :placeholder="labels.history.reasonPlaceholder"
+          <Message v-if="isCorrecting" severity="info" :closable="false" data-testid="availability-correcting-banner">
+            <div class="correcting-banner">
+              <div class="correcting-text">
+                <strong>{{ labels.availability.correcting }}</strong>
+                <span>{{ labels.availability.correctingHint }}</span>
+              </div>
+              <Button
+                :label="labels.availability.cancelCorrection"
+                :aria-label="labels.availability.cancelCorrection"
+                size="small"
+                severity="secondary"
+                outlined
+                data-testid="availability-cancel-correction-button"
+                @click="cancelCorrection"
               />
-              <small v-if="scheduleReason.trim().length === 0" class="field-error">
-                {{ labels.history.reasonRequired }}
-              </small>
             </div>
-          </div>
+          </Message>
 
           <small class="hint">{{ labels.availability.toggleHint }}</small>
 
@@ -123,6 +124,16 @@
         </template>
       </template>
     </Card>
+
+    <TeacherScheduleHistory
+      v-if="showHistory && term"
+      :teacher-id="selectedTeacherId"
+      :term="term.term"
+      :refresh-token="historyRefreshToken"
+      @edit="startCorrection"
+      @changed="onHistoryChanged"
+    />
+    </div>
 
     <!-- Sınıfların işletme günleri -->
     <Card>
@@ -186,6 +197,17 @@
       </template>
     </Card>
 
+    <ChangeDetailsDialog
+      v-if="term && !term.isPlanning"
+      :visible="isDetailsOpen"
+      :term="term"
+      :title="labels.history.changeDetailsTitle"
+      :effective-date="correctingEntry?.effectiveDate ?? null"
+      :reason="correctingEntry?.reason ?? ''"
+      @confirm="onDetailsConfirm"
+      @cancel="isDetailsOpen = false"
+    />
+
     <ImpactDialog :change="scheduleChange" @cancel="onScheduleChangeCancel" />
   </div>
 </template>
@@ -199,9 +221,10 @@ import { labels } from '../i18n/labels'
 import { activeTerm } from '../composables/useTerm'
 import { listTermsWithDates } from '../api/terms'
 import { useChange } from '../composables/useChange'
-import EffectiveDateField from '../components/history/EffectiveDateField.vue'
+import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
 import ImpactDialog from '../components/history/ImpactDialog.vue'
-import type { ChangeRequest, TermWithDates } from '../types/models'
+import TeacherScheduleHistory from '../components/history/TeacherScheduleHistory.vue'
+import type { ChangeCommand, ChangeRequest, HistoryChangeSetEntry, TermWithDates } from '../types/models'
 
 const DAYS = [1, 2, 3, 4, 5] as const
 
@@ -215,8 +238,13 @@ const copySourceTerm = ref<string | null>(null)
 /** Aktif dönemin tarihleri; dönem başladıysa program kaydı tarihçe üzerinden gider. */
 const term = ref<TermWithDates | null>(null)
 const scheduleChange = useChange()
-const scheduleEffectiveDate = ref<string | null>(null)
-const scheduleReason = ref('')
+/** "Boş Saatleri Kaydet"e basılınca tarih ve gerekçeyi soran pencere. */
+const isDetailsOpen = ref(false)
+
+/** Düzeltilmekte olan son değişiklik; `null` ise normal kayıt modundayız. */
+const correctingEntry = ref<HistoryChangeSetEntry | null>(null)
+/** Geçmiş panelini yeniletmek için artırılır. */
+const historyRefreshToken = ref(0)
 
 /** Izgarada düzenlenen boş saatler; kaydedilene kadar sunucuya gitmez. */
 const draftSlots = ref<Set<string>>(new Set())
@@ -240,6 +268,11 @@ const gridHours = computed(() => {
   return Array.from({ length: Math.max(0, end - start) }, (_, index) => start + index)
 })
 
+const isCorrecting = computed(() => correctingEntry.value !== null)
+
+/** Dönem başlamadıysa hiçbir değişiklik tarihçeye yazılmaz; panel gösterilmez. */
+const showHistory = computed(() => term.value !== null && !term.value.isPlanning)
+
 /** Kaydedilmemiş değişiklik var mı? */
 const teacherDirty = computed(() => {
   const saved = new Set(selectedTeacher.value?.freeSlots ?? [])
@@ -251,15 +284,12 @@ const teacherDirty = computed(() => {
 })
 
 /**
- * Dönem başlamadıysa doğrudan kaydetme serbesttir. Başladıysa yürürlük tarihi
- * ve gerekçe zorunludur; `EffectiveDateField` planlamada zaten gizlenir, ama
- * `term` henüz yüklenmediyse kaydetmeyi bekletiriz.
+ * Izgara değiştiyse ya da düzeltme modundaysa kaydedilebilir. Yürürlük tarihi ve
+ * gerekçe düğmeye bağlı değildir; dönem başladıysa kaydederken pencerede sorulur.
  */
-const canSaveTeacherSchedule = computed(() => {
-  if (!term.value) return false
-  if (term.value.isPlanning) return true
-  return scheduleEffectiveDate.value !== null && scheduleReason.value.trim().length > 0
-})
+const canSaveTeacher = computed(
+  () => selectedTeacher.value !== null && term.value !== null && (teacherDirty.value || isCorrecting.value),
+)
 
 function slotKey(day: number, hour: number): string {
   return `${day}-${hour}`
@@ -362,32 +392,66 @@ async function saveTeacherDirectly(teacherId: number): Promise<void> {
   }
 }
 
-/** Dönem başladıysa: `setTeacherSchedule` önizlenir, etki penceresinde onaylanır. */
-async function saveTeacherViaChange(teacherId: number): Promise<void> {
+/** Pencereden gelen tarih ve gerekçe. */
+interface ChangeDetails {
+  effectiveDate: string | null
+  reason: string
+}
+
+/** Dönem başladıysa: `setTeacherSchedule` (düzeltmede `correct`) önizlenir, etki penceresinde onaylanır. */
+async function saveTeacherViaChange(teacherId: number, details: ChangeDetails): Promise<void> {
   if (!term.value) return
+  const setSchedule: ChangeCommand = { type: 'setTeacherSchedule', teacherId, slots: draftSlotsAsInput() }
+  // Düzeltme modunda aynı yeni program, son değişikliği değiştiren `correct` komutuna sarılır.
+  const command: ChangeCommand = correctingEntry.value
+    ? { type: 'correct', changeSetId: correctingEntry.value.changeSetId, replacement: setSchedule }
+    : setSchedule
   const request: ChangeRequest = {
     term: term.value.term,
-    effectiveDate: scheduleEffectiveDate.value,
+    effectiveDate: details.effectiveDate,
     documentDate: null,
-    reason: scheduleReason.value.trim(),
-    command: { type: 'setTeacherSchedule', teacherId, slots: draftSlotsAsInput() },
+    reason: details.reason,
+    command,
   }
   await scheduleChange.preview(request)
 }
 
+/** Planlamada doğrudan kaydeder; dönem başladıysa önce tarih ve gerekçe sorulur. */
 async function saveTeacher(): Promise<void> {
   const teacherId = selectedTeacherId.value
-  if (teacherId === null || !canSaveTeacherSchedule.value) return
+  if (teacherId === null || !canSaveTeacher.value) return
 
   if (term.value?.isPlanning) {
     await saveTeacherDirectly(teacherId)
   } else {
-    await saveTeacherViaChange(teacherId)
+    isDetailsOpen.value = true
   }
 }
 
+async function onDetailsConfirm(details: ChangeDetails): Promise<void> {
+  isDetailsOpen.value = false
+  const teacherId = selectedTeacherId.value
+  if (teacherId === null) return
+  await saveTeacherViaChange(teacherId, details)
+}
+
 function onScheduleChangeCancel(): void {
-  // Etki penceresi kapatıldı; kullanıcı ızgaraya dönüp tekrar dener.
+  // Etki penceresi kapatıldı; ızgara taslağı korunur, kullanıcı tekrar kaydetmeyi deneyebilir.
+}
+
+/** Düzenle: tarih ve gerekçe o değişikliğin değerleriyle dolar; ızgara zaten son durumu gösterir. */
+function startCorrection(entry: HistoryChangeSetEntry): void {
+  correctingEntry.value = entry
+}
+
+function cancelCorrection(): void {
+  correctingEntry.value = null
+}
+
+/** "Geçmişten sil" kaydedildi: sunucudaki önceki duruma dönmek için ızgara yenilenir. */
+async function onHistoryChanged(): Promise<void> {
+  cancelCorrection()
+  await load()
 }
 
 function setClassDays(grade: string, days: number[]): void {
@@ -448,15 +512,19 @@ watch(
   async (status) => {
     if (status !== 'committed') return
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
-    scheduleEffectiveDate.value = null
-    scheduleReason.value = ''
+    cancelCorrection()
     scheduleChange.reset()
+    historyRefreshToken.value += 1
     await load()
   },
 )
 
 // Öğretmen değişince ızgara o öğretmenin kayıtlı saatlerini gösterir.
-watch(selectedTeacherId, syncDraftFromBoard)
+watch(selectedTeacherId, () => {
+  // Başka öğretmene geçilince düzeltme modu o öğretmene ait olmadığı için kapanır.
+  if (isCorrecting.value) cancelCorrection()
+  syncDraftFromBoard()
+})
 
 watch(activeTerm, () => {
   void load()
@@ -475,16 +543,19 @@ onMounted(async () => {
 .title-group { display: flex; align-items: center; gap: 0.75rem; }
 .page-title { font-size: 1.5rem; font-weight: 600; margin: 0; }
 
+/* Geniş ekranda ızgara solda, geçmiş sağda; dar ekranda geçmiş ızgaranın altına yığılır. */
+.teacher-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; align-items: start; }
+@media (min-width: 72rem) {
+  .teacher-layout--with-history { grid-template-columns: minmax(0, 1fr) 22rem; }
+}
+.correcting-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; width: 100%; }
+.correcting-text { display: flex; flex-direction: column; gap: 0.125rem; }
+
 .toolbar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .spacer { flex: 1; }
 .teacher-select { min-width: 16rem; }
 .hint { display: block; margin-top: 0.5rem; color: var(--p-text-muted-color); font-size: 0.75rem; }
 .empty { color: var(--p-text-muted-color); }
-
-.schedule-change-fields { display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
-.field { display: flex; flex-direction: column; gap: 0.375rem; min-width: 16rem; }
-.field label { font-size: 0.875rem; font-weight: 500; }
-.field-error { color: var(--p-red-500); font-size: 0.75rem; }
 
 .grid-scroll { overflow-x: auto; margin-top: 1rem; }
 .grid { width: 100%; border-collapse: collapse; user-select: none; }

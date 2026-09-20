@@ -79,8 +79,15 @@
             <InputNumber id="day-start" v-model="form.dayStartHour" :min="0" :max="23" />
           </div>
           <div class="field">
-            <label for="day-end">{{ labels.settings.dayEndHour }}</label>
-            <InputNumber id="day-end" v-model="form.dayEndHour" :min="1" :max="24" />
+            <label for="max-daily-lessons">{{ labels.settings.maxDailyLessons }}</label>
+            <InputNumber
+              input-id="max-daily-lessons"
+              v-model="form.maxDailyLessons"
+              :min="MIN_DAILY_LESSONS"
+              :max="maxLessonsUpperBound"
+              :aria-label="labels.settings.maxDailyLessons"
+            />
+            <small class="hint">{{ labels.settings.maxDailyLessonsHint }}</small>
           </div>
         </div>
       </template>
@@ -103,6 +110,12 @@ import type { LatLng } from '../types/models'
 
 const toast = useToast()
 
+/** Günlük ders saati sayısının alt sınırı ve günün son saati (başlangıç + sayı bunu aşamaz). */
+const MIN_DAILY_LESSONS = 1
+const HOURS_IN_DAY = 24
+/** Ayar anahtarı bulunmayan kurulumlarda bugünkü varsayılan: 8..16 = 9 saat. */
+const DEFAULT_DAILY_LESSONS = 9
+
 const form = reactive({
   schoolName: '',
   principalName: '',
@@ -111,8 +124,11 @@ const form = reactive({
   institutionType: 'other',
   isMetropolitanDistrict: true,
   dayStartHour: 8,
-  dayEndHour: 17,
+  maxDailyLessons: DEFAULT_DAILY_LESSONS as number | null,
 })
+
+/** InputNumber'ın kabul ettiği azami sayı; başlangıç saatiyle birlikte 24'ü aşamaz. */
+const maxLessonsUpperBound = computed<number>(() => HOURS_IN_DAY - (form.dayStartHour ?? 0))
 
 const schoolLocation = ref<LatLng | null>(null)
 const isSaving = ref(false)
@@ -151,6 +167,23 @@ function parseLocation(settings: SettingsMap): LatLng | null {
   return { latitude, longitude }
 }
 
+function parsePositiveInt(value: string | undefined): number | null {
+  const parsed = Number.parseInt(value ?? '', 10)
+  return Number.isNaN(parsed) || parsed < MIN_DAILY_LESSONS ? null : parsed
+}
+
+/**
+ * Günlük azami ders saati: önce `max_daily_lessons`; yoksa (eski kurulum) `day_end_hour - day_start_hour`;
+ * ikisi de yoksa bugünkü varsayılan. Böylece mevcut kullanıcı verisinin davranışı değişmez.
+ */
+function resolveMaxDailyLessons(settings: SettingsMap, startHour: number): number {
+  const stored = parsePositiveInt(settings.max_daily_lessons)
+  if (stored !== null) return stored
+  const endHour = Number.parseInt(settings.day_end_hour ?? '', 10)
+  const derived = endHour - startHour
+  return Number.isNaN(derived) || derived < MIN_DAILY_LESSONS ? DEFAULT_DAILY_LESSONS : derived
+}
+
 function applySettings(settings: SettingsMap): void {
   form.schoolName = settings.school_name ?? ''
   form.principalName = settings.principal_name ?? ''
@@ -159,7 +192,7 @@ function applySettings(settings: SettingsMap): void {
   form.institutionType = settings.institution_type ?? 'other'
   form.isMetropolitanDistrict = settings.is_metropolitan_district === 'true'
   form.dayStartHour = Number.parseInt(settings.day_start_hour ?? '8', 10)
-  form.dayEndHour = Number.parseInt(settings.day_end_hour ?? '17', 10)
+  form.maxDailyLessons = resolveMaxDailyLessons(settings, form.dayStartHour)
   schoolLocation.value = parseLocation(settings)
 }
 
@@ -172,11 +205,12 @@ async function load(): Promise<void> {
 }
 
 async function save(): Promise<void> {
-  if (form.dayEndHour <= form.dayStartHour) {
+  const lessons = form.maxDailyLessons
+  if (lessons === null || lessons < MIN_DAILY_LESSONS || form.dayStartHour + lessons > HOURS_IN_DAY) {
     toast.add({
       severity: 'warn',
       summary: labels.common.error,
-      detail: labels.settings.dayRangeInvalid,
+      detail: labels.settings.maxDailyLessonsInvalid,
       life: 5000,
     })
     return
@@ -192,7 +226,9 @@ async function save(): Promise<void> {
       institution_type: form.institutionType,
       is_metropolitan_district: String(form.isMetropolitanDistrict),
       day_start_hour: String(form.dayStartHour),
-      day_end_hour: String(form.dayEndHour),
+      max_daily_lessons: String(lessons),
+      // Rust okuyucuları ve ızgara `day_end_hour`'ı okur; satır sayısı = ders saati sayısı olsun diye türetilir.
+      day_end_hour: String(form.dayStartHour + lessons),
       school_latitude: schoolLocation.value ? String(schoolLocation.value.latitude) : '',
       school_longitude: schoolLocation.value ? String(schoolLocation.value.longitude) : '',
     }
@@ -205,12 +241,14 @@ async function save(): Promise<void> {
   }
 }
 
-// Gün aralığı tutarsızsa kullanıcı kaydetmeden önce uyarılır (save içinde),
-// burada yalnızca bitişin başlangıcın altına düşmesi engellenir.
+// Başlangıç saati ilerleyince ders saati sayısı 24'ü aşacaksa sayı sınıra çekilir.
 watch(
   () => form.dayStartHour,
-  (start) => {
-    if (form.dayEndHour <= start) form.dayEndHour = start + 1
+  () => {
+    const upper = maxLessonsUpperBound.value
+    if (form.maxDailyLessons !== null && form.maxDailyLessons > upper) {
+      form.maxDailyLessons = Math.max(MIN_DAILY_LESSONS, upper)
+    }
   },
 )
 
