@@ -1,0 +1,14 @@
+{
+  "get_teaching_load_board": {
+    "term": "2026-2027/1",
+    "rows": [
+      {"id": 1, "grade": "12/C", "branch": "Elektronik Haberleşme", "weeklyHours": 24, "groupCount": 1, "autoGroupCount": 1, "isGroupManual": false, "isSuggested": false},
+      {"id": 2, "grade": "12/D", "branch": "Elektrik Tesisatları ve Pano Montörlüğü", "weeklyHours": 24, "groupCount": 1, "autoGroupCount": 1, "isGroupManual": false, "isSuggested": false},
+      {"id": 3, "grade": "12/D", "branch": "Endüstriyel Bakım Onarım", "weeklyHours": 24, "groupCount": 2, "autoGroupCount": 1, "isGroupManual": true, "isSuggested": false}
+    ],
+    "poolHours": 78, "branchHours": 72, "chiefPlanningHours": 6
+  },
+  "get_settings": {"active_term": "2026-2027/1", "school_name": "Atatürk MTAL"},
+  "list_terms_with_dates": [],
+  "known_terms": ["2026-2027/1"]
+}

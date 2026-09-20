@@ -106,6 +106,38 @@ değişmediyse yazma. Yeni nesne her defasında "değişti" sayılır ve bağlı
 **Biçim.** Fonksiyonlar <50 satır, iç içe geçme <4 seviye. Bir görünüm
 büyüdüyse parçalara ayırmayı öner (brief istemedikçe kendiliğinden yapma).
 
+## Görsel doğrulama — arayüz işinde ZORUNLU
+
+Vitest/jsdom yerleşimi görmez: taşan kutu, üst üste binen düğme, kırpılan
+etiket testlerde görünmez ve "kapılar temiz" olsa da ekran bozuk çıkar.
+(Bir kez tam böyle teslim edildi: yatay düğmeli `InputNumber` tablo
+hücresinden taştı, çünkü belgenin her örnekte kullandığı `fluid` yoktu.)
+Bu yüzden arayüzü değiştiren HER işte ekranı gerçekten çizip GÖRMEK zorundasın.
+
+Araç: `.claude/tools/uishot/` (gerçek Chrome + Playwright, Tauri IPC'yi
+fixture'la taklit eder; uygulamayı ve veritabanını çalıştırmaz).
+
+```bash
+# bir kez: cd .claude/tools/uishot && npm i
+# Vite dev sunucusunu (yalnız vite) başka bir terminalde sürdür: pnpm dev  → http://localhost:1420
+cd .claude/tools/uishot
+node shot.mjs /teaching-load out.png 1400 900 example-fixture.json
+THEME=dark node shot.mjs /teaching-load out-dark.png 1400 900 example-fixture.json
+CLICK="Kaydet" node shot.mjs /availability out-modal.png 1400 900 my-fixture.json  # diyalog aç
+```
+
+`out.png`'yi Read aracıyla aç ve bak. Fixture, `{ "komut_adı": yanıt }`;
+çıktının sonundaki `unmocked commands:` satırındaki komutları fixture'a ekle.
+En az: açık tema geniş, koyu tema geniş, açık tema dar (1100). Kutular üst
+üste binmemeli, metin kırpılmamalı, sütunlar hizalı olmalı; uzun metinli bir
+satır da dene. Sorun görürsen düzelt ve yeniden çiz; temiz görene kadar
+"tamam" deme. Raporda ürettiğin PNG'lerin yolunu ve her birinde NE GÖRDÜĞÜNÜ
+yaz. Çizemediysen (sunucu yok vb.) bunu açıkça yaz; görmediğin bir yerleşimi
+doğrulanmış sayma.
+
+Form kontrolü tablo hücresine koyuyorsan önce belgedeki `fluid`, sütun
+genişliği ve hücre içi kullanım örneklerine bak.
+
 ## Kapılar
 
 Bitirmeden önce, proje kökünde:
