@@ -41,5 +41,20 @@ export default defineConfig(() => ({
     environment: "jsdom",
     // jsdom'da bulunmayan tarayıcı API'leri burada sağlanır.
     setupFiles: ["./src/test-setup.ts"],
+    // Varsayılan havuz 'forks': izolasyon açıkken (isolate: true, varsayılan)
+    // her spec dosyası için ayrı bir işlem çatallanır ve jsdom ortamı sıfırdan
+    // kurulur. 16 dosya için 16 çatallama, makine yükü altında saniyelerce
+    // sürebiliyor ve o sırada asıl testler CPU'dan mahrum kalıp 5 sn'lik
+    // testTimeout'u aşıyor (rastgele testler zaman aşımına düşüyor). vmThreads
+    // aynı işçi thread'lerini dosyalar arasında yeniden kullanır, her dosyaya
+    // yalnızca ayrı bir vm bağlamı açar; dosya başına izolasyon korunur ama
+    // işlem çatallama ve ortam yeniden kurma maliyeti ortadan kalkar.
+    pool: "vmThreads",
+    // Makine yoğunken (paralel işçiler, arka plan süreçleri) tek bir testin
+    // gerçek çalışma süresi 1 sn'nin altındayken bile zamanlayıcı bekleyişleri
+    // ve DOM güncellemeleri birkaç saniyeye çıkabilir; 5 sn'lik varsayılan pay
+    // bırakmıyor. 15 sn, normal çalışma süresinin (~100-600 ms) çok üstünde bir
+    // güvenlik payı sağlar, testleri yavaşlatmaz.
+    testTimeout: 15000,
   },
 }));
