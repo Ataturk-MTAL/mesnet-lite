@@ -255,6 +255,10 @@ export const labels = {
     noClasses: 'Bu dönemde öğrenci kaydı yok.',
   },
   reports: {
+    commissionMinutesPdf: 'Komisyon Tutanağı (PDF)',
+    commissionMinutesXlsx: 'Komisyon Tutanağı (Excel)',
+    commissionMinutesNote:
+      'İşletme Belirleme Komisyon Tutanağı. Okul müdürü ve alan adı Ayarlar ekranından girilir.',
     assignmentSheet: 'Koordinatör Görevlendirme Çizelgesi',
     assignmentSheetNote:
       'MADDE 15/2 uyarınca okul müdürlüğünce hazırlanıp millî eğitim müdürlüğünce onaylanacak programdır.',
@@ -345,6 +349,9 @@ export const labels = {
   settings: {
     schoolSection: 'Okul Bilgileri',
     schoolName: 'Okul Adı',
+    principalName: 'Okul Müdürü',
+    fieldName: 'Alan Adı',
+    blankPrintsDotted: 'Boş bırakılırsa tutanakta noktalı boşluk basılır.',
     activeTerm: 'Aktif Dönem',
     institutionType: 'Kurum Tipi',
     isMetropolitanDistrict: 'Büyükşehir belediyesi sınırları içindeki ilçe',

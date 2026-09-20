@@ -31,6 +31,16 @@ export const filesApi = {
     const bytes = await call<number[]>('export_visit_lists')
     return saveToDownloads(fileName, bytes)
   },
+  /** İşletme Belirleme Komisyon Tutanağı'nı PDF üretir ve kaydeder. */
+  exportCommissionMinutesPdf: async (fileName: string): Promise<string> => {
+    const bytes = await call<number[]>('export_commission_minutes_pdf')
+    return saveToDownloads(fileName, bytes)
+  },
+  /** İşletme Belirleme Komisyon Tutanağı'nı Excel olarak üretir ve kaydeder. */
+  exportCommissionMinutesXlsx: async (fileName: string): Promise<string> => {
+    const bytes = await call<number[]>('export_commission_minutes_xlsx')
+    return saveToDownloads(fileName, bytes)
+  },
   /** Konumu olmayan işletmeleri Nominatim ile çözer. Saniyede bir istek. */
   geocodePending: (): Promise<GeocodeSummary> => call('geocode_pending_companies'),
 }

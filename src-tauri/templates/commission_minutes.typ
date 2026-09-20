@@ -1,0 +1,100 @@
+// İşletme Belirleme Komisyon Tutanağı
+//
+// Okulun kendi Excel şablonunun aynı düzeni: A4 dikey; başlık kutusu, müdürlüğe
+// hitap, açıklama paragrafı, imza şeridi, öğrenci başına satırlı tablo, onay ve
+// açıklama blokları. Veri Rust'tan `sys.inputs.data` üzerinden tek JSON dizgisi
+// olarak gelir (`MinutesData`); metinlerin hiçbiri burada yeniden kurulmaz, bu
+// yüzden Excel çıktısıyla ayrışamaz. Typst kaynağı dizgi birleştirmesiyle
+// üretilmez.
+#import sys: inputs
+#let data = json(bytes(inputs.data))
+
+#set page(paper: "a4", margin: (x: 0.7cm, y: 1.6cm))
+#set text(font: "DejaVu Sans", lang: "tr", size: 8pt)
+#set par(justify: false, leading: 0.55em)
+#set block(spacing: 0pt)
+
+// Veri içindeki "\n" karakterleri gerçek satır sonuna çevrilir.
+#let lines(value) = value.split("\n").join(linebreak())
+
+// Şablonun sütun oranları (Excel sütun genişlikleri): sıra no, işletme,
+// öğrenci, uzaklık, koordinatör, görev günü, ücret.
+#let column-widths = (6.57fr, 39.43fr, 32.43fr, 14fr, 35.71fr, 16.86fr, 10.14fr)
+
+// A1:G4 — üç satırlık çerçeveli başlık.
+#block(width: 100%, stroke: 0.5pt, inset: (x: 6pt, y: 9pt))[
+  #align(center)[
+    #text(size: 10.5pt, weight: "bold")[
+      #data.yearLine \
+      #data.schoolLine \
+      #data.fieldLine
+    ]
+  ]
+]
+
+#v(1.1em)
+// A6:G6 — müdürlüğe hitap.
+#align(center)[#text(size: 9pt, weight: "bold")[#data.addresseeLine]]
+#v(1.1em)
+
+// A8:G11 — açıklama paragrafı; şablondaki 16 boşluk yerine ilk satır girintisi.
+#par(first-line-indent: (amount: 2.2em, all: true))[#data.intro]
+
+#v(1.1em)
+#pad(left: 6.57 / 155 * 100% + 0.3em)[#data.closingLine]
+#v(1.1em)
+
+// A15:E17 — imza etiketleri: Alan Şefi (A:B) ve Alan Öğretmenleri (C:E).
+#grid(
+  columns: (46fr, 82.14fr, 26.99fr),
+  align: center + horizon,
+  lines(data.chiefLabel), lines(data.teachersLabel), [],
+)
+#v(1.1em)
+
+// Bir satırın, YALNIZ o satırda başlayan hücreleri. Typst hücreleri sütun
+// sırasıyla, önceki satırlardan uzanan `rowspan` hücrelerinin altını atlayarak
+// yerleştirir; bu yüzden birleşik bir hücre sadece ilk satırında verilir.
+//  - D (uzaklık), F (görev günü), G (ücret): işletme başına dikey birleşik.
+//    `breakable: false` bir işletmenin sayfalar arasında bölünmesini önler.
+//  - E (koordinatör): aynı öğretmenin ardışık işletmeleri boyunca birleşik
+//    (referans şablondaki gibi); uzun olabileceğinden sayfa arasında bölünebilir.
+//    Atanmamış işletmenin E hücresi boş kalır ve birleşmez.
+#let row-cells(i) = {
+  let row = data.rows.at(i)
+  let company = data.groups.find(g => g.start == i)
+  let teacher = data.teacherGroups.find(g => g.start == i)
+
+  let cells = ([#row.index], row.companyName, row.studentName)
+  if company != none {
+    cells.push(table.cell(rowspan: company.len, breakable: false)[#row.distanceLabel])
+  }
+  if teacher != none {
+    cells.push(table.cell(rowspan: teacher.len)[#row.teacher])
+  } else if row.teacher == "" {
+    cells.push([])
+  }
+  if company != none {
+    cells.push(table.cell(rowspan: company.len, breakable: false)[#row.day])
+    cells.push(table.cell(rowspan: company.len, breakable: false)[#row.hoursLabel])
+  }
+  cells
+}
+
+#table(
+  columns: column-widths,
+  align: (center + horizon, left + horizon, left + horizon, center + horizon, center + horizon, center + horizon, center + horizon),
+  stroke: 0.5pt,
+  inset: (x: 4pt, y: 5pt),
+  // Tablo sayfayı aşarsa başlık satırı her sayfada yinelenir (varsayılan).
+  table.header(..data.columnHeaders.map(header => lines(header.replace("(", " (")))),
+  ..range(data.rows.len()).map(row-cells).flatten(),
+)
+
+// Onay ve açıklama blokları tablonun hemen ardından gelir ve bölünmez.
+#block(width: 100%, stroke: 0.5pt, inset: 8pt, breakable: false)[
+  #align(center + horizon)[#block(height: 2.6cm)[#align(horizon)[#lines(data.approvalText)]]]
+]
+#block(width: 100%, stroke: 0.5pt, inset: 6pt, breakable: false)[
+  #align(center)[#data.noteText]
+]

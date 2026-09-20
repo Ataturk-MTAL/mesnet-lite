@@ -1,5 +1,6 @@
 use crate::db::{settings, teaching_load, AppState};
 use crate::error::{AppError, AppResult};
+use crate::services::commission_minutes;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use tauri::State;
@@ -14,8 +15,19 @@ pub async fn save_settings(
     state: State<'_, AppState>,
     entries: BTreeMap<String, String>,
 ) -> AppResult<BTreeMap<String, String>> {
-    settings::set_many(&state.pool, &entries).await?;
-    settings::get_all(&state.pool).await
+    save_settings_in_pool(&state.pool, &entries).await
+}
+
+/// `save_settings`'in gerçek mantığı (bkz. `create_term_in_pool` ile aynı
+/// ayrım). Komisyon tutanağının müdür/alan adı ayarları başlığa basıldığından
+/// yazmadan önce doğrulanır; tek geçersiz değer bütün kaydı reddeder.
+async fn save_settings_in_pool(
+    pool: &sqlx::SqlitePool,
+    entries: &BTreeMap<String, String>,
+) -> AppResult<BTreeMap<String, String>> {
+    commission_minutes::validate_minutes_settings(entries)?;
+    settings::set_many(pool, entries).await?;
+    settings::get_all(pool).await
 }
 
 /// Okul konumunu haritadan gelen değerle yazar.
@@ -213,6 +225,39 @@ mod tests {
         assert!(validate_term_format("26-27/1").is_err());
         assert!(validate_term_format("2026-2027/1/2").is_err());
         assert!(validate_term_format("bozuk").is_err());
+    }
+
+    /// Tutanak başlığına basılan iki isteğe bağlı ayar kaydetme sınırında
+    /// doğrulanır; reddedilen kayıtta hiçbir anahtar yazılmaz.
+    #[tokio::test]
+    async fn save_settings_rejects_a_multiline_principal_name_and_writes_nothing() {
+        let (_dir, pool) = test_pool().await;
+        let mut entries = BTreeMap::new();
+        entries.insert("school_name".to_string(), "Yeni Okul".to_string());
+        entries.insert("principal_name".to_string(), "Ömer\nYiğit".to_string());
+
+        let err = save_settings_in_pool(&pool, &entries).await.unwrap_err();
+
+        assert!(matches!(err, AppError::Validation(_)));
+        let all = settings::get_all(&pool).await.unwrap();
+        assert_ne!(all.get("school_name").map(String::as_str), Some("Yeni Okul"));
+        assert!(!all.contains_key("principal_name"));
+    }
+
+    #[tokio::test]
+    async fn save_settings_stores_and_returns_the_minutes_settings() {
+        let (_dir, pool) = test_pool().await;
+        let mut entries = BTreeMap::new();
+        entries.insert("principal_name".to_string(), "Ömer Yiğit".to_string());
+        entries.insert("field_name".to_string(), "Elektrik-Elektronik Teknolojisi".to_string());
+
+        let all = save_settings_in_pool(&pool, &entries).await.unwrap();
+
+        assert_eq!(all.get("principal_name").map(String::as_str), Some("Ömer Yiğit"));
+        assert_eq!(
+            all.get("field_name").map(String::as_str),
+            Some("Elektrik-Elektronik Teknolojisi")
+        );
     }
 
     #[tokio::test]

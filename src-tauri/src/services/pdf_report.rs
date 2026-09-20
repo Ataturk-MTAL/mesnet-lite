@@ -25,8 +25,8 @@ const VISIT_LIST_TEMPLATE: &str = include_str!("../../templates/visit_list.typ")
 // tam kapsayan, yeniden dağıtılabilir (Bitstream Vera lisansı) bir yazı tipi
 // ailesidir. `typst-as-lib` sistem yazı tiplerine erişemediği için ikisi de
 // derleme zamanında ikili olarak gömülür.
-const FONT_REGULAR: &[u8] = include_bytes!("../../assets/fonts/DejaVuSans.ttf");
-const FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/DejaVuSans-Bold.ttf");
+pub(crate) const FONT_REGULAR: &[u8] = include_bytes!("../../assets/fonts/DejaVuSans.ttf");
+pub(crate) const FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/DejaVuSans-Bold.ttf");
 
 /// Gün numarasını (1 = Pazartesi … 5 = Cuma) Türkçe gün adına çevirir.
 ///
@@ -81,7 +81,7 @@ fn visit_list_engine() -> &'static TypstEngine<TypstTemplateMainFile> {
 
 /// Verilen Typst motorunu, veriyi tek bir JSON dizgisi olarak `sys.inputs.data`
 /// üzerinden aktararak derler ve PDF baytlarını döner.
-fn render_pdf<T: Serialize>(
+pub(crate) fn render_pdf<T: Serialize>(
     engine: &TypstEngine<TypstTemplateMainFile>,
     data: &T,
 ) -> AppResult<Vec<u8>> {

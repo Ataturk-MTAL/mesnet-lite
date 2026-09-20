@@ -52,6 +52,8 @@ pub fn run() {
             commands::geocoding_commands::geocode_pending_companies,
             commands::report_commands::export_assignment_sheet,
             commands::report_commands::export_visit_lists,
+            commands::commission_minutes_commands::export_commission_minutes_pdf,
+            commands::commission_minutes_commands::export_commission_minutes_xlsx,
             commands::hours_commands::get_hours_board,
             commands::hours_commands::save_company_hours,
             commands::hours_commands::auto_distribute_hours,

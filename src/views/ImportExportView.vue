@@ -129,6 +129,30 @@
       <template #content>
         <div class="report-row">
           <Button
+            :label="labels.reports.commissionMinutesPdf"
+            :aria-label="labels.reports.commissionMinutesPdf"
+            icon="pi pi-file-pdf"
+            severity="secondary"
+            outlined
+            data-testid="commission-minutes-pdf-button"
+            :loading="isPrintingMinutesPdf"
+            @click="exportCommissionMinutesPdf"
+          />
+          <Button
+            :label="labels.reports.commissionMinutesXlsx"
+            :aria-label="labels.reports.commissionMinutesXlsx"
+            icon="pi pi-file-excel"
+            severity="secondary"
+            outlined
+            data-testid="commission-minutes-xlsx-button"
+            :loading="isExportingMinutesXlsx"
+            @click="exportCommissionMinutesXlsx"
+          />
+          <small class="hint">{{ labels.reports.commissionMinutesNote }}</small>
+        </div>
+
+        <div class="report-row">
+          <Button
             :label="labels.reports.assignmentSheet"
             icon="pi pi-file-pdf"
             severity="secondary"
@@ -186,6 +210,8 @@ const isApplying = ref(false)
 const isExporting = ref(false)
 const isPrintingSheet = ref(false)
 const isPrintingVisits = ref(false)
+const isPrintingMinutesPdf = ref(false)
+const isExportingMinutesXlsx = ref(false)
 
 async function exportExcel(): Promise<void> {
   isExporting.value = true
@@ -200,15 +226,16 @@ async function exportExcel(): Promise<void> {
   }
 }
 
-/** PDF üretimi ile diske yazmayı tek yerde birleştirir. */
-async function savePdf(
+/** Rapor üretimi ile diske yazmayı tek yerde birleştirir. */
+async function saveReport(
   busy: typeof isPrintingSheet,
   produce: (fileName: string) => Promise<string>,
   baseName: string,
+  extension: 'pdf' | 'xlsx' = 'pdf',
 ): Promise<void> {
   busy.value = true
   try {
-    const path = await produce(`${baseName}-${activeTerm.value.replace('/', '-')}.pdf`)
+    const path = await produce(`${baseName}-${activeTerm.value.replace('/', '-')}.${extension}`)
     toast.add({ severity: 'success', summary: labels.export.saved, detail: path, life: 8000 })
   } catch (error: unknown) {
     showError(error)
@@ -217,12 +244,29 @@ async function savePdf(
   }
 }
 
+function exportCommissionMinutesPdf(): void {
+  void saveReport(
+    isPrintingMinutesPdf,
+    filesApi.exportCommissionMinutesPdf,
+    'Isletme-Belirleme-Komisyon-Tutanagi',
+  )
+}
+
+function exportCommissionMinutesXlsx(): void {
+  void saveReport(
+    isExportingMinutesXlsx,
+    filesApi.exportCommissionMinutesXlsx,
+    'Isletme-Belirleme-Komisyon-Tutanagi',
+    'xlsx',
+  )
+}
+
 function exportAssignmentSheet(): void {
-  void savePdf(isPrintingSheet, filesApi.exportAssignmentSheet, 'Gorevlendirme-Cizelgesi')
+  void saveReport(isPrintingSheet, filesApi.exportAssignmentSheet, 'Gorevlendirme-Cizelgesi')
 }
 
 function exportVisitLists(): void {
-  void savePdf(isPrintingVisits, filesApi.exportVisitLists, 'Ziyaret-Listeleri')
+  void saveReport(isPrintingVisits, filesApi.exportVisitLists, 'Ziyaret-Listeleri')
 }
 
 // Yalnızca mevcut kayıtla çakışan gruplar için anlamlıdır; belirtilmeyen

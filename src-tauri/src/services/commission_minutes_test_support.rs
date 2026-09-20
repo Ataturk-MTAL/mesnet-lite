@@ -1,0 +1,188 @@
+//! Komisyon tutanağı testlerinin ortak tohum verisi. Veri katmanı, Excel ve
+//! PDF testleri aynı senaryoyu paylaşır; böylece "üç çıktı aynı veriyi
+//! gösterir" varsayımı ayrı ayrı uydurma fixture'lara dayanmaz.
+
+use crate::db::assignments::{self, NewAssignment};
+use crate::db::company_hours::{self, HoursInput};
+use crate::db::{companies, init_pool, students, teachers};
+use crate::domain::models::{NewCompany, NewStudent, NewTeacher};
+use sqlx::SqlitePool;
+
+pub const TERM: &str = "2026-2027/1";
+
+pub async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+    (dir, pool)
+}
+
+pub async fn seed_teacher(pool: &SqlitePool, first: &str, last: &str) -> i64 {
+    teachers::create(
+        pool,
+        &NewTeacher {
+            first_name: first.into(),
+            last_name: last.into(),
+            registry_no: String::new(),
+            field: "Elektrik-Elektronik Teknolojisi".into(),
+            branches: vec![],
+            employment_type: "tenured".into(),
+            base_hours: 20,
+            max_extra_hours: 24,
+            other_extra_hours: 0,
+            chief_type: "none".into(),
+            is_active: true,
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+/// `distance_km` TEK YÖN mesafedir (`companies.one_way_distance_km`).
+pub async fn seed_company(pool: &SqlitePool, name: &str, distance_km: Option<f64>) -> i64 {
+    companies::create(
+        pool,
+        &NewCompany {
+            name: name.into(),
+            contact_first_name: "Test".into(),
+            contact_last_name: "Yetkili".into(),
+            phone: "(500) 000-0000".into(),
+            email: String::new(),
+            address_text: "Test Mahallesi, Test Sokak No:1".into(),
+            latitude: None,
+            longitude: None,
+            one_way_distance_km: distance_km,
+            notes: String::new(),
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+pub async fn seed_student(pool: &SqlitePool, company_id: Option<i64>, first: &str, last: &str) {
+    students::create(
+        pool,
+        &NewStudent {
+            first_name: first.into(),
+            last_name: last.into(),
+            student_no: None,
+            grade: "12/C".into(),
+            branch: "Elektronik Haberleşme".into(),
+            company_id,
+            submitted_at: Some("2026-09-11".into()),
+            term: TERM.into(),
+        },
+    )
+    .await
+    .unwrap();
+}
+
+pub async fn seed_hours(pool: &SqlitePool, company_id: i64, awarded: i64, is_honorary: bool) {
+    company_hours::upsert(
+        pool,
+        TERM,
+        &HoursInput {
+            company_id,
+            max_hours_snapshot: 12,
+            awarded_hours: awarded,
+            is_honorary,
+            is_locked: false,
+            notes: String::new(),
+        },
+    )
+    .await
+    .unwrap();
+}
+
+pub async fn seed_assignment(
+    pool: &SqlitePool,
+    teacher_id: i64,
+    company_id: i64,
+    day: i64,
+    hour: i64,
+) {
+    assignments::assign(
+        pool,
+        TERM,
+        &NewAssignment {
+            teacher_id,
+            company_id,
+            visit_day: day,
+            visit_hour: hour,
+            is_forced: false,
+            force_reason: None,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Her durumu içeren tek senaryo: çok öğrencili işletme, tek öğrencili
+/// işletme, atanmamış işletme, fahri işletme, uzaklığı olmayan işletme ve
+/// Türkçe sıralamayı sınayan Ç/Ş/İ ile başlayan adlar.
+pub async fn seed_full_scenario(pool: &SqlitePool) {
+    let teacher_a = seed_teacher(pool, "Ayşe", "Yılmaz").await;
+    let teacher_b = seed_teacher(pool, "Mehmet", "Öztürk").await;
+
+    // Çok öğrencili; öğrenciler soyada göre sıralanmalı (Çelik < Demir < Şahin).
+    let sirin = seed_company(pool, "Şirin Elektrik Ltd.", Some(8.6)).await;
+    seed_student(pool, Some(sirin), "Zeynep", "Şahin").await;
+    seed_student(pool, Some(sirin), "Ali", "Demir").await;
+    seed_student(pool, Some(sirin), "Burak", "Çelik").await;
+    seed_hours(pool, sirin, 8, false).await;
+    seed_assignment(pool, teacher_a, sirin, 5, 2).await;
+
+    // Tek öğrenci, ASCII 'A' ile başlar: sırada Şirin'den önce gelmeli.
+    let acar = seed_company(pool, "Acar Otomasyon", Some(2.2)).await;
+    seed_student(pool, Some(acar), "Emre", "Kaya").await;
+    seed_hours(pool, acar, 6, false).await;
+    seed_assignment(pool, teacher_b, acar, 2, 3).await;
+
+    // Fahri: ücret yerine "Fahri" basılmalı.
+    let ciftci = seed_company(pool, "Çiftçi Pano Sanayi", Some(4.5)).await;
+    seed_student(pool, Some(ciftci), "Deniz", "Arı").await;
+    seed_student(pool, Some(ciftci), "Ece", "Bulut").await;
+    seed_hours(pool, ciftci, 0, true).await;
+    seed_assignment(pool, teacher_a, ciftci, 3, 1).await;
+
+    // Uzaklığı bilinmiyor.
+    let iyi = seed_company(pool, "İyi Aydınlatma", None).await;
+    seed_student(pool, Some(iyi), "Can", "Uçar").await;
+    seed_hours(pool, iyi, 4, false).await;
+    seed_assignment(pool, teacher_b, iyi, 4, 5).await;
+
+    // Öğrencisi var ama hiç atanmamış ve saati de yok.
+    let zeytin = seed_company(pool, "Zeytin Bobinaj", Some(6.25)).await;
+    seed_student(pool, Some(zeytin), "Selin", "Ak").await;
+}
+
+/// Çok sayfalık uzun tablo: 3 öğretmen, 40 işletme (her biri 3 öğrenci), her
+/// yedinci işletme atanmamış. Öğretmen aralıklarının sayfa arasında bölünmesini
+/// ve atanmamış satırların E hücresini birlikte sınar.
+pub async fn seed_long_table(pool: &SqlitePool) {
+    let mut teachers = Vec::new();
+    for last in ["Çakır", "Öztürk", "Yılmaz"] {
+        teachers.push(seed_teacher(pool, "Test", last).await);
+    }
+    for i in 0..40usize {
+        let company = seed_company(pool, &format!("İşletme {i:02}"), Some(i as f64)).await;
+        for s in 0..3 {
+            seed_student(pool, Some(company), &format!("Ad{s}"), &format!("Soyad{i}")).await;
+        }
+        if i % 7 == 0 {
+            continue;
+        }
+        // 1 saatlik blok: aynı öğretmenin ardışık hücreleri çakışmasın.
+        seed_hours(pool, company, 1, false).await;
+        let teacher = teachers[i % teachers.len()];
+        seed_assignment(
+            pool,
+            teacher,
+            company,
+            1 + (i % 5) as i64,
+            1 + (i / 5) as i64,
+        )
+        .await;
+    }
+}

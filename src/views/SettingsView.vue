@@ -12,6 +12,22 @@
           </div>
 
           <div class="field">
+            <label for="principal-name">{{ labels.settings.principalName }}</label>
+            <InputText
+              id="principal-name"
+              v-model="form.principalName"
+              aria-describedby="principal-name-help"
+            />
+            <small id="principal-name-help" class="hint">{{ labels.settings.blankPrintsDotted }}</small>
+          </div>
+
+          <div class="field">
+            <label for="field-name">{{ labels.settings.fieldName }}</label>
+            <InputText id="field-name" v-model="form.fieldName" aria-describedby="field-name-help" />
+            <small id="field-name-help" class="hint">{{ labels.settings.blankPrintsDotted }}</small>
+          </div>
+
+          <div class="field">
             <label for="active-term">{{ labels.settings.activeTerm }}</label>
             <InputText id="active-term" v-model="form.activeTerm" />
           </div>
@@ -89,6 +105,8 @@ const toast = useToast()
 
 const form = reactive({
   schoolName: '',
+  principalName: '',
+  fieldName: '',
   activeTerm: '',
   institutionType: 'other',
   isMetropolitanDistrict: true,
@@ -135,6 +153,8 @@ function parseLocation(settings: SettingsMap): LatLng | null {
 
 function applySettings(settings: SettingsMap): void {
   form.schoolName = settings.school_name ?? ''
+  form.principalName = settings.principal_name ?? ''
+  form.fieldName = settings.field_name ?? ''
   form.activeTerm = settings.active_term ?? ''
   form.institutionType = settings.institution_type ?? 'other'
   form.isMetropolitanDistrict = settings.is_metropolitan_district === 'true'
@@ -166,6 +186,8 @@ async function save(): Promise<void> {
   try {
     const entries: SettingsMap = {
       school_name: form.schoolName,
+      principal_name: form.principalName,
+      field_name: form.fieldName,
       active_term: form.activeTerm,
       institution_type: form.institutionType,
       is_metropolitan_district: String(form.isMetropolitanDistrict),
@@ -202,6 +224,7 @@ onMounted(load)
 .field { display: flex; flex-direction: column; gap: 0.375rem; min-width: 16rem; }
 .field--inline { flex-direction: row; align-items: center; gap: 0.5rem; }
 label { font-size: 0.875rem; font-weight: 500; }
+.hint { color: var(--p-text-muted-color); font-size: 0.75rem; }
 .cap-note { margin-top: 1rem; }
 .actions { display: flex; justify-content: flex-end; }
 </style>
