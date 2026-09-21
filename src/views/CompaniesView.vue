@@ -90,6 +90,15 @@
               @click="openEdit(data)"
             />
             <Button
+              icon="pi pi-arrow-right-arrow-left"
+              severity="secondary"
+              outlined
+              size="small"
+              :aria-label="labels.company.merge"
+              v-tooltip.top="labels.company.merge"
+              @click="openMerge(data)"
+            />
+            <Button
               icon="pi pi-trash"
               severity="danger"
               outlined
@@ -104,6 +113,14 @@
     </DataTable>
 
     <CompanyFormDialog v-model:visible="isDialogOpen" :company="selected" @save="handleSave" />
+
+    <CompanyMergeDialog
+      v-model:visible="isMergeDialogOpen"
+      :source="mergeSource"
+      :companies="companies"
+      :term="term"
+      @confirm="handleMergeConfirm"
+    />
 
     <Dialog
       v-model:visible="isLocationDialogOpen"
@@ -127,13 +144,17 @@ import { onMounted, ref } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import CompanyFormDialog from '../components/company/CompanyFormDialog.vue'
+import CompanyMergeDialog from '../components/company/CompanyMergeDialog.vue'
 import LocationPickerMap from '../components/map/LocationPickerMap.vue'
 import { companiesApi } from '../api/companies'
 import { settingsApi } from '../api/settings'
 import { filesApi } from '../api/files'
+import { listTermsWithDates } from '../api/terms'
 import { labels } from '../i18n/labels'
+import { activeTerm } from '../composables/useTerm'
 import { roundTripDistanceKm } from '../types/models'
-import type { Company, GeocodeStatus, LatLng, NewCompany } from '../types/models'
+import type { Company, GeocodeStatus, LatLng, NewCompany, TermWithDates } from '../types/models'
+import type { CompanyMergeInput } from '../api/companies'
 
 const toast = useToast()
 const confirm = useConfirm()
@@ -180,6 +201,11 @@ const locationTarget = ref<Company | null>(null)
 const editedLocation = ref<LatLng | null>(null)
 // Konumu olmayan işletme için harita okul konumuna odaklanır.
 const schoolCenter = ref<LatLng | null>(null)
+
+const isMergeDialogOpen = ref(false)
+const mergeSource = ref<Company | null>(null)
+/** Aktif dönemin tarihleri; birleştirmenin yürürlük tarihi/gerekçe penceresi bunu kullanır. */
+const term = ref<TermWithDates | null>(null)
 
 function formatKm(value: number | null): string {
   return value === null ? '—' : value.toFixed(1)
@@ -285,6 +311,42 @@ async function saveLocation(): Promise<void> {
   }
 }
 
+function openMerge(company: Company): void {
+  mergeSource.value = company
+  isMergeDialogOpen.value = true
+}
+
+/** Aktif dönemin tarihlerini yükler; birleştirme penceresi buna göre tarih ister. */
+async function loadTerm(): Promise<void> {
+  try {
+    const allTerms = await listTermsWithDates()
+    term.value = allTerms.find((t) => t.term === activeTerm.value) ?? null
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
+async function handleMergeConfirm(payload: CompanyMergeInput): Promise<void> {
+  try {
+    const summary = await companiesApi.applyMerge(payload)
+    const detail = summary.endedCoordination
+      ? `${labels.companyMerge.summary(summary.movedStudents, summary.clearedHours)} ${labels.companyMerge.coordinationEndedNote}`
+      : labels.companyMerge.summary(summary.movedStudents, summary.clearedHours)
+    toast.add({
+      severity: summary.warnings.length > 0 ? 'warn' : 'success',
+      summary: labels.common.saved,
+      detail,
+      life: 6000,
+    })
+    for (const warning of summary.warnings) {
+      toast.add({ severity: 'warn', summary: labels.common.error, detail: warning, life: 8000 })
+    }
+    await load()
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
 async function loadSchoolCenter(): Promise<void> {
   try {
     const settings = await settingsApi.get()
@@ -302,6 +364,7 @@ async function loadSchoolCenter(): Promise<void> {
 onMounted(() => {
   void load()
   void loadSchoolCenter()
+  void loadTerm()
 })
 </script>
 

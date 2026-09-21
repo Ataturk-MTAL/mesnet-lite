@@ -29,6 +29,8 @@ pub fn run() {
             commands::company_commands::update_company,
             commands::company_commands::delete_company,
             commands::company_commands::set_company_location,
+            commands::company_merge_commands::preview_company_merge,
+            commands::company_merge_commands::apply_company_merge,
             commands::student_commands::list_students,
             commands::student_commands::list_terms,
             commands::student_commands::create_student,

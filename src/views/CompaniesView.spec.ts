@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
+import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
@@ -8,11 +9,14 @@ import Tooltip from 'openvue/tooltip'
 import Aura from '@openvue/themes/aura'
 import CompaniesView from './CompaniesView.vue'
 import { labels } from '../i18n/labels'
-import type { Company } from '../types/models'
+import type { Company, TermWithDates } from '../types/models'
 import type { SettingsMap } from '../api/settings'
 import type { GeocodeSummary } from '../api/files'
+import type { CompanyMergeSummary } from '../api/companies'
 
 const listMock = vi.fn<() => Promise<Company[]>>()
+const previewMergeMock = vi.fn<(fromCompanyId: number, intoCompanyId: number) => Promise<unknown>>()
+const applyMergeMock = vi.fn<(input: unknown) => Promise<CompanyMergeSummary>>()
 vi.mock('../api/companies', () => ({
   companiesApi: {
     list: () => listMock(),
@@ -21,6 +25,8 @@ vi.mock('../api/companies', () => ({
     update: vi.fn(),
     remove: vi.fn(),
     setLocation: vi.fn(),
+    previewMerge: (fromCompanyId: number, intoCompanyId: number) => previewMergeMock(fromCompanyId, intoCompanyId),
+    applyMerge: (input: unknown) => applyMergeMock(input),
   },
 }))
 
@@ -37,6 +43,22 @@ vi.mock('../api/files', () => ({
   filesApi: {
     geocodePending: vi.fn<() => Promise<GeocodeSummary>>(),
   },
+}))
+
+const listTermsWithDatesMock = vi.fn<() => Promise<TermWithDates[]>>()
+vi.mock('../api/terms', () => ({
+  listTermsWithDates: () => listTermsWithDatesMock(),
+}))
+
+vi.mock('../composables/useTerm', () => ({
+  activeTerm: ref('2026-2027/1'),
+}))
+
+// CompaniesView `<Toast />`'u kendi içinde barındırmaz (App.vue'da yaşar); Rust
+// hatasının olduğu gibi iletildiğini DOM yerine bu casusla doğrularız.
+const toastAddMock = vi.fn<(message: { severity: string; detail?: string }) => void>()
+vi.mock('openvue/usetoast', () => ({
+  useToast: () => ({ add: toastAddMock }),
 }))
 
 // Harita Leaflet çizer; bu testin konusu değildir.
@@ -63,9 +85,20 @@ function companyFixture(overrides: Partial<Company> = {}): Company {
   }
 }
 
+const startedTerm: TermWithDates = {
+  term: '2026-2027/1',
+  startDate: '2026-09-14',
+  endDate: '2027-06-30',
+  datesConfirmed: true,
+  isPlanning: false,
+  defaultAsOf: '2026-09-19',
+  earliestAllowedDate: '2026-10-05',
+}
+
 async function mountView(companies: Company[]): Promise<VueWrapper> {
   listMock.mockResolvedValue(companies)
   settingsGetMock.mockResolvedValue({})
+  listTermsWithDatesMock.mockResolvedValue([startedTerm])
   const wrapper = mount(CompaniesView, {
     global: {
       plugins: [
@@ -85,6 +118,10 @@ async function mountView(companies: Company[]): Promise<VueWrapper> {
 beforeEach(() => {
   listMock.mockReset()
   settingsGetMock.mockReset()
+  listTermsWithDatesMock.mockReset()
+  previewMergeMock.mockReset()
+  applyMergeMock.mockReset()
+  toastAddMock.mockReset()
   document.body.replaceChildren()
 })
 
@@ -178,6 +215,118 @@ describe('CompaniesView arama', () => {
 
     // Assert
     expect(wrapper.get('input[type="text"]').attributes('placeholder')).toBe(labels.company.searchPlaceholder)
+    wrapper.unmount()
+  })
+})
+
+describe('CompaniesView — işletme birleştirme', () => {
+  const duplicateA = companyFixture({ id: 5, name: 'Örnek İşletme' })
+  const duplicateB = companyFixture({ id: 6, name: 'Örnek İşletme' })
+
+  async function openMergeDialogForFirstRow(): Promise<VueWrapper> {
+    const wrapper = await mountView([duplicateA, duplicateB])
+    document.body
+      .querySelectorAll<HTMLButtonElement>(`button[aria-label="${labels.company.merge}"]`)[0]
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    return wrapper
+  }
+
+  it('satırdaki Birleştir düğmesi o satırı kaynak alan pencereyi açar', async () => {
+    // Arrange & Act
+    const wrapper = await openMergeDialogForFirstRow()
+
+    // Assert
+    expect(document.body.querySelector('[data-testid="company-merge-dialog"]')).not.toBeNull()
+    expect(document.body.textContent).toContain(duplicateA.name)
+    wrapper.unmount()
+  })
+
+  it('uygulama isteği tarih ve gerekçeyle apply_company_merge’e gider, liste yenilenir', async () => {
+    // Arrange
+    previewMergeMock.mockResolvedValue({
+      fromName: duplicateA.name,
+      intoName: duplicateB.name,
+      students: [],
+      awardedHoursToClear: 0,
+      endsCoordination: false,
+      warnings: [],
+    })
+    applyMergeMock.mockResolvedValue({
+      movedStudents: 3,
+      clearedHours: 4,
+      endedCoordination: false,
+      warnings: [],
+    })
+    const wrapper = await openMergeDialogForFirstRow()
+
+    // Act
+    wrapper.findComponent({ name: 'Select' }).vm.$emit('update:modelValue', duplicateB.id)
+    await flushPromises()
+    document.body
+      .querySelector<HTMLButtonElement>('[data-testid="company-merge-confirm-button"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+
+    wrapper.findComponent({ name: 'EffectiveDateField' }).vm.$emit('update:modelValue', '2026-10-15')
+    const reasonField = document.body.querySelector<HTMLTextAreaElement>('[data-testid="change-details-reason"]')!
+    reasonField.value = 'CSV tekrar kaydı birleştirildi'
+    reasonField.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    document.body
+      .querySelector<HTMLButtonElement>('[data-testid="change-details-confirm-button"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+
+    // Assert
+    expect(applyMergeMock).toHaveBeenCalledWith({
+      fromCompanyId: duplicateA.id,
+      intoCompanyId: duplicateB.id,
+      effectiveDate: '2026-10-15',
+      reason: 'CSV tekrar kaydı birleştirildi',
+    })
+    expect(listMock).toHaveBeenCalledTimes(2) // ilk yükleme + birleşme sonrası yenileme
+    wrapper.unmount()
+  })
+
+  it('apply_company_merge Rust hatası döndürünce mesajı olduğu gibi gösterir, listeyi yenilemez', async () => {
+    // Arrange
+    previewMergeMock.mockResolvedValue({
+      fromName: duplicateA.name,
+      intoName: duplicateB.name,
+      students: [],
+      awardedHoursToClear: 0,
+      endsCoordination: false,
+      warnings: [],
+    })
+    applyMergeMock.mockRejectedValue(new Error('apply_company_merge: Kaynağın devam eden bir ataması var'))
+    const wrapper = await openMergeDialogForFirstRow()
+
+    // Act
+    wrapper.findComponent({ name: 'Select' }).vm.$emit('update:modelValue', duplicateB.id)
+    await flushPromises()
+    document.body
+      .querySelector<HTMLButtonElement>('[data-testid="company-merge-confirm-button"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    wrapper.findComponent({ name: 'EffectiveDateField' }).vm.$emit('update:modelValue', '2026-10-15')
+    const reasonField = document.body.querySelector<HTMLTextAreaElement>('[data-testid="change-details-reason"]')!
+    reasonField.value = 'gerekçe'
+    reasonField.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    document.body
+      .querySelector<HTMLButtonElement>('[data-testid="change-details-confirm-button"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+
+    // Assert
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'error',
+        detail: 'apply_company_merge: Kaynağın devam eden bir ataması var',
+      }),
+    )
+    expect(listMock).toHaveBeenCalledTimes(1) // yalnız ilk yükleme; hata sonrası yenilenmedi
     wrapper.unmount()
   })
 })

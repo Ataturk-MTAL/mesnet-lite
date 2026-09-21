@@ -21,6 +21,7 @@ declare module 'vue' {
     Chip: typeof import('openvue/chip')['default']
     Column: typeof import('openvue/column')['default']
     CompanyFormDialog: typeof import('./src/components/company/CompanyFormDialog.vue')['default']
+    CompanyMergeDialog: typeof import('./src/components/company/CompanyMergeDialog.vue')['default']
     ConfirmDialog: typeof import('openvue/confirmdialog')['default']
     DataTable: typeof import('openvue/datatable')['default']
     DatePicker: typeof import('openvue/datepicker')['default']

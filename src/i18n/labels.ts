@@ -62,6 +62,7 @@ export const labels = {
     locationSaved: 'Konum kaydedildi',
     locationRequired: 'Önce haritadan bir konum seçin.',
     termNote: 'İşletmeler tüm eğitim-öğretim yıllarında ortaktır; dönem değişince silinmez.',
+    merge: 'Birleştir',
   },
   geocodeStatus: {
     pending: 'Bekliyor',
@@ -640,5 +641,29 @@ export const labels = {
     otherExtraHours: 'Diğer Ek Dersler',
     chiefType: 'Şeflik',
     employmentType: 'Kadro Tipi',
+  },
+  companyMerge: {
+    title: 'İşletmeleri Birleştir',
+    changeDetailsTitle: 'Birleştirmeyi Kaydet',
+    sourceLabel: 'Kaynak İşletme',
+    targetLabel: 'Hedef İşletme',
+    targetPlaceholder: 'Hedef işletme seçin',
+    targetSearchPlaceholder: 'İşletme ara',
+    direction: (fromName: string, intoName: string) =>
+      `"${fromName}" kaydı "${intoName}" kaydına taşınacak ve "${fromName}" pasifleşecek.`,
+    selectTargetHint: 'Önizlemeyi görmek için bir hedef işletme seçin.',
+    previewLoading: 'Önizleme yükleniyor…',
+    studentsSection: 'Taşınacak Öğrenciler',
+    noStudents: 'Taşınacak öğrenci yok.',
+    awardedHoursToClear: 'Sıfırlanacak takdir edilen saat',
+    awardedHoursNote: 'Birleşme sonrası saat hedef işletme için yeniden takdir edilir; hedefe eklenmez.',
+    endsCoordinationYes: 'Kaynağın koordinatörlüğü sona erecek.',
+    endsCoordinationNo: 'Koordinatörlük bu birleşmeden etkilenmeyecek.',
+    warningsSection: 'Uyarılar',
+    noWarnings: 'Uyarı yok.',
+    confirmButton: 'Birleştir',
+    summary: (movedStudents: number, clearedHours: number) =>
+      `${movedStudents} öğrenci taşındı, ${clearedHours} saat sıfırlandı.`,
+    coordinationEndedNote: 'Kaynağın koordinatörlüğü sona erdi.',
   },
 } as const

@@ -50,6 +50,17 @@ pub async fn get(pool: &SqlitePool, id: i64) -> AppResult<Company> {
         .await?)
 }
 
+/// `is_active` bayrağı `Company`'ye taşınmaz (ekranların çoğu zaten yalnız
+/// aktif işletmeleri gösterir); işletme birleştirme gibi pasiflik denetimi
+/// GEREKEN az sayıdaki çağıran bunu ayrı okur (`services::company_merge`).
+pub async fn is_active(pool: &SqlitePool, id: i64) -> AppResult<bool> {
+    let value: Option<i64> = sqlx::query_scalar("SELECT is_active FROM companies WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    value.map(|v| v != 0).ok_or_else(|| not_found(id))
+}
+
 pub async fn create(pool: &SqlitePool, input: &NewCompany) -> AppResult<Company> {
     let now = now_iso();
     // Konum verilmişse kayıt 'manual', verilmemişse 'pending' başlar.
@@ -377,6 +388,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(active_after, 0);
+    }
+
+    #[tokio::test]
+    async fn is_active_reflects_the_flag_and_missing_id_is_not_found() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Test İşletme A")).await.unwrap();
+        assert!(is_active(&pool, created.id).await.unwrap(), "yeni işletme aktif başlamalı");
+
+        let mut conn = pool.acquire().await.unwrap();
+        set_active_in(&mut conn, created.id, false).await.unwrap();
+        assert!(!is_active(&pool, created.id).await.unwrap());
+
+        let err = is_active(&pool, 999).await.unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
     }
 
     #[tokio::test]
