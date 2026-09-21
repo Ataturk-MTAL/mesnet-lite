@@ -67,24 +67,34 @@
 // vermek yeterli, satır/sütun indeksini elle hesaplamaya gerek yok. Her
 // hücrenin altındaki `#v` boşluğu, kişinin adının altına gerçekten imza
 // atabileceği yeri ayırır (bu bir imza şeridi, yalnız bir isim listesi değil).
+//
+// Kullanıcı isteği ("imza için çok az daha aralık"): hem hücre altı boşluk
+// hem satırlar arası boşluk bir miktar artırıldı (1.6em→1.9em, 0.6em→0.8em);
+// tek sayfaya sığma 12 kişilik referans senaryoda (`a_full_signature_roster_
+// of_twelve_teachers_compiles`) elle doğrulanmıştır.
+#let signature-space-below-name = 1.9em
+#let signature-row-gutter = 0.8em
 #let field-teacher-cell(t) = align(center + top)[
   #text(weight: "bold")[#t.name] \
   #text(size: 6.5pt, fill: gray.darken(20%))[#t.title]
-  #v(1.6em)
+  #v(signature-space-below-name)
 ]
 #let field-teacher-entries = data.fieldTeachers.map(field-teacher-cell)
 #let field-teacher-grid = if field-teacher-entries.len() > 0 {
   grid(
     columns: (1fr, 1fr, 1fr, 1fr),
     column-gutter: 1.4em,
-    row-gutter: 0.6em,
+    row-gutter: signature-row-gutter,
     ..field-teacher-entries,
   )
 } else { [] }
+// Alan şefinin adı, alan öğretmenlerindeki isimlerle (field-teacher-cell)
+// aynı ağırlıkta KALIN basılır (kullanıcı isteği: imza şeridinde tutarlı
+// görünsün); "Alan Şefi/İmza" başlığı (chiefLabel) düz kalmaya devam eder.
 #grid(
   columns: (46fr, teachers-grid-width),
   align: (center + top, left + top),
-  [#align(center)[#data.chiefName]], field-teacher-grid,
+  [#align(center)[#text(weight: "bold")[#data.chiefName]]], field-teacher-grid,
 )
 #v(1.1em)
 
@@ -127,9 +137,19 @@
   ..range(data.rows.len()).map(row-cells).flatten(),
 )
 
-// Onay ve açıklama blokları tablonun hemen ardından gelir ve bölünmez.
+// Onay bloğu dört ayrı alana bölünmüştür (approvalLine, approvalDateLine,
+// principalName, principalTitleLine) ki yalnız müdür adı kalın basılabilsin;
+// müdür adı boşken ayarlardan gelen noktalı yer tutucu bu alanda basılır ve
+// aynı şekilde kalın görünür (davranış Rust tarafında değişmedi, bkz.
+// `commission_minutes::or_placeholder`). Onay ve açıklama blokları tablonun
+// hemen ardından gelir ve bölünmez.
 #block(width: 100%, stroke: 0.5pt, inset: 8pt, breakable: false)[
-  #align(center + horizon)[#block(height: 2.6cm)[#align(horizon)[#lines(data.approvalText)]]]
+  #align(center + horizon)[#block(height: 2.6cm)[#align(horizon)[
+    #data.approvalLine \
+    #data.approvalDateLine \
+    #text(weight: "bold")[#data.principalName] \
+    #data.principalTitleLine
+  ]]]
 ]
 #block(width: 100%, stroke: 0.5pt, inset: 6pt, breakable: false)[
   #align(center)[#data.noteText]

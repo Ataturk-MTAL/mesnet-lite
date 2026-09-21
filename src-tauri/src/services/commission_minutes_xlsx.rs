@@ -52,8 +52,11 @@ const ROWS_PER_TEACHER_ENTRY: u32 = 2;
 /// Ad/unvan satırlarına normalden biraz fazla yükseklik verilir; brief'in
 /// istediği "ferah boşluk" burada satır yüksekliğiyle sağlanır (aradaki boş
 /// bir Excel satırı yerine — o durumda `signature_names_row_count`'un "her
-/// ızgara satırı 2 Excel satırı" varsayımı bozulurdu).
-const TEACHER_GRID_ROW_HEIGHT: f64 = 16.5;
+/// ızgara satırı 2 Excel satırı" varsayımı bozulurdu). Kullanıcı isteği
+/// ("imza için çok az daha aralık") üzerine 16.5'ten 18.0'a çıkarıldı; PDF
+/// tarafındaki karşılığı `signature-space-below-name`/`signature-row-gutter`
+/// (bkz. `commission_minutes.typ`).
+const TEACHER_GRID_ROW_HEIGHT: f64 = 18.0;
 
 /// 4 ızgara sütununun C–G (5 fiziksel sütun, 0 tabanlı indeks 2–6) üzerindeki
 /// karşılığı. 5 fiziksel sütunu 4 gruba bölmenin tek yolu ikisini birleştirmek;
@@ -92,6 +95,10 @@ struct Formats {
     intro: Format,
     plain: Format,
     signature: Format,
+    /// Alan şefinin adı; alan öğretmenlerindeki (`teacher_grid_name`) ile
+    /// aynı ağırlıkta KALIN basılır (kullanıcı isteği: imza şeridinde
+    /// tutarlı görünsün). "Alan Şefi/İmza" başlığı (`signature`) düz kalır.
+    chief_name: Format,
     /// 4 sütunlu ızgaradaki bir öğretmenin adı (üst satır); kalın ve ortalı.
     teacher_grid_name: Format,
     /// Aynı hücrenin unvan satırı (alt satır); "isim altında unvan" isteği
@@ -106,6 +113,11 @@ struct Formats {
     centered: Format,
     distance: Format,
     approval: Format,
+    /// Onay bloğundaki müdür adı çalışması: aynı hücrenin (`approval`) diğer
+    /// satırlarıyla yazı tipi/boyutu aynıdır, yalnız kalınlığı farklıdır —
+    /// zengin metin çalışmasında yazı tipi rengi/kalınlığı hücre değil SATIR
+    /// bazında ayarlanır (bkz. `write_rich_text_span`).
+    principal_name: Format,
     note: Format,
 }
 
@@ -137,6 +149,7 @@ impl Formats {
                 .set_text_wrap(),
             plain: sans(),
             signature: centered(sans().set_text_wrap()),
+            chief_name: centered(sans().set_text_wrap()).set_bold(),
             teacher_grid_name: centered(sans()).set_bold(),
             teacher_grid_title: centered(base(SANS_FONT, 9.0))
                 .set_italic()
@@ -151,6 +164,7 @@ impl Formats {
             // Uzaklık tek ondalıkla gösterilir ("9.0"); PDF'teki basımla aynı.
             distance: boxed(centered(sans().set_num_format("0.0"))),
             approval: boxed(centered(sans().set_text_wrap())),
+            principal_name: sans().set_bold(),
             note: boxed(
                 sans()
                     .set_align(FormatAlign::Center)
@@ -175,6 +189,26 @@ fn write_text_span(
     } else {
         sheet.merge_range(first_row, first_col, last_row, last_col, text, format)?;
     }
+    Ok(())
+}
+
+/// `write_text_span` gibi ama tek renk yerine birden çok yazı tipi biçimi
+/// taşıyan bir zengin metin yazar. `rust_xlsxwriter`'ın `merge_range`'i zengin
+/// metin kabul etmediğinden, önce aralığı boş metinle birleştirir (kenarlık ve
+/// hizalama böylece HER hücreye, birleştirmenin beklediği gibi işlenir), sonra
+/// yalnızca ilk hücrenin İÇERİĞİNİ zengin metinle üzerine yazar — birleştirme
+/// kaydı hücre içeriğinden ayrı tutulduğundan bu üzerine yazma birleşmeyi bozmaz.
+fn write_rich_text_span(
+    sheet: &mut Worksheet,
+    (first_row, last_row): (u32, u32),
+    (first_col, last_col): (u16, u16),
+    segments: &[(&Format, &str)],
+    format: &Format,
+) -> AppResult<()> {
+    if first_row != last_row || first_col != last_col {
+        sheet.merge_range(first_row, first_col, last_row, last_col, "", format)?;
+    }
+    sheet.write_rich_string_with_format(first_row, first_col, segments, format)?;
     Ok(())
 }
 
@@ -283,7 +317,7 @@ fn write_signature_names(
         SIGNATURE_NAMES_FIRST_ROW,
         SIGNATURE_NAMES_FIRST_ROW + names_rows - 1,
     );
-    write_text_span(sheet, rows, (0, 1), &data.chief_name, &f.signature)?;
+    write_text_span(sheet, rows, (0, 1), &data.chief_name, &f.chief_name)?;
 
     for (i, teacher) in data.field_teachers.iter().enumerate() {
         let grid_row = (i / TEACHER_GRID_COLUMNS) as u32;
@@ -396,11 +430,25 @@ fn group_rows(group: &MinutesGroup, table_first_row: u32) -> (u32, u32) {
 fn write_footer(sheet: &mut Worksheet, data: &MinutesData, f: &Formats, table_first_row: u32) -> AppResult<()> {
     let approval_first = table_first_row + data.rows.len() as u32;
     let approval_last = approval_first + APPROVAL_ROW_COUNT - 1;
-    write_text_span(
+    // Onay bloğu dört parçaya ayrılmıştır ki yalnız müdür adı kalın basılsın;
+    // diğer üç satır `approval` biçiminin normal ağırlığında kalır. Satırlar
+    // arasına `\n` eklenir çünkü hücre `set_text_wrap` ile tek gövde metni
+    // gibi görünmesi gerekiyor (şablonla aynı görünüm, bkz. dosya başı).
+    let segments = [
+        (&f.approval, format!("{}\n", data.approval_line)),
+        (&f.approval, format!("{}\n", data.approval_date_line)),
+        (&f.principal_name, format!("{}\n", data.principal_name)),
+        (&f.approval, data.principal_title_line.clone()),
+    ];
+    let segment_refs: Vec<(&Format, &str)> = segments
+        .iter()
+        .map(|(format, text)| (*format, text.as_str()))
+        .collect();
+    write_rich_text_span(
         sheet,
         (approval_first, approval_last),
         (0, LAST_COLUMN),
-        &data.approval_text,
+        &segment_refs,
         &f.approval,
     )?;
 
@@ -637,7 +685,10 @@ mod tests {
             rows: vec![],
             groups: vec![],
             teacher_groups: vec![],
-            approval_text: String::new(),
+            approval_line: String::new(),
+            approval_date_line: String::new(),
+            principal_name: String::new(),
+            principal_title_line: String::new(),
             note_text: String::new(),
         }
     }

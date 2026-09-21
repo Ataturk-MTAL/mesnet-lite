@@ -63,6 +63,10 @@ const NOTE_TEXT: &str = "AÇIKLAMA : Komisyon, Ortaöğretim Kurumlar Yönetmeli
 maddesinine istinaden oluşturulmuştur.";
 
 const CLOSING_LINE: &str = "Olurlarınıza arz ederiz.";
+/// Onay bloğunun sabit ilk satırı.
+const APPROVAL_CONFIRMATION_LINE: &str = "Uygundur";
+/// Onay bloğunun sabit son satırı.
+const PRINCIPAL_TITLE_LINE: &str = "Okul Müdürü";
 const CHIEF_SIGNATURE_LABEL: &str = "Alan Şefi\nİmza";
 const TEACHERS_SIGNATURE_LABEL: &str = "Alan Öğretmenleri İmza";
 
@@ -136,7 +140,19 @@ pub struct MinutesData {
     /// Aynı öğretmenin ardışık işletmelerini kapsayan satır aralıkları: E
     /// sütunundaki birleşik hücreler. Atanmamış işletmeler hiçbirine girmez.
     pub teacher_groups: Vec<MinutesGroup>,
-    pub approval_text: String,
+    /// Onay bloğunun "Uygundur" satırı; sabit metin, hiçbir ayardan gelmez.
+    pub approval_line: String,
+    /// Onay bloğunun tarih satırı; yıl dönemin başlangıç yılından gelir (bkz.
+    /// `parse_academic_year`), gün/ay resmî belge elle doldurulacağından
+    /// bugün de olduğu gibi noktalı bırakılır.
+    pub approval_date_line: String,
+    /// Müdür adı; ayarlardan (`principal_name`) boşsa yer tutucu basılır.
+    /// Onay bloğunda tek KALIN basılan alan budur (kullanıcı isteği: imza
+    /// şeridindeki öğretmen adlarıyla tutarlı olsun); bu yüzden diğer onay
+    /// satırlarından ayrı bir alana çıkarılmıştır.
+    pub principal_name: String,
+    /// Onay bloğunun unvan satırı; sabit metin.
+    pub principal_title_line: String,
     pub note_text: String,
 }
 
@@ -485,18 +501,19 @@ fn signature_title(chief_type: ChiefType) -> &'static str {
 }
 
 /// İmza şeridi: alan şefinin adı ve şef DIŞINDAKİ aktif öğretmenlerin ad ve
-/// unvan listesi, soyada göre Türkçe sırayla. Şeflik `teacher_load_periods`
-/// projeksiyonundan (`as_of` günü geçerli aralık) okunur; eski
-/// `teachers.chief_type` sütunu artık kaynak değildir (bkz. dosya başı ve
-/// `db::teachers::list_with_load_as_of`). Okulda en fazla bir bölüm şefi
-/// olabilir (`domain::history::decide::chief`), bu yüzden `chief_name` tek
-/// bir isimdir.
+/// unvan listesi, ADA göre Türkçe sırayla (kullanıcı isteği; tablodaki
+/// koordinatör sırası bundan bağımsızdır, bkz. `ordered_companies`). Şeflik
+/// `teacher_load_periods` projeksiyonundan (`as_of` günü geçerli aralık)
+/// okunur; eski `teachers.chief_type` sütunu artık kaynak değildir (bkz.
+/// dosya başı ve `db::teachers::list_with_load_as_of`). Okulda en fazla bir
+/// bölüm şefi olabilir (`domain::history::decide::chief`), bu yüzden
+/// `chief_name` tek bir isimdir.
 fn build_signature_block(mut with_load: Vec<TeacherWithLoadAsOf>) -> (String, Vec<SignatureTeacher>) {
     with_load.retain(|t| t.teacher.is_active != 0);
     with_load.sort_by_cached_key(|t| {
         (
-            turkish_sort_key(&t.teacher.last_name),
             turkish_sort_key(&t.teacher.first_name),
+            turkish_sort_key(&t.teacher.last_name),
             t.teacher.id,
         )
     });
@@ -575,7 +592,10 @@ pub async fn build_minutes_data(pool: &SqlitePool, term: &str) -> AppResult<Minu
         rows: table.rows,
         groups: table.groups,
         teacher_groups: table.teacher_groups,
-        approval_text: format!("Uygundur\n…./…/{start_year}\n{principal}\nOkul Müdürü"),
+        approval_line: APPROVAL_CONFIRMATION_LINE.to_string(),
+        approval_date_line: format!("…./…/{start_year}"),
+        principal_name: principal,
+        principal_title_line: PRINCIPAL_TITLE_LINE.to_string(),
         note_text: NOTE_TEXT.to_string(),
     })
 }
@@ -925,10 +945,10 @@ mod tests {
         assert!(data
             .intro
             .starts_with("..................... alanındaki öğrencilerimizin"));
-        assert_eq!(
-            data.approval_text,
-            "Uygundur\n…./…/2026\n…………………\nOkul Müdürü"
-        );
+        assert_eq!(data.approval_line, "Uygundur");
+        assert_eq!(data.approval_date_line, "…./…/2026");
+        assert_eq!(data.principal_name, "…………………");
+        assert_eq!(data.principal_title_line, "Okul Müdürü");
     }
 
     #[tokio::test]
@@ -950,10 +970,36 @@ mod tests {
             .intro
             .starts_with("Elektrik-Elektronik Teknolojisi alanındaki"));
         assert!(!data.intro.contains("....."), "paragrafta nokta kalmamalı");
-        assert_eq!(
-            data.approval_text,
-            "Uygundur\n…./…/2026\nÖMER YİĞİT\nOkul Müdürü"
-        );
+        assert_eq!(data.approval_date_line, "…./…/2026");
+        assert_eq!(data.principal_name, "ÖMER YİĞİT");
+    }
+
+    /// Brief: onay bloğu parçalara ayrılır ki yalnız müdür adı kalın basılabilsin.
+    /// Müdür adı doluyken kendi alanında, büyük harfe çevrilmiş olarak gelir.
+    #[tokio::test]
+    async fn approval_block_splits_principal_name_into_its_own_field_when_set() {
+        let (_dir, pool) = test_pool().await;
+        settings::set(&pool, PRINCIPAL_NAME_KEY, "Ömer Yiğit")
+            .await
+            .unwrap();
+
+        let data = build_minutes_data(&pool, TERM).await.unwrap();
+
+        assert_eq!(data.approval_line, "Uygundur");
+        assert_eq!(data.principal_name, "ÖMER YİĞİT");
+        assert_eq!(data.principal_title_line, "Okul Müdürü");
+    }
+
+    /// Müdür adı boşken bugünkü noktalı yer tutucu davranışı DEĞİŞMEMELİ; bu
+    /// alan artık ayrı basılsa da yer tutucu üretimi aynı `or_placeholder`
+    /// yolundan geçer.
+    #[tokio::test]
+    async fn approval_block_keeps_the_placeholder_when_principal_name_is_empty() {
+        let (_dir, pool) = test_pool().await;
+
+        let data = build_minutes_data(&pool, TERM).await.unwrap();
+
+        assert_eq!(data.principal_name, "…………………");
     }
 
     #[tokio::test]
@@ -1141,20 +1187,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn field_teachers_are_sorted_by_last_name_in_turkish_alphabet() {
+    async fn field_teachers_are_sorted_by_first_name_in_turkish_alphabet() {
         let (_dir, pool) = test_pool().await;
-        // Aynı sekiz soyadın Türkçe sırası zaten `turkish_sort_key_follows_
-        // the_turkish_alphabet`de kanıtlı; burada imza şeridi bu sırayı
-        // uyguluyor mu diye bakılıyor.
+        // Kullanıcı isteği: imza şeridi ADA göre sıralanır (soyada göre değil,
+        // bkz. `build_signature_block`). Aynı sekiz adın Türkçe sırası zaten
+        // `turkish_sort_key_follows_the_turkish_alphabet`de kanıtlı; burada
+        // isimler kasıtlı olarak eklenme sırasının TERSİNDE verilir ki test
+        // gerçekten sıralamayı sınasın, ekleme sırasını değil.
         for (first, last) in [
-            ("A", "Zeytin"),
-            ("B", "Şirin"),
-            ("C", "İyi"),
-            ("D", "Işık"),
-            ("E", "Iğdır"),
-            ("F", "Çiftçi"),
-            ("G", "Cem"),
-            ("H", "Acar"),
+            ("Zeytin", "H"),
+            ("Şirin", "G"),
+            ("İyi", "F"),
+            ("Işık", "E"),
+            ("Iğdır", "D"),
+            ("Çiftçi", "C"),
+            ("Cem", "B"),
+            ("Acar", "A"),
         ] {
             seed_teacher_with_chief(&pool, first, last, ChiefType::None).await;
         }
@@ -1165,7 +1213,7 @@ mod tests {
         assert_eq!(
             order,
             [
-                "H ACAR", "G CEM", "F ÇİFTÇİ", "E IĞDIR", "D IŞIK", "C İYİ", "B ŞİRİN", "A ZEYTİN",
+                "Acar A", "Cem B", "Çiftçi C", "Iğdır D", "Işık E", "İyi F", "Şirin G", "Zeytin H",
             ]
         );
     }
