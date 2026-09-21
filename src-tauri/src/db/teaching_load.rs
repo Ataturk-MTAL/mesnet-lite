@@ -4,7 +4,7 @@ use crate::domain::terms::today_local;
 use crate::error::{AppError, AppResult};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use std::collections::BTreeMap;
 
 /// Bir dönemdeki sınıf+dal için haftalık ders saati ve grup sayısı.
@@ -55,14 +55,22 @@ fn now_iso() -> String {
 }
 
 /// Bir dönemin ders yükü satırları, sınıf ve dala göre sıralı.
-pub async fn list_for_term(pool: &SqlitePool, term: &str) -> AppResult<Vec<TermBranchHours>> {
+///
+/// `E` üzerinden geneldir (bkz. `db/assignments.rs::awarded_hours_for`
+/// deseni): aynı SQL, hem `&SqlitePool` hem de bir transaction'ın
+/// `&mut SqliteConnection`'ı ile çalışır — havuz hesabının transaction
+/// içinden (bkz. `db/history_context.rs`) TEK sorgudan geçmesini sağlar.
+pub async fn list_for_term<'e, E>(executor: E, term: &str) -> AppResult<Vec<TermBranchHours>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let sql = format!(
         "SELECT {SELECT_COLUMNS} FROM term_branch_hours WHERE term = ?1
          ORDER BY grade COLLATE NOCASE, branch COLLATE NOCASE"
     );
     Ok(sqlx::query_as::<_, TermBranchHours>(&sql)
         .bind(term)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?)
 }
 
@@ -74,10 +82,13 @@ pub type BranchStudentCounts = BTreeMap<(String, String), i64>;
 /// Öğrenci kayıtlarından türeyen (sınıf, dal, öğrenci sayısı) üçlüleri.
 /// Filtre TEK yerde durur: dönem eşleşir, sınıf ve dal boş değildir. Hem
 /// öneri satırları hem otomatik grup sayısı buradan beslenir.
-pub async fn student_counts_by_branch(
-    pool: &SqlitePool,
+pub async fn student_counts_by_branch<'e, E>(
+    executor: E,
     term: &str,
-) -> AppResult<Vec<(String, String, i64)>> {
+) -> AppResult<Vec<(String, String, i64)>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let rows: Vec<(String, String, i64)> = sqlx::query_as(
         "SELECT grade, branch, COUNT(*) FROM students
          WHERE term = ?1 AND grade <> '' AND branch <> ''
@@ -85,14 +96,17 @@ pub async fn student_counts_by_branch(
          ORDER BY grade COLLATE NOCASE, branch COLLATE NOCASE",
     )
     .bind(term)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
     Ok(rows)
 }
 
 /// `student_counts_by_branch` sonucunu arama tablosuna çevirir.
-pub async fn branch_student_counts(pool: &SqlitePool, term: &str) -> AppResult<BranchStudentCounts> {
-    Ok(student_counts_by_branch(pool, term)
+pub async fn branch_student_counts<'e, E>(executor: E, term: &str) -> AppResult<BranchStudentCounts>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    Ok(student_counts_by_branch(executor, term)
         .await?
         .into_iter()
         .map(|(grade, branch, count)| ((grade, branch), count))
@@ -141,13 +155,29 @@ pub fn effective_group_count(saved: &TermBranchHours, auto: i64) -> i64 {
 pub async fn effective_branch_hours(pool: &SqlitePool, term: &str) -> AppResult<i64> {
     let rows = list_for_term(pool, term).await?;
     let counts = branch_student_counts(pool, term).await?;
-    Ok(rows
-        .iter()
+    Ok(sum_branch_hours(&rows, &counts))
+}
+
+/// `effective_branch_hours`'ın transaction-içi (bkz. `db/history_context.rs`)
+/// karşılığı: aynı iki sorguyu (`list_for_term`, `branch_student_counts`) TEK
+/// bağlantı üzerinden, `&mut *conn` ile ödünç alarak çalıştırır. `&SqlitePool`
+/// `Copy` olduğu için pool sürümü aynı iki çağrıyı doğrudan yapabiliyor;
+/// `&mut SqliteConnection` `Copy` değildir, bu yüzden bu ince sarmalayıcı
+/// (yalnız kompozisyon, SQL'siz) ayrı tutulur — sorgunun kendisi yukarıdaki
+/// generic fonksiyonlarda TEK yerde yaşamaya devam eder.
+pub async fn effective_branch_hours_in(conn: &mut SqliteConnection, term: &str) -> AppResult<i64> {
+    let rows = list_for_term(&mut *conn, term).await?;
+    let counts = branch_student_counts(&mut *conn, term).await?;
+    Ok(sum_branch_hours(&rows, &counts))
+}
+
+fn sum_branch_hours(rows: &[TermBranchHours], counts: &BranchStudentCounts) -> i64 {
+    rows.iter()
         .map(|saved| {
-            let auto = auto_group_count(&counts, &saved.grade, &saved.branch);
+            let auto = auto_group_count(counts, &saved.grade, &saved.branch);
             saved.weekly_hours * effective_group_count(saved, auto)
         })
-        .sum())
+        .sum()
 }
 
 /// Koordinatörlük toplam ders yükü (havuz) iki kalemden oluşur; ekran ikisini
@@ -178,7 +208,13 @@ impl PoolBreakdown {
 /// `teachers.chief_type` sütunu DEĞİL: `setTeacherLoad` artık yalnız
 /// projeksiyona yazar ve eski sütun bayatlar. Aralık yarı açıktır
 /// (`valid_from <= as_of < valid_to`); `valid_to` boşsa aralık açıktır.
-pub async fn chief_planning_hours(pool: &SqlitePool, term: &str, as_of: NaiveDate) -> AppResult<i64> {
+/// Tek sorgu olduğu için `list_for_term` gibi doğrudan generic'tir: aynı SQL
+/// hem `&SqlitePool` hem transaction'ın `&mut SqliteConnection`'ı ile çalışır,
+/// `_in` sarmalayıcıya gerek kalmaz.
+pub async fn chief_planning_hours<'e, E>(executor: E, term: &str, as_of: NaiveDate) -> AppResult<i64>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let chief_types: Vec<String> = sqlx::query_scalar(
         "SELECT p.chief_type
          FROM teacher_load_periods p
@@ -190,7 +226,7 @@ pub async fn chief_planning_hours(pool: &SqlitePool, term: &str, as_of: NaiveDat
     )
     .bind(term)
     .bind(as_of)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
 
     Ok(chief_types
@@ -209,11 +245,26 @@ pub async fn pool_breakdown(pool: &SqlitePool, term: &str, as_of: NaiveDate) -> 
     })
 }
 
+/// `pool_breakdown`'ın transaction-içi karşılığı (bkz. `effective_branch_hours_in`
+/// açıklaması): tarihçe kapısı (`db/history_context.rs::load`) havuzu BURADAN
+/// okur, kendi kopyasını hesaplamaz.
+pub async fn pool_breakdown_in(conn: &mut SqliteConnection, term: &str, as_of: NaiveDate) -> AppResult<PoolBreakdown> {
+    Ok(PoolBreakdown {
+        branch_hours: effective_branch_hours_in(&mut *conn, term).await?,
+        chief_planning_hours: chief_planning_hours(&mut *conn, term, as_of).await?,
+    })
+}
+
 /// Tam havuz: şeflik saatleri + Σ (haftalık ders saati × etkin grup sayısı).
 /// İşletme takdiri, otomatik dağıtım ve aşım uyarısı bu değer üzerinden
 /// çalışır; şeflik saati havuzdan çıkarılmaz.
 pub async fn total_pool_hours(pool: &SqlitePool, term: &str, as_of: NaiveDate) -> AppResult<i64> {
     Ok(pool_breakdown(pool, term, as_of).await?.total())
+}
+
+/// `total_pool_hours`'ın transaction-içi karşılığı.
+pub async fn total_pool_hours_in(conn: &mut SqliteConnection, term: &str, as_of: NaiveDate) -> AppResult<i64> {
+    Ok(pool_breakdown_in(conn, term, as_of).await?.total())
 }
 
 /// Havuzun hesaplandığı gün: bugün (Europe/Istanbul), dönem aralığına
@@ -353,11 +404,9 @@ pub async fn copy_term(pool: &SqlitePool, from_term: &str, to_term: &str) -> App
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{init_pool, students};
-    use crate::db::teaching_load_test_support::{
-        change_chief_type, deactivate_teacher, seed_teacher, ymd,
-    };
-    use crate::domain::models::{ChiefType, NewStudent};
+    use crate::db::{init_pool, students, teachers};
+    use crate::db::teaching_load_test_support::{seed_teacher, ymd};
+    use crate::domain::models::{ChiefType, NewStudent, NewTeacher};
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     pub(super) const TERM: &str = "2026-2027/1";
@@ -531,93 +580,11 @@ mod tests {
     }
 
     // --- Şeflik saatleri (MADDE 6/4, OÖKY MADDE 88/2-ç) ---
+    // Testler `pool_tests.rs`'te durur (dosya 800 satırı aşıyordu); bu
+    // yardımcı, hem oradan hem `auto_group_tests.rs`'ten paylaşılır.
 
     pub(super) fn breakdown(branch_hours: i64, chief_planning_hours: i64) -> PoolBreakdown {
         PoolBreakdown { branch_hours, chief_planning_hours }
-    }
-
-    /// Alan şefi 10 + atölye/lab şefi 6 saat, Σ(saat × grup)'a EKLENİR.
-    #[tokio::test]
-    async fn pool_adds_department_and_workshop_lab_chief_hours_to_branch_hours() {
-        let (_dir, pool) = test_pool().await;
-        replace_for_term(
-            &pool,
-            TERM,
-            &[row("12/C", "Dal A", 24, 2), row("12/D", "Dal B", 24, 1)],
-        )
-        .await
-        .unwrap();
-        seed_teacher(&pool, "Alan", ChiefType::Department).await;
-        seed_teacher(&pool, "Atolye", ChiefType::WorkshopLab).await;
-        seed_teacher(&pool, "Siradan", ChiefType::None).await;
-
-        let as_of = ymd(2026, 10, 1);
-
-        assert_eq!(chief_planning_hours(&pool, TERM, as_of).await.unwrap(), 10 + 6);
-        assert_eq!(pool_breakdown(&pool, TERM, as_of).await.unwrap(), breakdown(24 * 2 + 24, 16));
-        assert_eq!(total_pool_hours(&pool, TERM, as_of).await.unwrap(), 24 * 2 + 24 + 16);
-    }
-
-    #[tokio::test]
-    async fn pool_is_only_the_branch_sum_when_nobody_is_chief() {
-        let (_dir, pool) = test_pool().await;
-        replace_for_term(&pool, TERM, &[row("12/C", "Dal A", 24, 2)]).await.unwrap();
-        seed_teacher(&pool, "Siradan", ChiefType::None).await;
-
-        let as_of = ymd(2026, 10, 1);
-        assert_eq!(chief_planning_hours(&pool, TERM, as_of).await.unwrap(), 0);
-        assert_eq!(total_pool_hours(&pool, TERM, as_of).await.unwrap(), 48);
-    }
-
-    #[tokio::test]
-    async fn inactive_teachers_chief_hours_are_not_counted() {
-        let (_dir, pool) = test_pool().await;
-        seed_teacher(&pool, "Alan", ChiefType::Department).await;
-        let atolye = seed_teacher(&pool, "Atolye", ChiefType::WorkshopLab).await;
-        deactivate_teacher(&pool, atolye).await;
-
-        assert_eq!(chief_planning_hours(&pool, TERM, ymd(2026, 10, 1)).await.unwrap(), 10);
-    }
-
-    /// `valid_from <= as_of < valid_to`: aralığın başlangıç günü dahil, bitiş
-    /// günü hariçtir.
-    #[tokio::test]
-    async fn chief_hours_outside_the_validity_range_are_not_counted() {
-        let (_dir, pool) = test_pool().await;
-        let alan = seed_teacher(&pool, "Alan", ChiefType::Department).await; // 2026-09-01'den
-        change_chief_type(&pool, alan, ChiefType::None, ymd(2026, 11, 5)).await;
-
-        let hours = |d| chief_planning_hours(&pool, TERM, d);
-        assert_eq!(hours(ymd(2026, 8, 31)).await.unwrap(), 0, "aralıktan önce");
-        assert_eq!(hours(ymd(2026, 9, 1)).await.unwrap(), 10, "başlangıç günü dahil");
-        assert_eq!(hours(ymd(2026, 11, 4)).await.unwrap(), 10, "bitişten önceki gün");
-        assert_eq!(hours(ymd(2026, 11, 5)).await.unwrap(), 0, "bitiş günü hariç");
-    }
-
-    /// Şef değişince iki aralık ardışık olur; her gün doğru aralığı okumalı.
-    #[tokio::test]
-    async fn chief_change_gives_the_right_total_on_each_side_of_the_change_day() {
-        let (_dir, pool) = test_pool().await;
-        let alan = seed_teacher(&pool, "Alan", ChiefType::Department).await;
-        change_chief_type(&pool, alan, ChiefType::WorkshopLab, ymd(2026, 11, 5)).await;
-
-        let hours = |d| chief_planning_hours(&pool, TERM, d);
-        assert_eq!(hours(ymd(2026, 10, 1)).await.unwrap(), 10);
-        assert_eq!(hours(ymd(2026, 11, 5)).await.unwrap(), 6);
-        assert_eq!(hours(ymd(2027, 1, 31)).await.unwrap(), 6, "açık aralık (valid_to boş) dönem sonuna dek");
-    }
-
-    #[tokio::test]
-    async fn chief_hours_are_scoped_to_the_term() {
-        let (_dir, pool) = test_pool().await;
-        seed_teacher(&pool, "Alan", ChiefType::Department).await;
-
-        assert_eq!(chief_planning_hours(&pool, "2027-2028/1", ymd(2027, 10, 1)).await.unwrap(), 0);
-    }
-
-    #[test]
-    fn breakdown_total_is_the_sum_of_both_parts() {
-        assert_eq!(breakdown(72, 16).total(), 88);
     }
 
     /// Migration 0005, önceki dört göçün oluşturduğu eski iki-JSON ayarını
@@ -688,7 +655,94 @@ mod tests {
         .unwrap();
         assert_eq!(remaining, 0, "eski ayar anahtarları silinmeli");
     }
+
+    // --- Migration 0008: kapıdan hiç geçmemiş öğretmenlerin geriye dönük tohumu ---
+
+    /// Eski `teachers::create` ile (kapıdan/`execute_change`den GEÇMEDEN)
+    /// eklenen bir öğretmen — `commands/teacher_commands.rs::create_teacher`
+    /// bu düzeltmeden ÖNCE tam olarak böyle yazıyordu.
+    fn legacy_teacher(last_name: &str, chief_type: &str) -> NewTeacher {
+        NewTeacher {
+            first_name: "Test".into(),
+            last_name: last_name.into(),
+            registry_no: String::new(),
+            field: "Elektrik-Elektronik Teknolojisi".into(),
+            branches: vec!["Elektronik Haberleşme".into()],
+            employment_type: "tenured".into(),
+            base_hours: 20,
+            max_extra_hours: 24,
+            other_extra_hours: 0,
+            chief_type: chief_type.into(),
+            is_active: true,
+        }
+    }
+
+    async fn apply_0008(pool: &SqlitePool) {
+        let sql = std::fs::read_to_string("migrations/0008_backfill_teacher_load.sql").unwrap();
+        sqlx::raw_sql(&sql).execute(pool).await.unwrap();
+    }
+
+    /// Gerçek senaryonun kopyası (brief): 12 öğretmen — 9 atölye/lab şefi,
+    /// 1 bölüm şefi, 2 şefsiz — yalnız BİRİ (kapıdan oluşturulan) projeksiyonda.
+    /// Göç 0008'den ÖNCE şeflik saatleri 6 (yalnız o bir öğretmen), SONRA 64
+    /// (9×6 + 1×10) olmalı.
+    #[tokio::test]
+    async fn migration_0008_backfills_chief_hours_for_teachers_that_never_went_through_the_gate() {
+        let (_dir, pool) = test_pool().await;
+        let as_of = ymd(2026, 10, 1);
+
+        // Kapıdan geçen tek öğretmen — 9 atölye/lab şefinden biri.
+        seed_teacher(&pool, "Kapidan", ChiefType::WorkshopLab).await;
+        assert_eq!(chief_planning_hours(&pool, TERM, as_of).await.unwrap(), 6, "göçten önce yalnız bu öğretmen görünür");
+
+        // Kalan 11 öğretmen eski yoldan (kapıyı hiç görmeden) eklendi.
+        for i in 0..8 {
+            teachers::create(&pool, &legacy_teacher(&format!("Atolye{i}"), "workshop_lab")).await.unwrap();
+        }
+        teachers::create(&pool, &legacy_teacher("Bolum", "department")).await.unwrap();
+        teachers::create(&pool, &legacy_teacher("Duz1", "none")).await.unwrap();
+        teachers::create(&pool, &legacy_teacher("Duz2", "none")).await.unwrap();
+
+        apply_0008(&pool).await;
+
+        // MADDE 6/4: 9 × 6 (atölye/lab şefi) + 1 × 10 (bölüm şefi) = 64.
+        assert_eq!(chief_planning_hours(&pool, TERM, as_of).await.unwrap(), 9 * 6 + 10);
+    }
+
+    /// Göç 0008 birden fazla kez uygulanırsa (ör. tekrar dağıtım) projeksiyonu
+    /// zaten olan öğretmene ikinci bir satır YAZMAMALI — `UNIQUE(teacher_id,
+    /// term, valid_from)` kısıtına çarpıp göçü kırmamalı.
+    #[tokio::test]
+    async fn migration_0008_is_idempotent() {
+        let (_dir, pool) = test_pool().await;
+        seed_teacher(&pool, "Kapidan", ChiefType::WorkshopLab).await;
+        teachers::create(&pool, &legacy_teacher("Eski", "department")).await.unwrap();
+
+        apply_0008(&pool).await;
+        let after_first: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM teacher_load_periods")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(after_first, 2, "biri kapıdan, biri göçten: iki satır");
+
+        apply_0008(&pool).await;
+        let after_second: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM teacher_load_periods")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(after_second, after_first, "ikinci uygulama yeni satır eklememeli");
+
+        let events_after_second: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM change_events WHERE kind = 'load_set'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(events_after_second, 2, "ikinci uygulama yeni olay da eklememeli");
+    }
 }
 
 #[cfg(test)]
 mod auto_group_tests;
+
+#[cfg(test)]
+mod pool_tests;

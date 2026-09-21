@@ -2,8 +2,8 @@ use crate::db::company_hours::HoursInput;
 use crate::db::hour_rules::select_narrowest;
 use crate::db::teaching_load::{self, BranchStudentCounts, TermBranchHoursInput};
 use crate::db::{companies, company_hours, hour_rules, settings, students, AppState};
-use crate::domain::hour_distribution::{distribute, DistributionCandidate, DistributionOutcome};
-use crate::error::AppResult;
+use crate::domain::hour_distribution::{distribute, pool_overrun_reason, DistributionCandidate, DistributionOutcome};
+use crate::error::{AppError, AppResult};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -122,6 +122,11 @@ async fn load_board(state: &AppState) -> AppResult<HoursBoard> {
                 .into(),
         );
     } else if board.total_awarded > board.pool_hours {
+        // `save_hours`/tarihçe kapısı artık havuzu AŞAN yeni bir kayda izin
+        // vermiyor (kullanıcı kuralı "havuz aşılamaz"); bu dal yine de
+        // ulaşılabilir çünkü havuzun KENDİSİ sonradan küçültülebilir (ör.
+        // Ders Yükü ekranından bir dalın saati düşürülürse, önceden geçerli
+        // bir takdir yeni (daha küçük) havuza göre aşkın kalır).
         board.warnings.push(format!(
             "Toplam takdir edilen saat ({}) ders yükü havuzunu ({}) aşıyor!",
             board.total_awarded, board.pool_hours
@@ -149,8 +154,44 @@ pub async fn save_company_hours(
     rows: Vec<HoursInput>,
 ) -> AppResult<HoursBoard> {
     let term = settings::get_active_term(&state.pool).await?;
-    company_hours::save_many(&state.pool, &term, &rows).await?;
+    save_hours_for_term(&state.pool, &term, &rows).await?;
     load_board(&state).await
+}
+
+/// `save_company_hours`'ın havuz denetimli asıl yazma adımı — testte
+/// `State<'_, AppState>` kurmadan doğrudan çağrılabilsin diye ayrı tutulur
+/// (bkz. `distribute_for_term`'in aynı deseni).
+async fn save_hours_for_term(pool: &sqlx::SqlitePool, term: &str, rows: &[HoursInput]) -> AppResult<()> {
+    reject_if_pool_overrun(pool, term, rows).await?;
+    company_hours::save_many(pool, term, rows).await?;
+    Ok(())
+}
+
+/// Kullanıcı kuralı "havuz aşılamaz": doğrudan kaydetme yolu, tarihçe
+/// kapısındaki `decide::company::set_company_hours` ile AYNI kuralı
+/// (`hour_distribution::pool_overrun_reason`) kullanır — ikisi ayrı kopya
+/// tutarsa biri unutulur (DRY). `rows`'ta OLMAYAN işletmelerin kayıtlı
+/// takdiri değişmeden kalır; bu yüzden eski/yeni toplam hesaplanırken
+/// `rows`'taki işletmeler DB'deki eski değerleriyle değil, gönderilen yeni
+/// değerleriyle sayılır.
+async fn reject_if_pool_overrun(pool: &sqlx::SqlitePool, term: &str, rows: &[HoursInput]) -> AppResult<()> {
+    let as_of = teaching_load::current_as_of(pool, term).await?;
+    let pool_hours = teaching_load::total_pool_hours(pool, term, as_of).await?;
+
+    let touched: BTreeSet<i64> = rows.iter().map(|r| r.company_id).collect();
+    let existing = company_hours::list(pool, term).await?;
+    let old_total: i64 = existing.iter().map(|e| e.awarded_hours).sum();
+    let untouched_total: i64 = existing
+        .iter()
+        .filter(|e| !touched.contains(&e.company_id))
+        .map(|e| e.awarded_hours)
+        .sum();
+    let new_rows_total: i64 = rows.iter().map(|r| if r.is_honorary { 0 } else { r.awarded_hours }).sum();
+
+    if let Some(reason) = pool_overrun_reason(old_total, untouched_total + new_rows_total, pool_hours) {
+        return Err(AppError::Validation(reason));
+    }
+    Ok(())
 }
 
 /// `Otomatik Dağıt` düğmesinin gönderdiği satır.
@@ -640,5 +681,111 @@ mod tests {
         assert_eq!(board.rows[1].group_count, 3, "12/D elle: 3 korunur");
         assert_eq!(board.rows[1].auto_group_count, 2);
         assert_eq!(board.branch_hours, 24 * 2 + 24 * 3);
+    }
+
+    // --- Havuz aşımı: `save_company_hours` yolu (kullanıcı kuralı "havuz aşılamaz") ---
+
+    async fn a_company(pool: &SqlitePool, name: &str) -> i64 {
+        companies::create(
+            pool,
+            &crate::domain::models::NewCompany {
+                name: name.into(),
+                contact_first_name: String::new(),
+                contact_last_name: String::new(),
+                phone: String::new(),
+                email: String::new(),
+                address_text: "Test adres".into(),
+                latitude: None,
+                longitude: None,
+                one_way_distance_km: Some(5.0),
+                notes: String::new(),
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    /// Tek dal satırıyla havuzu istenen değere sabitler (grup 1, saat = havuz).
+    async fn set_pool_hours(pool: &SqlitePool, hours: i64) {
+        teaching_load::replace_for_term(
+            pool,
+            TERM,
+            &[TermBranchHoursInput { grade: "12/C".into(), branch: "Dal".into(), weekly_hours: hours, group_count: 1, is_group_manual: true }],
+        )
+        .await
+        .unwrap();
+    }
+
+    fn hours_input(company_id: i64, awarded: i64) -> HoursInput {
+        HoursInput { company_id, max_hours_snapshot: 1000, awarded_hours: awarded, is_honorary: false, is_locked: false, notes: String::new() }
+    }
+
+    /// Havuz 100, İşletme A zaten 90 almış; B'ye +20 vermek toplamı 110'a
+    /// çıkarır — reddedilir, HİÇBİR şey yazılmaz.
+    #[tokio::test]
+    async fn save_company_hours_rejects_when_pool_would_be_exceeded() {
+        let (_dir, pool) = test_pool().await;
+        set_pool_hours(&pool, 100).await;
+        let a = a_company(&pool, "İşletme A").await;
+        let b = a_company(&pool, "İşletme B").await;
+        company_hours::save_many(&pool, TERM, &[hours_input(a, 90)]).await.unwrap();
+
+        let err = save_hours_for_term(&pool, TERM, &[hours_input(b, 20)]).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+        assert_eq!(company_hours::total_awarded(&pool, TERM).await.unwrap(), 90, "reddedilen istekte hiçbir şey yazılmamalı");
+    }
+
+    /// Tam havuza eşitlemek (90 + 10 = 100) SINIR DAHİL kabul edilir.
+    #[tokio::test]
+    async fn save_company_hours_accepts_reaching_the_pool_exactly() {
+        let (_dir, pool) = test_pool().await;
+        set_pool_hours(&pool, 100).await;
+        let a = a_company(&pool, "İşletme A").await;
+        let b = a_company(&pool, "İşletme B").await;
+        company_hours::save_many(&pool, TERM, &[hours_input(a, 90)]).await.unwrap();
+
+        save_hours_for_term(&pool, TERM, &[hours_input(b, 10)]).await.unwrap();
+        assert_eq!(company_hours::total_awarded(&pool, TERM).await.unwrap(), 100);
+    }
+
+    /// Havuz tanımlanmamışsa (`0`) aşım denetimi hiç yapılmaz.
+    #[tokio::test]
+    async fn save_company_hours_skips_the_pool_check_when_the_pool_is_undefined() {
+        let (_dir, pool) = test_pool().await;
+        let a = a_company(&pool, "İşletme A").await;
+        let large = HoursInput { max_hours_snapshot: 10_000, ..hours_input(a, 10_000) };
+
+        save_hours_for_term(&pool, TERM, &[large]).await.unwrap();
+        assert_eq!(company_hours::total_awarded(&pool, TERM).await.unwrap(), 10_000);
+    }
+
+    /// Aşımı AZALTAN bir düzenleme (100 → 80, havuz 80) kabul edilir.
+    #[tokio::test]
+    async fn save_company_hours_accepts_an_edit_that_reduces_the_total() {
+        let (_dir, pool) = test_pool().await;
+        set_pool_hours(&pool, 80).await;
+        let a = a_company(&pool, "İşletme A").await;
+        company_hours::save_many(&pool, TERM, &[hours_input(a, 100)]).await.unwrap();
+
+        save_hours_for_term(&pool, TERM, &[hours_input(a, 80)]).await.unwrap();
+        assert_eq!(company_hours::total_awarded(&pool, TERM).await.unwrap(), 80);
+    }
+
+    /// Göçten kalma veri zaten havuzu aşmışsa (60 > 50), aşımı ARTIRMAYAN bir
+    /// düzenleme kilitlenmez; aşımı BÜYÜTEN bir düzenleme yine reddedilir.
+    #[tokio::test]
+    async fn save_company_hours_does_not_lock_a_pre_existing_overrun_but_still_rejects_a_further_increase() {
+        let (_dir, pool) = test_pool().await;
+        set_pool_hours(&pool, 50).await;
+        let a = a_company(&pool, "İşletme A").await;
+        company_hours::save_many(&pool, TERM, &[hours_input(a, 60)]).await.unwrap();
+
+        save_hours_for_term(&pool, TERM, &[hours_input(a, 60)])
+            .await
+            .expect("mevcut aşımı korumak kilitlenmemeli");
+
+        let err = save_hours_for_term(&pool, TERM, &[hours_input(a, 65)]).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)), "aşımı büyüten değişiklik yine reddedilmeli");
     }
 }

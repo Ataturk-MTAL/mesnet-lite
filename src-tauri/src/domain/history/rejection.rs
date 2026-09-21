@@ -47,6 +47,12 @@ pub enum RejectionCode {
     /// yeni bir `department` günü yaratıyor. `conflicting_change_set_ids`,
     /// o öğretmenin şefliğini kuran değişiklik kümesini taşır.
     ChiefAlreadyAssigned,
+    /// Kullanıcı kuralı "havuz aşılamaz": bu komuttan sonra dönemin TOPLAM
+    /// takdir edilen saati, alan koordinatörlüğü ders yükü havuzunu (OÖKY
+    /// MADDE 88/2-ç) aşıyor. `AboveCap`'ten FARKLIDIR — `AboveCap` TEK bir
+    /// işletmenin mesafe/öğrenci tavanına bakar, bu kod dönemin TOPLAMINA
+    /// bakar (bkz. `domain::hour_distribution::pool_overrun_reason`).
+    PoolExceeded,
 }
 
 /// `decide` ve `resolve_effective_date`'in alan kuralı reddi.
@@ -95,5 +101,14 @@ mod tests {
     fn chief_already_assigned_serializes_as_camel_case() {
         let json = serde_json::to_string(&RejectionCode::ChiefAlreadyAssigned).unwrap();
         assert_eq!(json, "\"chiefAlreadyAssigned\"");
+    }
+
+    /// Yeni eklenen kod da arayüzün beklediği camelCase'e serileşmeli
+    /// (brief: "yeni bir kod ekle ve adını raporla; yeni kodsa camelCase
+    /// serileşme testi de yaz").
+    #[test]
+    fn pool_exceeded_serializes_as_camel_case() {
+        let json = serde_json::to_string(&RejectionCode::PoolExceeded).unwrap();
+        assert_eq!(json, "\"poolExceeded\"");
     }
 }

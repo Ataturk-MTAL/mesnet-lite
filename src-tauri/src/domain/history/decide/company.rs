@@ -1,5 +1,7 @@
 //! İşletme tarafı komutları: saat, koordinasyon (spec §5.3–§5.4).
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 
 use crate::domain::history::apply::{apply_coordination, apply_hours};
@@ -8,6 +10,7 @@ use crate::domain::history::impact::{ImpactSummary, ImpactWarning, ImpactNotice}
 use crate::domain::history::policy::{cap_for, plan_company_policies};
 use crate::domain::history::rejection::{Rejection, RejectionCode};
 use crate::domain::history::timeline::order_events;
+use crate::domain::hour_distribution::pool_overrun_reason;
 use crate::domain::scheduling::Block;
 
 use super::flags::{apply_shadow_and_future_notices, teacher_capacity_warnings, teacher_schedule_warnings};
@@ -91,12 +94,53 @@ pub(super) fn set_company_hours(ctx: &DecisionContext, req: &ChangeRequest, rows
         events.push(event);
     }
 
+    reject_if_pool_overrun(ctx, d, rows, &events)?;
+
     let augmented = with_pending(ctx, &events);
     for teacher_id in coordinators {
         impact.warnings.extend(teacher_capacity_warnings(&augmented, teacher_id, d));
     }
 
     finish(ctx, req, d, events, impact, Vec::new())
+}
+
+/// Kullanıcı kuralı "havuz aşılamaz" (bkz. `domain::hour_distribution::pool_overrun_reason`,
+/// TEK doğruluk yeri). Dönemin TÜM işletmeleri için `d` tarihindeki takdiri
+/// toplar; bu komutla değişenler için ZATEN üretilmiş `events`'teki YENİ
+/// değeri kullanır — `state_before` sorgusunu ikinci kez çalıştırmaz (DRY).
+fn reject_if_pool_overrun(ctx: &DecisionContext, d: NaiveDate, rows: &[CompanyHoursRow], events: &[PlannedEvent]) -> Result<(), Rejection> {
+    let overrides: BTreeMap<i64, i64> = events
+        .iter()
+        .filter_map(|e| match &e.payload {
+            EventPayload::HoursSet { state, .. } => Some((e.subject_id, state.awarded_hours)),
+            _ => None,
+        })
+        .collect();
+
+    let old_total = total_awarded_at(ctx, d, &BTreeMap::new());
+    let new_total = total_awarded_at(ctx, d, &overrides);
+
+    let Some(reason) = pool_overrun_reason(old_total, new_total, ctx.pool_hours) else { return Ok(()) };
+    let company_names = rows.iter().map(|r| ctx.company_label(r.company_id)).collect::<Vec<_>>().join(", ");
+    Err(Rejection::new(RejectionCode::PoolExceeded, format!("{company_names}: {reason}")))
+}
+
+/// Dönemdeki TÜM işletmelerin `d` tarihindeki takdir toplamı. `overrides`'ta
+/// olan işletmeler için o değer, olmayanlar için ZATEN KAYITLI (geçmiş)
+/// durum kullanılır — böylece bu partide değişmeyen işletmelerin mevcut
+/// takdiri de toplama girer.
+fn total_awarded_at(ctx: &DecisionContext, d: NaiveDate, overrides: &BTreeMap<i64, i64>) -> i64 {
+    ctx.companies
+        .keys()
+        .map(|&company_id| match overrides.get(&company_id) {
+            Some(&awarded) => awarded,
+            None => ctx
+                .timeline::<HoursState>(Stream::CompanyHours, company_id, apply_hours)
+                .state_at(d)
+                .map(|h| h.awarded_hours)
+                .unwrap_or(0),
+        })
+        .sum()
 }
 
 /// Tek bir `CompanyHoursRow` için olayı ve etki satırını üretir; döndürdüğü
@@ -343,6 +387,118 @@ mod tests {
 
     fn request(effective_date: NaiveDate, command: ChangeCommand) -> ChangeRequest {
         ChangeRequest { term: "2026-2027/1".into(), effective_date: Some(effective_date), document_date: None, reason: "test".into(), command }
+    }
+
+    // --- Havuz aşımı (kullanıcı kuralı: "havuz aşılamaz") ---
+
+    /// Kapak/tavan denetimini devre dışı bırakmak için (bu testlerin konusu
+    /// havuz, tek işletmenin mesafe/öğrenci tavanı değil): `cap_for`,
+    /// öğrencisi 0 olan işletmeye `Some(0)` tavan verir (policy.rs), bu da
+    /// havuz denetimine hiç ulaşmadan `AboveCap` fırlatır. Bir öğrenci
+    /// yerleştirip kural listesini boş bırakmak `cap_for`'u `None`'a
+    /// (tavansız) düşürür.
+    fn placed(event_id: i64, student_id: i64, company_id: i64) -> crate::domain::history::events::StoredEvent {
+        stored_event(event_id, 900, Stream::Placement, student_id, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: company_id, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true)
+    }
+
+    /// Havuz 100, İşletme A zaten 90 almış; B'ye +20 vermek toplamı 110'a
+    /// çıkarır — reddedilir, HİÇBİR olay üretilmez.
+    #[test]
+    fn set_company_hours_rejects_when_pool_would_be_exceeded() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_pool_hours(100)
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_company(2, "İşletme B", Some(10.0))
+            .with_event(stored_event(1, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(90, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .with_event(placed(2, 200, 2))
+            .build();
+
+        let rows = vec![CompanyHoursRow { company_id: 2, awarded_hours: 20, is_honorary: false, is_locked: false, notes: String::new() }];
+        let req = request(ymd(2026, 11, 3), ChangeCommand::SetCompanyHours { rows: rows.clone() });
+        let err = set_company_hours(&ctx, &req, &rows).unwrap_err();
+
+        assert_eq!(err.code, RejectionCode::PoolExceeded);
+        assert!(err.message.contains("110"), "gerçek toplamı söylemeli: {}", err.message);
+        assert!(err.message.contains("İşletme"), "hangi işletmenin değiştiğini söylemeli: {}", err.message);
+    }
+
+    /// Tam havuza eşitlemek (90 + 10 = 100) SINIR DAHİL kabul edilir.
+    #[test]
+    fn set_company_hours_accepts_reaching_the_pool_exactly() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_pool_hours(100)
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_company(2, "İşletme B", Some(10.0))
+            .with_event(stored_event(1, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(90, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .with_event(placed(2, 200, 2))
+            .build();
+
+        let rows = vec![CompanyHoursRow { company_id: 2, awarded_hours: 10, is_honorary: false, is_locked: false, notes: String::new() }];
+        let req = request(ymd(2026, 11, 3), ChangeCommand::SetCompanyHours { rows: rows.clone() });
+        assert!(set_company_hours(&ctx, &req, &rows).is_ok());
+    }
+
+    /// Havuz tanımlanmamışsa (`0`, ders yükü ekranı hiç doldurulmamış) aşım
+    /// denetimi hiç yapılmaz — mevcut "tanımlanmamış" uyarısıyla tutarlı.
+    #[test]
+    fn set_company_hours_skips_the_pool_check_when_the_pool_is_undefined() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_event(placed(1, 200, 1))
+            .build();
+
+        let rows = vec![CompanyHoursRow { company_id: 1, awarded_hours: 10_000, is_honorary: false, is_locked: false, notes: String::new() }];
+        let req = request(ymd(2026, 11, 3), ChangeCommand::SetCompanyHours { rows: rows.clone() });
+        assert!(set_company_hours(&ctx, &req, &rows).is_ok());
+    }
+
+    /// Aşımı AZALTAN bir düzenleme (100 → 80, havuz 80) kabul edilir.
+    #[test]
+    fn set_company_hours_accepts_an_edit_that_reduces_the_total() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_pool_hours(80)
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_event(stored_event(1, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(100, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .with_event(placed(2, 200, 1))
+            .build();
+
+        let rows = vec![CompanyHoursRow { company_id: 1, awarded_hours: 80, is_honorary: false, is_locked: false, notes: String::new() }];
+        let req = request(ymd(2026, 11, 3), ChangeCommand::SetCompanyHours { rows: rows.clone() });
+        assert!(set_company_hours(&ctx, &req, &rows).is_ok());
+    }
+
+    /// Göçten kalma bir veri zaten havuzu aşmışsa (60 > 50), aşımı ARTIRMAYAN
+    /// bir düzenleme (60 → 60) kilitlenmez; aşımı BÜYÜTEN bir düzenleme
+    /// (60 → 65) yine reddedilir.
+    #[test]
+    fn set_company_hours_does_not_lock_a_pre_existing_overrun_but_still_rejects_a_further_increase() {
+        let today = ymd(2026, 11, 10);
+        let base = || {
+            ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+                .with_pool_hours(50)
+                .with_company(1, "İşletme A", Some(10.0))
+                .with_event(stored_event(1, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(60, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+                .with_event(placed(2, 200, 1))
+        };
+
+        let unchanged = vec![CompanyHoursRow { company_id: 1, awarded_hours: 60, is_honorary: false, is_locked: false, notes: "not güncellendi".into() }];
+        let req_unchanged = request(ymd(2026, 11, 3), ChangeCommand::SetCompanyHours { rows: unchanged.clone() });
+        assert!(
+            set_company_hours(&base().build(), &req_unchanged, &unchanged).is_ok(),
+            "mevcut aşımı korumak kilitlenmemeli"
+        );
+
+        let increased = vec![CompanyHoursRow { company_id: 1, awarded_hours: 65, is_honorary: false, is_locked: false, notes: String::new() }];
+        let req_increased = request(ymd(2026, 11, 3), ChangeCommand::SetCompanyHours { rows: increased.clone() });
+        assert_eq!(
+            set_company_hours(&base().build(), &req_increased, &increased).unwrap_err().code,
+            RejectionCode::PoolExceeded,
+            "aşımı büyüten değişiklik yine reddedilmeli"
+        );
     }
 
     #[test]

@@ -62,6 +62,7 @@ impl ContextBuilder {
                 rules: Vec::new(),
                 statutory_cap: 20,
                 day_end_hour: 17,
+                pool_hours: 0,
                 companies: BTreeMap::new(),
                 student_names: BTreeMap::new(),
                 teacher_names: BTreeMap::new(),
@@ -76,6 +77,12 @@ impl ContextBuilder {
 
     pub(super) fn with_rules(mut self, rules: Vec<HourRule>) -> Self {
         self.ctx.rules = rules;
+        self
+    }
+
+    /// Havuz aşım denetimi testleri için (`domain::hour_distribution::pool_overrun_reason`).
+    pub(super) fn with_pool_hours(mut self, pool_hours: i64) -> Self {
+        self.ctx.pool_hours = pool_hours;
         self
     }
 

@@ -19,7 +19,7 @@ use crate::domain::models::Company;
 use crate::domain::workload::{statutory_cap, InstitutionType};
 use crate::error::AppResult;
 
-use super::{change_log, terms};
+use super::{change_log, teaching_load, terms};
 
 const COMPANY_COLUMNS: &str = "id, name, contact_first_name, contact_last_name, phone, email, \
      address_text, latitude, longitude, geocode_status, one_way_distance_km, notes, \
@@ -38,6 +38,10 @@ pub async fn load(
     let term_dates = terms::get_in(conn, term).await?;
     let rules = load_rules(conn).await?;
     let (statutory_cap, day_end_hour) = load_capacity_settings(conn).await?;
+    // Havuz TEK hesap noktasından (`teaching_load::total_pool_hours_in`)
+    // okunur; "tarihteki durum" günü `today`nin dönem aralığına sıkıştırılmış
+    // hâlidir — `teaching_load::current_as_of`'un pool-tabanlı eşdeğeri.
+    let pool_hours = teaching_load::total_pool_hours_in(conn, term, term_dates.default_as_of(today)).await?;
     let companies = load_companies(conn).await?;
     let student_names = load_student_names(conn, term).await?;
     let teacher_names = load_teacher_names(conn).await?;
@@ -55,6 +59,7 @@ pub async fn load(
         rules,
         statutory_cap,
         day_end_hour,
+        pool_hours,
         companies,
         student_names,
         teacher_names,
@@ -195,9 +200,36 @@ mod tests {
         // seed: institution_type=other, is_metropolitan_district=true => 20 (MADDE 15/2-b-1)
         assert_eq!(ctx.statutory_cap, 20);
         assert_eq!(ctx.day_end_hour, 17);
+        assert_eq!(ctx.pool_hours, 0, "ders yükü satırı hiç girilmemiş; havuz tanımsız");
         assert_eq!(ctx.rules.len(), 16, "seed 16 saat kuralı yazmalı");
         assert!(ctx.companies.is_empty());
         assert!(ctx.source_schedules.is_empty(), "source_term verilmedi, boş kalmalı");
+    }
+
+    /// `decide`'ın havuz aşımını denetleyebilmesi için `pool_hours`, İş 1'in
+    /// tek kaynağı (`teaching_load::total_pool_hours_in`) üzerinden dolmalı —
+    /// bu, panodaki `HoursBoard.poolHours`'un gördüğü değerle AYNI olmalı.
+    #[tokio::test]
+    async fn load_fills_pool_hours_from_teaching_load() {
+        let (_dir, pool) = test_pool().await;
+        crate::db::teaching_load::replace_for_term(
+            &pool,
+            "2026-2027/1",
+            &[crate::db::teaching_load::TermBranchHoursInput {
+                grade: "12/C".into(),
+                branch: "Dal A".into(),
+                weekly_hours: 24,
+                group_count: 2,
+                is_group_manual: true,
+            }],
+        )
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+
+        let ctx = load(&mut conn, "2026-2027/1", ymd(2026, 10, 1), Materialized::default(), None).await.unwrap();
+
+        assert_eq!(ctx.pool_hours, 48, "24 saat × 2 grup");
     }
 
     /// `source_term` verilince kaynak dönemdeki öğretmenin SON programı

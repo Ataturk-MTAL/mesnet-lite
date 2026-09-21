@@ -8,7 +8,7 @@ use crate::domain::allocation::{
 };
 use crate::domain::scheduling::{visit_span, Slot, MAX_HOURS_PER_DAY};
 use crate::domain::validation::{check_pool, check_teacher_totals, Violation};
-use crate::domain::workload::{coordinator_capacity, statutory_cap, InstitutionType};
+use crate::domain::workload::{statutory_cap, teacher_capacity, InstitutionType};
 use crate::error::AppResult;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -218,7 +218,15 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
         .sort_by(|a, b| a.company_name.cmp(&b.company_name));
 
     // --- Öğretmenler ---
-    let all_teachers = teachers::list_active(pool).await?;
+    // Kapasite `teacher_load_periods` PROJEKSİYONUNDAN okunur (spec R5c);
+    // eski `teachers.chief_type`/yük sütunları artık burada okunmaz, çünkü
+    // yük değişiklikleri artık yalnız kapıdan (`SetTeacherLoad`) geçer ve o
+    // sütunlara dokunmaz.
+    let all_teachers: Vec<_> = teachers::list_with_load_as_of(pool, &term, as_of)
+        .await?
+        .into_iter()
+        .filter(|entry| entry.teacher.is_active == 1)
+        .collect();
     let free_slots = availability::list_all(pool, &term).await?;
     let hours_by_teacher: BTreeMap<i64, i64> = assignments::awarded_hours_by_teacher(pool, &term)
         .await?
@@ -248,14 +256,9 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
         .collect();
     let occupied_by_teacher = occupied_cells_by_teacher(&placements);
 
-    for teacher in all_teachers {
-        let chief_hours = teachers::parse_chief_type(&teacher.chief_type).weekly_hours();
-        let capacity = coordinator_capacity(
-            teacher.max_extra_hours,
-            chief_hours,
-            teacher.other_extra_hours,
-            cap,
-        );
+    for entry in all_teachers {
+        let teacher = entry.teacher;
+        let capacity = teacher_capacity(&entry.load, cap);
         let assigned_hours = hours_by_teacher.get(&teacher.id).copied().unwrap_or(0);
 
         let hours_per_day: BTreeMap<i64, i64> = (1..=5)
@@ -459,6 +462,7 @@ mod tests {
     use crate::db::teaching_load::TermBranchHoursInput;
     use crate::db::teaching_load_test_support::{seed_teacher, TERM};
     use crate::domain::models::ChiefType;
+    use chrono::NaiveDate;
 
     fn settings_map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -548,5 +552,40 @@ mod tests {
         let board = load_board(&AppState { pool }).await.unwrap();
 
         assert_eq!(board.pool_hours, 24 * 2 + 10);
+    }
+
+    /// Kilit test (spec R5c, "üç yer"in biri): öğretmen kapasitesi de
+    /// projeksiyondan okunur. `change_chief_type` yalnız kapıdan yazar; eski
+    /// `teachers.chief_type` sütunu değişmese bile tahtadaki kapasite
+    /// yeni şefliğe göre değişmeli.
+    #[tokio::test]
+    async fn teacher_capacity_on_the_board_follows_the_projection_not_the_legacy_column() {
+        use crate::db::teaching_load_test_support::change_chief_type_in_planning;
+
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
+
+        let before = load_board(&AppState { pool: pool.clone() }).await.unwrap();
+        // Varsayılan ayar (migration 0001): "other" + büyükşehir => tavan 20.
+        // Şefsizken bütçe (24) tavanı aştığı için kapasite tavanda KLİPLENİR: 20.
+        assert_eq!(before.teachers[0].capacity, 20);
+
+        // Dönem başından hemen sonraki bir tarih: gerçek "bugün"den önce
+        // kalır, bu yüzden `current_as_of` (gerçek bugünü kullanır) her
+        // koşulda bu değişikliği görür.
+        change_chief_type_in_planning(&pool, teacher_id, ChiefType::Department, NaiveDate::from_ymd_opt(2026, 9, 5).unwrap()).await;
+
+        let after = load_board(&AppState { pool: pool.clone() }).await.unwrap();
+        // Bölüm şefi 10 saat düşürür: bütçe 24-10=14, artık tavanın (20)
+        // ALTINDA kaldığı için kapasite tam 14'e düşer (klipleme kalkar).
+        assert_eq!(after.teachers[0].capacity, 14, "bölüm şefi 10 saat düşürmeli");
+
+        let legacy: String = sqlx::query_scalar("SELECT chief_type FROM teachers WHERE id = ?1")
+            .bind(teacher_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(legacy, "none", "eski sütun donuk kalmalı; okuma ona bakmıyor");
     }
 }

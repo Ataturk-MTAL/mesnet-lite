@@ -43,6 +43,30 @@ pub struct DistributionOutcome {
     pub warnings: Vec<String>,
 }
 
+/// Havuz aşım denetiminin TEK doğruluk yeri (kullanıcı kuralı: "havuz
+/// aşılamaz"). Hem doğrudan kaydetme yolu (`commands::hours_commands::save_hours`)
+/// hem tarihçe kapısı (`domain::history::decide::company::set_company_hours`)
+/// BURADAN geçer — ikisi ayrı kopya tutarsa biri unutulur (DRY).
+///
+/// `pool_hours <= 0` özel durumdur: OÖKY MADDE 88/2-ç projeksiyonu bu dönem
+/// için hiç girilmemiş demektir; bu durumda aşım YARGILANAMAZ, sessizce
+/// izin verilir (bkz. `HoursBoard`'daki "tanımlanmamış" uyarısı — havuz
+/// tanımlanana dek tavan denetimi zaten pasiftir).
+///
+/// `old_total <= new_total` iken bile, göçten kalma bir veri zaten havuzu
+/// aşmışsa (`old_total` de aşkın) ve bu değişiklik aşımı ARTIRMIYORSA
+/// (`new_total <= old_total`) kilitlenmez — yalnız aşımı BÜYÜTEN değişiklik
+/// reddedilir. Sınıra TAM eşitlemek (`new_total == pool_hours`) kabul edilir.
+pub fn pool_overrun_reason(old_total: i64, new_total: i64, pool_hours: i64) -> Option<String> {
+    if pool_hours <= 0 || new_total <= pool_hours || new_total <= old_total {
+        return None;
+    }
+    Some(format!(
+        "Toplam takdir edilen saat ({new_total}) ders yükü havuzunu ({pool_hours}) {} saat aşıyor.",
+        new_total - pool_hours
+    ))
+}
+
 /// Bir işletmenin dağıtımdaki ağırlığı: tavan × öğrenci sayısı.
 ///
 /// Öğrencisi olmayan işletme de bir ağırlık taşımalı (koordinatör yine gidiyor),
@@ -370,5 +394,47 @@ mod tests {
         let outcome = distribute(&[], 20);
         assert!(outcome.results.is_empty());
         assert_eq!(outcome.distributed_hours, 0);
+    }
+
+    // --- `pool_overrun_reason`: kullanıcı kuralı "havuz aşılamaz" ---
+
+    /// 90 → 110, havuz 100: aşımı ARTIRAN değişiklik reddedilir.
+    #[test]
+    fn increasing_the_total_above_the_pool_is_rejected() {
+        let reason = pool_overrun_reason(90, 110, 100);
+        assert!(reason.is_some());
+        assert!(reason.unwrap().contains("110"));
+    }
+
+    /// Tam havuza eşitlemek (sınır dahil) kabul edilir.
+    #[test]
+    fn reaching_the_pool_exactly_is_accepted() {
+        assert!(pool_overrun_reason(90, 100, 100).is_none());
+    }
+
+    /// Havuz tanımlanmamışsa (`0`) aşım hiç yargılanmaz.
+    #[test]
+    fn undefined_pool_never_rejects() {
+        assert!(pool_overrun_reason(0, 1_000_000, 0).is_none());
+    }
+
+    /// Aşımı azaltan bir düzenleme (100 → 80, havuz 50) kabul edilir.
+    #[test]
+    fn decreasing_the_overrun_is_accepted() {
+        assert!(pool_overrun_reason(100, 80, 50).is_none());
+    }
+
+    /// Göçten kalma veri zaten aşkınken (60 > 50), aşımı ARTIRMAYAN bir
+    /// düzenleme (60 → 60 ya da altı) kilitlenmez.
+    #[test]
+    fn a_pre_existing_overrun_does_not_lock_out_unrelated_edits() {
+        assert!(pool_overrun_reason(60, 60, 50).is_none(), "aşım büyümüyorsa reddedilmemeli");
+        assert!(pool_overrun_reason(60, 55, 50).is_none(), "aşımı azaltan düzenleme serbest olmalı");
+    }
+
+    /// Aynı göçten kalma durumda aşımı DAHA DA BÜYÜTEN bir düzenleme reddedilir.
+    #[test]
+    fn a_pre_existing_overrun_still_rejects_a_further_increase() {
+        assert!(pool_overrun_reason(60, 65, 50).is_some());
     }
 }

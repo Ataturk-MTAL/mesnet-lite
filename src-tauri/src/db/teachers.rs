@@ -1,6 +1,9 @@
-use crate::domain::models::{ChiefType, NewTeacher, Teacher};
+use crate::domain::history::events::TeacherLoad;
+use crate::domain::models::{ChiefType, EmploymentType, NewTeacher, Teacher};
 use crate::error::{AppError, AppResult};
+use chrono::NaiveDate;
 use sqlx::{SqliteConnection, SqlitePool};
+use std::collections::BTreeMap;
 
 const SELECT_COLUMNS: &str = "id, first_name, last_name, registry_no, field, branches, \
      employment_type, base_hours, max_extra_hours, other_extra_hours, chief_type, is_active";
@@ -30,6 +33,101 @@ pub fn parse_chief_type(raw: &str) -> ChiefType {
     }
 }
 
+/// Metin değeri `EmploymentType` enum'una çevirir. `parse_chief_type` ile aynı
+/// desen: tanınmayan değer kadrolu sayılır; şema CHECK kısıtı zaten yalnız
+/// `tenured`/`contracted` değerlerine izin verir.
+pub fn parse_employment_type(raw: &str) -> EmploymentType {
+    match raw {
+        "contracted" => EmploymentType::Contracted,
+        _ => EmploymentType::Tenured,
+    }
+}
+
+/// Projeksiyonda satırı olmayan öğretmenin yükü (spec R5c). Yazma artık
+/// tamamen kapıdan (`execute_change`) geçtiği için normalde HER öğretmenin
+/// en az bir açılış `load_set` olayı vardır (bkz. migration 0008); bu değer
+/// yalnız bir geçiş anomalisinde kullanılır ve şeflik saatini 0 sayar —
+/// olmayan bir yükü var saymaktansa düşük hesaplamak tercih edilir.
+fn zero_load() -> TeacherLoad {
+    TeacherLoad {
+        base_hours: 0,
+        max_extra_hours: 0,
+        other_extra_hours: 0,
+        chief_type: ChiefType::None,
+        employment_type: EmploymentType::Tenured,
+    }
+}
+
+/// `as_of` gününde geçerli ders yükü satırları, öğretmen kimliğine göre.
+/// `teaching_load::chief_planning_hours`ın kullandığı aynı yarı açık aralık
+/// deseni: `valid_from <= as_of < valid_to`; `valid_to` boşsa aralık açıktır.
+pub async fn load_as_of_by_teacher(
+    pool: &SqlitePool,
+    term: &str,
+    as_of: NaiveDate,
+) -> AppResult<BTreeMap<i64, TeacherLoad>> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        teacher_id: i64,
+        base_hours: i64,
+        max_extra_hours: i64,
+        other_extra_hours: i64,
+        chief_type: String,
+        employment_type: String,
+    }
+
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT teacher_id, base_hours, max_extra_hours, other_extra_hours, chief_type, employment_type
+         FROM teacher_load_periods
+         WHERE term = ?1 AND valid_from <= ?2 AND (valid_to IS NULL OR ?2 < valid_to)",
+    )
+    .bind(term)
+    .bind(as_of)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let load = TeacherLoad {
+                base_hours: r.base_hours,
+                max_extra_hours: r.max_extra_hours,
+                other_extra_hours: r.other_extra_hours,
+                chief_type: parse_chief_type(&r.chief_type),
+                employment_type: parse_employment_type(&r.employment_type),
+            };
+            (r.teacher_id, load)
+        })
+        .collect())
+}
+
+/// Bir öğretmen ve `as_of` gününde projeksiyondan okunan yükü.
+#[derive(Debug, Clone)]
+pub struct TeacherWithLoadAsOf {
+    pub teacher: Teacher,
+    pub load: TeacherLoad,
+}
+
+/// Öğretmen listesi + her birinin `as_of` gününde geçerli yükü — kapasite
+/// hesaplayan HER yerin (atama tahtası, Genel Bakış, öğretmen listesi) tek
+/// okuyucusu. Eski `teachers.chief_type`/yük sütunları burada OKUNMAZ; tek
+/// doğruluk kaynağı `teacher_load_periods` projeksiyonudur.
+pub async fn list_with_load_as_of(
+    pool: &SqlitePool,
+    term: &str,
+    as_of: NaiveDate,
+) -> AppResult<Vec<TeacherWithLoadAsOf>> {
+    let teachers = list(pool).await?;
+    let loads = load_as_of_by_teacher(pool, term, as_of).await?;
+    Ok(teachers
+        .into_iter()
+        .map(|teacher| {
+            let load = loads.get(&teacher.id).cloned().unwrap_or_else(zero_load);
+            TeacherWithLoadAsOf { teacher, load }
+        })
+        .collect())
+}
+
 pub async fn list(pool: &SqlitePool) -> AppResult<Vec<Teacher>> {
     let sql = format!(
         "SELECT {SELECT_COLUMNS} FROM teachers
@@ -54,6 +152,15 @@ pub async fn get(pool: &SqlitePool, id: i64) -> AppResult<Teacher> {
         .await?)
 }
 
+/// Öğretmeni doğrudan eski tabloya yazar; olay günlüğüne UĞRAMAZ. Üretimde
+/// artık tek yazma kapısı `commands/teacher_commands.rs::create_teacher_impl`
+/// (kapıdan, `execute_change`) olduğu için bu fonksiyonun üretim çağıranı
+/// YOKTUR — yalnız test fikstürleri (ör. `teaching_load.rs`'in eski-yoldan
+/// öğretmen senaryosu, `services/commission_minutes_test_support.rs`)
+/// kapıyı BİLEREK atlayıp eski davranışı simüle etmek için kullanır. Bu
+/// yüzden `#[cfg(test)]`: gerçek derlemede "kullanılmıyor" uyarısı vermeden,
+/// test derlemesinde hâlâ erişilebilir kalır.
+#[cfg(test)]
 pub async fn create(pool: &SqlitePool, input: &NewTeacher) -> AppResult<Teacher> {
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO teachers
@@ -303,5 +410,51 @@ mod tests {
     #[test]
     fn parse_chief_type_falls_back_to_none_for_unknown_value() {
         assert_eq!(parse_chief_type("bilinmeyen"), ChiefType::None);
+    }
+
+    #[test]
+    fn parse_employment_type_falls_back_to_tenured_for_unknown_value() {
+        assert_eq!(parse_employment_type("bilinmeyen"), EmploymentType::Tenured);
+        assert_eq!(parse_employment_type("contracted"), EmploymentType::Contracted);
+    }
+
+    // --- `list_with_load_as_of` — R5c'nin tek okuyucusu ---
+
+    use crate::db::teaching_load_test_support::{change_chief_type_in_planning, seed_teacher, ymd, TERM};
+
+    /// Projeksiyonda satırı olmayan öğretmen için yük SIFIR sayılır (rapor
+    /// edilen karar): yazma artık kapıdan geçtiği için bu durum yalnız bir
+    /// geçiş anomalisinde görülür.
+    #[tokio::test]
+    async fn list_with_load_as_of_zeroes_out_a_teacher_without_a_projection_row() {
+        let (_dir, pool) = test_pool().await;
+        // Doğrudan eski yoldan yazılır: `execute_change`e hiç uğramaz, bu
+        // yüzden projeksiyonda satırı yoktur (tarihte teacher_commands.rs'in
+        // eski `create_teacher`'ının ürettiği kayıtla aynı durum).
+        create(&pool, &sample("Kapıdan Geçmemiş", "department")).await.unwrap();
+
+        let rows = list_with_load_as_of(&pool, TERM, ymd(2026, 10, 1)).await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].load.chief_type, ChiefType::None, "satır yoksa şeflik sıfır sayılır");
+        assert_eq!(rows[0].load.max_extra_hours, 0);
+    }
+
+    /// Kilit test: okuma projeksiyondan gelir, eski `teachers.chief_type`
+    /// sütunu DEĞİŞMESE bile. `change_chief_type` yalnız kapıdan
+    /// (`execute_change`) yazar; eski sütuna hiç dokunmaz.
+    #[tokio::test]
+    async fn list_with_load_as_of_follows_the_projection_even_when_the_legacy_column_stays_stale() {
+        let (_dir, pool) = test_pool().await;
+        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
+        change_chief_type_in_planning(&pool, teacher_id, ChiefType::Department, ymd(2026, 9, 5)).await;
+
+        // Eski sütun hâlâ "none" — hiçbir yazma yolu ona dokunmadı.
+        let legacy = get(&pool, teacher_id).await.unwrap();
+        assert_eq!(legacy.chief_type, "none", "eski sütun donuk kalmalı");
+
+        let rows = list_with_load_as_of(&pool, TERM, ymd(2026, 10, 1)).await.unwrap();
+        let entry = rows.iter().find(|r| r.teacher.id == teacher_id).unwrap();
+        assert_eq!(entry.load.chief_type, ChiefType::Department, "okuma projeksiyondan gelmeli");
     }
 }

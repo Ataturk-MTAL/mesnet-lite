@@ -76,7 +76,9 @@ pub(crate) async fn seed_teacher(pool: &SqlitePool, first_name: &str, chief_type
 }
 
 /// Öğretmenin şeflik türünü `date` gününden itibaren değiştirir; önceki
-/// aralık o gün kapanır (`valid_to = date`).
+/// aralık o gün kapanır (`valid_to = date`). "Bugün" `november_today()`
+/// (dönem başlamış) olduğu için `date`, en erken bu ayın 1'i olabilir (spec
+/// §5.1, önceki ayın puantajı kapanmıştır).
 pub(crate) async fn change_chief_type(pool: &SqlitePool, teacher_id: i64, chief_type: ChiefType, date: NaiveDate) {
     let req = ChangeRequest {
         term: TERM.to_string(),
@@ -86,6 +88,23 @@ pub(crate) async fn change_chief_type(pool: &SqlitePool, teacher_id: i64, chief_
         command: ChangeCommand::SetTeacherLoad { teacher_id, load: load_with(chief_type) },
     };
     commit(pool, req, november_today()).await;
+}
+
+/// `change_chief_type` ile aynı, ama dönem BAŞLAMADAN ÖNCEki bir "bugün"
+/// (`planning_today()`) kullanır: `date` yalnız dönem başlangıcından
+/// (2026-09-01) sonra olmalı, ay penceresi kısıtı YOKTUR. Projeksiyon
+/// okuyucularının GERÇEK bugünü (`current_as_of`, `today_local()`) kullandığı
+/// testlerde, değişikliğin hemen görünmesi için erken bir tarih gerekince
+/// bunu kullan.
+pub(crate) async fn change_chief_type_in_planning(pool: &SqlitePool, teacher_id: i64, chief_type: ChiefType, date: NaiveDate) {
+    let req = ChangeRequest {
+        term: TERM.to_string(),
+        effective_date: Some(date),
+        document_date: None,
+        reason: "test".to_string(),
+        command: ChangeCommand::SetTeacherLoad { teacher_id, load: load_with(chief_type) },
+    };
+    commit(pool, req, planning_today()).await;
 }
 
 pub(crate) async fn deactivate_teacher(pool: &SqlitePool, teacher_id: i64) {

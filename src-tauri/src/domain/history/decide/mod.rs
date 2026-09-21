@@ -160,6 +160,13 @@ pub struct DecisionContext {
     pub rules: Vec<HourRule>,
     pub statutory_cap: i64,
     pub day_end_hour: i64,
+    /// Alan koordinatörlüğü ders yükü havuzu (OÖKY MADDE 88/2-ç, Norm Kadro
+    /// Yön. MADDE 6/4): şeflik saatleri + Σ (haftalık ders saati × grup
+    /// sayısı). TEK hesap noktası `db::teaching_load::total_pool_hours_in`'dir
+    /// (bkz. `db/history_context.rs::load`); burada kopyalanmaz. `0` ise
+    /// havuz bu dönem için henüz tanımlanmamıştır — aşım denetimi bu durumda
+    /// YAPILMAZ (bkz. `domain::hour_distribution::pool_overrun_reason`).
+    pub pool_hours: i64,
     pub companies: BTreeMap<i64, CompanyFacts>,
     pub student_names: BTreeMap<i64, String>,
     pub teacher_names: BTreeMap<i64, String>,
