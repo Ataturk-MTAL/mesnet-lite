@@ -111,6 +111,13 @@
               @keydown.space.prevent="toggleKeyboardSelection(company.companyId)"
             >
               <div class="company-name">{{ company.companyName }}</div>
+              <div
+                v-if="company.addressText.trim().length > 0"
+                class="company-address"
+                v-tooltip.top="addressTooltip(company.addressText)"
+              >
+                {{ company.addressText }}
+              </div>
               <div class="company-meta">
                 <Tag v-if="company.isHonorary" :value="labels.hours.honorary" severity="info" />
                 <Tag
@@ -152,6 +159,13 @@
             >
               <div class="assigned-card-info">
                 <div class="company-name">{{ company.companyName }}</div>
+                <div
+                  v-if="company.addressText.trim().length > 0"
+                  class="company-address"
+                  v-tooltip.top="addressTooltip(company.addressText)"
+                >
+                  {{ company.addressText }}
+                </div>
                 <div class="company-meta">
                   <Tag :value="assignedTeacherName(company)" severity="secondary" />
                   <span class="muted">{{ assignedSlotLabel(company) }}</span>
@@ -415,6 +429,25 @@ import type {
 } from '../api/assignments'
 import { labels } from '../i18n/labels'
 import { activeTerm } from '../composables/useTerm'
+
+/** İşletme adresi ipucu. Varsayılan `--p-tooltip-max-width` (12.5rem) uzun bir
+ *  adres için çok dar kalır; sınır `.p-tooltip` KÖKÜNDE tanımlı olduğundan
+ *  genişlik yalnızca `text` üzerine verilirse kökün 12.5rem'i geçerli olmaya
+ *  devam eder — bu yüzden `root` ve `text` ikisine birden veriliyor. Temel
+ *  `white-space: pre-line` / `word-break: break-word` kuralı zaten sarma
+ *  sağlıyor, üzerine yazmaya gerek yok. */
+function addressTooltip(addressText: string): {
+  value: string
+  pt: { root: { style: { maxWidth: string } }; text: { style: { width: string; lineHeight: string } } }
+} {
+  return {
+    value: addressText,
+    pt: {
+      root: { style: { maxWidth: '22rem' } },
+      text: { style: { width: '22rem', lineHeight: '1.4' } },
+    },
+  }
+}
 
 const DAYS = [1, 2, 3, 4, 5] as const
 /** OÖKY MADDE 88: bir öğretmen bir günde en fazla bu kadar saat koordinatörlük yapabilir. */
@@ -1047,6 +1080,17 @@ onUnmounted(() => {
 .district-group { margin-bottom: 0.75rem; }
 .district-group :deep(.company-card:last-child) { margin-bottom: 0; }
 
+/* OpenVue'nun Panel bileşeni (`.p-panel-content-container`) daraltma animasyonu
+ * için CSS Grid kullanıyor; ızgara ögesi `.p-panel-content-wrapper` varsayılan
+ * `min-width: auto` taşıyor. `white-space: nowrap` uygulanan uzun adres metni
+ * içerik-minimumunu genişletince bu ızgara ögesi kartla birlikte panelin dışına
+ * taşıyor. Sıfırlamak, taşan öge zincirini keser; `fluid` benzeri bir çözüm yok
+ * çünkü kaynak grid, bizim şablonumuzun değil OpenVue'nun kendi iç yapısı. */
+.district-group :deep(.p-panel-content-wrapper),
+.assigned-panel :deep(.p-panel-content-wrapper) {
+  min-width: 0;
+}
+
 .company-card {
   border: 1px solid var(--p-content-border-color);
   border-radius: var(--p-content-border-radius);
@@ -1071,6 +1115,10 @@ onUnmounted(() => {
   transform: scale(0.97);
 }
 .company-name { font-weight: 600; font-size: 0.9375rem; }
+.company-address {
+  font-size: 0.75rem; color: var(--p-text-muted-color); margin-top: 0.125rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .company-meta {
   display: flex;
   align-items: center;

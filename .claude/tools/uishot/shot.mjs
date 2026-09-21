@@ -50,6 +50,12 @@ if (process.env.CLICK) {
     await page.waitForTimeout(600)
   }
 }
+if (process.env.HOVER) {
+  // Fareyle açılan ipucunu (tooltip) ekran görüntüsünde görünür kılmak için üzerine gelir.
+  const locator = page.getByText(process.env.HOVER, { exact: false })
+  await locator.first().hover()
+  await page.waitForTimeout(700)
+}
 await page.screenshot({ path: out, fullPage: true })
 console.log('saved', out)
 if (unknown.size) console.log('unmocked commands:', [...unknown].join(', '))

@@ -179,3 +179,53 @@ describe('AllocationView atanmamış işletme gruplaması', () => {
     wrapper.unmount()
   })
 })
+
+describe('AllocationView işletme adresi', () => {
+  it('adresi olan bir atanmamış işletmenin kartında adres metni çizilir', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({
+        companyId: 1,
+        companyName: 'Firma A',
+        district: 'Akdeniz',
+        addressText: 'Karaduvar Mah. Serbest Bölge 14.Cadde No:13, Akdeniz/Mersin',
+      }),
+    ])
+
+    // Assert
+    const address = wrapper.find('.company-address')
+    expect(address.exists()).toBe(true)
+    expect(address.text()).toBe('Karaduvar Mah. Serbest Bölge 14.Cadde No:13, Akdeniz/Mersin')
+    wrapper.unmount()
+  })
+
+  it('adresi boş olan bir işletmenin kartında adres satırı hiç render edilmez', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz', addressText: '' }),
+    ])
+
+    // Assert
+    expect(wrapper.find('.company-address').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('atanmış işletme kartında da adres görünür', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({
+        companyId: 1,
+        companyName: 'Firma A',
+        district: 'Akdeniz',
+        addressText: 'Hürriyet Mah. Hüseyin Okan Merzeci Blv No:489, Yenişehir/Mersin',
+        assignedTeacherId: 7,
+      }),
+    ])
+
+    // Assert
+    const addresses = wrapper.findAll('.company-address')
+    expect(addresses).toHaveLength(1)
+    expect(addresses[0]?.text()).toBe('Hürriyet Mah. Hüseyin Okan Merzeci Blv No:489, Yenişehir/Mersin')
+    wrapper.unmount()
+  })
+})

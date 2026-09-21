@@ -30,7 +30,7 @@
       {
         "companyId": 1,
         "companyName": "Akdeniz Elektronik San. Tic. Ltd. Şti.",
-        "addressText": "Akdeniz adres metni",
+        "addressText": "KALEKİM AŞ. KARADUVAR MAH. SERBEST BÖLGE 14.CADDE NO:13 AKDENİZ/MERSİN KALEKİM AŞ. KARADUVAR MAH. SERBEST BÖLGE 14.CADDE NO:13, Karaduvar, 33020 Akdeniz/Mersin, Türkiye",
         "district": "Akdeniz",
         "oneWayDistanceKm": 8.5,
         "studentCount": 2,
@@ -59,7 +59,7 @@
       {
         "companyId": 2,
         "companyName": "Örnek Enerji Sistemleri A.Ş.",
-        "addressText": "Akdeniz adres metni",
+        "addressText": "Korukent Mahallesi 96070 Sokak Toroslar, Korukent, Küçük Sanayi Sitesi 4A D:C, 33000 Akdeniz/Mersin, Türkiye",
         "district": "Akdeniz",
         "oneWayDistanceKm": 8.5,
         "studentCount": 2,
@@ -88,7 +88,7 @@
       {
         "companyId": 3,
         "companyName": "Toros Otomasyon ve Kontrol Sistemleri Mühendislik Sanayi Ticaret Limited Şirketi",
-        "addressText": "Akdeniz adres metni",
+        "addressText": "",
         "district": "Akdeniz",
         "oneWayDistanceKm": 8.5,
         "studentCount": 2,
@@ -146,7 +146,7 @@
       {
         "companyId": 5,
         "companyName": "Deniz Pano Montaj Ltd. Şti.",
-        "addressText": "Akdeniz adres metni",
+        "addressText": "Çilek, 63147 Sk MEGA CENTER D:2.BLOK NO:2 İÇ KAPI NO:11, 33040 Akdeniz/Mersin, Türkiye",
         "district": "Akdeniz",
         "oneWayDistanceKm": 8.5,
         "studentCount": 2,
@@ -165,10 +165,10 @@
           2,
           3
         ],
-        "assignedTeacherId": null,
-        "visitDay": null,
-        "visitHour": null,
-        "visitEndHour": null,
+        "assignedTeacherId": 1,
+        "visitDay": 1,
+        "visitHour": 8,
+        "visitEndHour": 10,
         "isForced": false,
         "forceReason": null
       },
@@ -291,7 +291,7 @@
       {
         "companyId": 10,
         "companyName": "Yenişehir Pano Sanayi",
-        "addressText": "Yenişehir adres metni",
+        "addressText": "H, Hürriyet, Hüseyin Okan Merzeci Blv no:489\\b, 33120 Yenişehir/Mersin, Türkiye",
         "district": "Yenişehir",
         "oneWayDistanceKm": 8.5,
         "studentCount": 2,
