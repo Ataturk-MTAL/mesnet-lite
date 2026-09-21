@@ -75,16 +75,12 @@
       <template #content>
         <div class="grid">
           <div class="field">
-            <label for="day-start">{{ labels.settings.dayStartHour }}</label>
-            <InputNumber id="day-start" v-model="form.dayStartHour" :min="0" :max="23" fluid />
-          </div>
-          <div class="field">
             <label for="max-daily-lessons">{{ labels.settings.maxDailyLessons }}</label>
             <InputNumber
               input-id="max-daily-lessons"
               v-model="form.maxDailyLessons"
               :min="MIN_DAILY_LESSONS"
-              :max="maxLessonsUpperBound"
+              :max="MAX_DAILY_LESSONS"
               fluid
               :aria-label="labels.settings.maxDailyLessons"
             />
@@ -101,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import LocationPickerMap from '../components/map/LocationPickerMap.vue'
 import { settingsApi } from '../api/settings'
@@ -111,10 +107,13 @@ import type { LatLng } from '../types/models'
 
 const toast = useToast()
 
-/** Günlük ders saati sayısının alt sınırı ve günün son saati (başlangıç + sayı bunu aşamaz). */
+/** Günlük ders saati sayısının alt sınırı. Izgara ders numarası artık her zaman 1'den başlar. */
 const MIN_DAILY_LESSONS = 1
+/** Ders numarası 1'den başladığı için günün 24 saatini aşmayacak azami sayı: 24 - 1 = 23. */
 const HOURS_IN_DAY = 24
-/** Ayar anahtarı bulunmayan kurulumlarda bugünkü varsayılan: 8..16 = 9 saat. */
+const GRID_START_LESSON = 1
+const MAX_DAILY_LESSONS = HOURS_IN_DAY - GRID_START_LESSON
+/** Ayar anahtarı bulunmayan kurulumlarda bugünkü varsayılan: 9 ders saati. */
 const DEFAULT_DAILY_LESSONS = 9
 
 const form = reactive({
@@ -124,12 +123,8 @@ const form = reactive({
   activeTerm: '',
   institutionType: 'other',
   isMetropolitanDistrict: true,
-  dayStartHour: 8,
   maxDailyLessons: DEFAULT_DAILY_LESSONS as number | null,
 })
-
-/** InputNumber'ın kabul ettiği azami sayı; başlangıç saatiyle birlikte 24'ü aşamaz. */
-const maxLessonsUpperBound = computed<number>(() => HOURS_IN_DAY - (form.dayStartHour ?? 0))
 
 const schoolLocation = ref<LatLng | null>(null)
 const isSaving = ref(false)
@@ -174,12 +169,15 @@ function parsePositiveInt(value: string | undefined): number | null {
 }
 
 /**
- * Günlük azami ders saati: önce `max_daily_lessons`; yoksa (eski kurulum) `day_end_hour - day_start_hour`;
- * ikisi de yoksa bugünkü varsayılan. Böylece mevcut kullanıcı verisinin davranışı değişmez.
+ * Günlük azami ders saati: önce `max_daily_lessons`; yoksa (eski kurulum, göç öncesi) eski
+ * `day_end_hour - day_start_hour` çifti; ikisi de yoksa bugünkü varsayılan. Rust tarafı artık
+ * mevcut veriyi göçle 1..N numaralandırmasına taşıyor; bu geri dönüş yalnız göç öncesi veya
+ * eksik ayar durumunda devreye girer.
  */
-function resolveMaxDailyLessons(settings: SettingsMap, startHour: number): number {
+function resolveMaxDailyLessons(settings: SettingsMap): number {
   const stored = parsePositiveInt(settings.max_daily_lessons)
   if (stored !== null) return stored
+  const startHour = Number.parseInt(settings.day_start_hour ?? '', 10)
   const endHour = Number.parseInt(settings.day_end_hour ?? '', 10)
   const derived = endHour - startHour
   return Number.isNaN(derived) || derived < MIN_DAILY_LESSONS ? DEFAULT_DAILY_LESSONS : derived
@@ -192,8 +190,7 @@ function applySettings(settings: SettingsMap): void {
   form.activeTerm = settings.active_term ?? ''
   form.institutionType = settings.institution_type ?? 'other'
   form.isMetropolitanDistrict = settings.is_metropolitan_district === 'true'
-  form.dayStartHour = Number.parseInt(settings.day_start_hour ?? '8', 10)
-  form.maxDailyLessons = resolveMaxDailyLessons(settings, form.dayStartHour)
+  form.maxDailyLessons = resolveMaxDailyLessons(settings)
   schoolLocation.value = parseLocation(settings)
 }
 
@@ -207,7 +204,7 @@ async function load(): Promise<void> {
 
 async function save(): Promise<void> {
   const lessons = form.maxDailyLessons
-  if (lessons === null || lessons < MIN_DAILY_LESSONS || form.dayStartHour + lessons > HOURS_IN_DAY) {
+  if (lessons === null || lessons < MIN_DAILY_LESSONS || lessons > MAX_DAILY_LESSONS) {
     toast.add({
       severity: 'warn',
       summary: labels.common.error,
@@ -226,10 +223,9 @@ async function save(): Promise<void> {
       active_term: form.activeTerm,
       institution_type: form.institutionType,
       is_metropolitan_district: String(form.isMetropolitanDistrict),
-      day_start_hour: String(form.dayStartHour),
+      // Gün başlangıç ve bitiş saatleri artık burada yazılmıyor; aralığı Rust tarafı
+      // `max_daily_lessons`'tan türetiyor (ders numarası her zaman 1'den başlar).
       max_daily_lessons: String(lessons),
-      // Rust okuyucuları ve ızgara `day_end_hour`'ı okur; satır sayısı = ders saati sayısı olsun diye türetilir.
-      day_end_hour: String(form.dayStartHour + lessons),
       school_latitude: schoolLocation.value ? String(schoolLocation.value.latitude) : '',
       school_longitude: schoolLocation.value ? String(schoolLocation.value.longitude) : '',
     }
@@ -241,17 +237,6 @@ async function save(): Promise<void> {
     isSaving.value = false
   }
 }
-
-// Başlangıç saati ilerleyince ders saati sayısı 24'ü aşacaksa sayı sınıra çekilir.
-watch(
-  () => form.dayStartHour,
-  () => {
-    const upper = maxLessonsUpperBound.value
-    if (form.maxDailyLessons !== null && form.maxDailyLessons > upper) {
-      form.maxDailyLessons = Math.max(MIN_DAILY_LESSONS, upper)
-    }
-  },
-)
 
 onMounted(load)
 </script>

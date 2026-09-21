@@ -51,6 +51,7 @@ function companyFixture(overrides: Partial<Company> = {}): Company {
     phone: '0532 000 00 00',
     email: 'ali@example.com',
     addressText: 'Karaduvar Mah. Serbest Bölge 14. Cadde No:13 Akdeniz/Mersin',
+    district: 'Akdeniz',
     latitude: null,
     longitude: null,
     geocodeStatus: 'pending',

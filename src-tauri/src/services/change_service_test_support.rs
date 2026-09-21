@@ -51,6 +51,7 @@ pub(super) fn new_company(name: &str, one_way_km: Option<f64>) -> NewCompany {
         latitude: None,
         longitude: None,
         one_way_distance_km: one_way_km,
+        district: String::new(),
         notes: String::new(),
     }
 }

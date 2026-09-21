@@ -21,6 +21,9 @@ pub struct BoardCompany {
     pub company_id: i64,
     pub company_name: String,
     pub address_text: String,
+    /// Atanmamış işletmelerin ilçe bazlı gruplanması için (bkz.
+    /// `domain::address::parse_district`); adresten türetilemezse boştur.
+    pub district: String,
     pub one_way_distance_km: Option<f64>,
     pub student_count: i64,
     pub student_names: Vec<String>,
@@ -87,12 +90,6 @@ pub struct AssignmentBoard {
     pub warnings: Vec<String>,
 }
 
-fn parse_hour_setting(all: &BTreeMap<String, String>, key: &str, fallback: i64) -> i64 {
-    all.get(key)
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .unwrap_or(fallback)
-}
-
 /// Bir öğretmenin bloklarla dolu hücrelerini işletme id'sine eşler.
 ///
 /// Girdi: `(öğretmen id, gün, başlangıç saati, bitiş saati DAHİL, işletme id)`
@@ -143,11 +140,12 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
     // saatleri dahil TAM havuzdur (OÖKY MADDE 88/2-ç).
     let as_of = teaching_load::current_as_of(pool, &term).await?;
     let pool_hours = teaching_load::total_pool_hours(pool, &term, as_of).await?;
+    let (day_start_hour, day_end_hour) = settings::lesson_hour_bounds(&all_settings);
 
     let mut board = AssignmentBoard {
         term: term.clone(),
-        day_start_hour: parse_hour_setting(&all_settings, "day_start_hour", 8),
-        day_end_hour: parse_hour_setting(&all_settings, "day_end_hour", 17),
+        day_start_hour,
+        day_end_hour,
         pool_hours,
         ..Default::default()
     };
@@ -193,6 +191,7 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
             company_id: company.id,
             company_name: company.name.clone(),
             address_text: company.address_text.clone(),
+            district: company.district.clone(),
             one_way_distance_km: company.one_way_distance_km,
             student_count: company_students.len() as i64,
             student_names: company_students
@@ -464,13 +463,6 @@ mod tests {
     use crate::domain::models::ChiefType;
     use chrono::NaiveDate;
 
-    fn settings_map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
     #[test]
     fn occupied_cells_by_teacher_expands_a_multi_hour_block() {
         // Öğretmen 1, 2. gün 3. saatten başlayıp 3 hücre kaplayan bir blokla dolu.
@@ -509,13 +501,62 @@ mod tests {
         assert!(occupied_cells_by_teacher(&[]).is_empty());
     }
 
-    #[test]
-    fn hour_settings_fall_back_when_missing_or_invalid() {
-        let all = settings_map(&[("day_start_hour", "9"), ("day_end_hour", "bozuk")]);
+    /// Atama tahtasındaki işletme kartı ilçeyi taşımalı — İşletme Dağıtımı
+    /// ekranı atanmamış işletmeleri ilçe bazlı gruplayacak (kaynak talep).
+    #[tokio::test]
+    async fn board_company_carries_the_district_field() {
+        use crate::domain::models::NewCompany;
 
-        assert_eq!(parse_hour_setting(&all, "day_start_hour", 8), 9);
-        assert_eq!(parse_hour_setting(&all, "day_end_hour", 17), 17);
-        assert_eq!(parse_hour_setting(&all, "yok", 5), 5);
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        companies::create(
+            &pool,
+            &NewCompany {
+                name: "Test İşletme".into(),
+                contact_first_name: String::new(),
+                contact_last_name: String::new(),
+                phone: String::new(),
+                email: String::new(),
+                address_text: "33130 Akdeniz/Mersin".into(),
+                latitude: None,
+                longitude: None,
+                one_way_distance_km: Some(5.0),
+                district: String::new(),
+                notes: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let board = load_board(&AppState { pool }).await.unwrap();
+
+        assert_eq!(board.companies.len(), 1);
+        assert_eq!(board.companies[0].district, "Akdeniz");
+    }
+
+    /// Atama tahtasının saat aralığı da AYNI türetmeden gelir
+    /// (`settings::lesson_hour_bounds`); "Gün Başlangıç Saati" ayarı kalktı.
+    #[tokio::test]
+    async fn board_hours_default_to_one_through_ten_when_max_daily_lessons_is_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+
+        let board = load_board(&AppState { pool }).await.unwrap();
+
+        assert_eq!(board.day_start_hour, 1);
+        assert_eq!(board.day_end_hour, 10);
+    }
+
+    #[tokio::test]
+    async fn board_hours_follow_the_max_daily_lessons_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        settings::set(&pool, "max_daily_lessons", "6").await.unwrap();
+
+        let board = load_board(&AppState { pool }).await.unwrap();
+
+        assert_eq!(board.day_start_hour, 1);
+        assert_eq!(board.day_end_hour, 7);
     }
 
     #[test]

@@ -17,6 +17,12 @@
         <Textarea id="company-address" v-model="form.addressText" rows="2" />
       </div>
 
+      <div class="field">
+        <label for="company-district">{{ labels.company.district }}</label>
+        <InputText id="company-district" v-model="form.district" />
+        <small class="hint">{{ labels.company.districtHint }}</small>
+      </div>
+
       <div class="field-row">
         <div class="field">
           <label for="company-contact-first">{{ labels.company.contactFirstName }}</label>
@@ -83,6 +89,7 @@ function emptyForm(): NewCompany {
     phone: '',
     email: '',
     addressText: '',
+    district: '',
     latitude: null,
     longitude: null,
     oneWayDistanceKm: null,
@@ -98,6 +105,7 @@ function toForm(company: Company): NewCompany {
     phone: company.phone,
     email: company.email,
     addressText: company.addressText,
+    district: company.district,
     latitude: company.latitude,
     longitude: company.longitude,
     oneWayDistanceKm: company.oneWayDistanceKm,

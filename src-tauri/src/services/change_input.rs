@@ -23,8 +23,8 @@ use crate::error::{AppError, AppResult};
 /// Ziyaret günü ve boş saat günü Pazartesi–Cuma'dır (bkz.
 /// `availability_commands::save_teacher_availability`, aynı kural).
 const WEEKDAYS: RangeInclusive<i64> = 1..=5;
-/// Ders saatleri 1'den başlar; üst sınır ayara (`day_end_hour`) bağlıdır ve
-/// `decide` tarafından denetlenir.
+/// Ders saatleri 1'den başlar (kullanıcı kararı: "Gün Başlangıç Saati" ayarı
+/// kalktı, numaralandırma HER ZAMAN 1'den başlar — bkz. `db/settings.rs`).
 const FIRST_LESSON_HOUR: i64 = 1;
 
 fn invalid(message: impl Into<String>) -> AppError {
@@ -42,7 +42,15 @@ fn innermost(command: &ChangeCommand) -> &ChangeCommand {
 }
 
 /// Komutun taşıdığı her dış girdiyi doğrular (spec §8 gövdeleri).
-pub(super) fn validate_command(command: &ChangeCommand) -> AppResult<()> {
+///
+/// `day_end_hour`, ızgaranın bitişidir (HARİÇ; bkz. `db/settings.rs::lesson_hour_bounds`
+/// / `lesson_hour_end_in`). Çağıran (`change_service.rs::execute_in`) bunu
+/// `decide`'dan ÖNCE, aynı bağlantıdan okuyup buraya verir: sınırda
+/// doğrulama, karar katmanına hiç girmeden görünmez/geçersiz bir saatin
+/// günlüğe yazılmasını engeller (bkz. "Gün Başlangıç Saati" göçü, saati
+/// ızgara dışında kalan bir programın kaydedilince sessizce geri
+/// yazıldığı hatanın kök nedeniydi).
+pub(super) fn validate_command(command: &ChangeCommand, day_end_hour: i64) -> AppResult<()> {
     match command {
         ChangeCommand::CreateStudent { student, .. } => validate_student(student),
         ChangeCommand::TransferStudent { to: TransferTarget::New { company }, .. } => validate_company(company),
@@ -52,9 +60,13 @@ pub(super) fn validate_command(command: &ChangeCommand) -> AppResult<()> {
         }
         ChangeCommand::SetTeacherLoad { load, .. } => validate_load(load),
         ChangeCommand::SetCompanyHours { rows } => validate_hours(rows.iter().map(|r| r.awarded_hours)),
-        ChangeCommand::AssignCoordinators { rows } => rows.iter().try_for_each(|r| validate_slot(r.visit_day, r.visit_hour)),
-        ChangeCommand::SetTeacherSchedule { slots, .. } => slots.iter().try_for_each(|s| validate_slot(s.day_of_week, s.hour)),
-        ChangeCommand::Correct { replacement, .. } => validate_command(replacement),
+        ChangeCommand::AssignCoordinators { rows } => {
+            rows.iter().try_for_each(|r| validate_slot(r.visit_day, r.visit_hour, day_end_hour))
+        }
+        ChangeCommand::SetTeacherSchedule { slots, .. } => {
+            slots.iter().try_for_each(|s| validate_slot(s.day_of_week, s.hour, day_end_hour))
+        }
+        ChangeCommand::Correct { replacement, .. } => validate_command(replacement, day_end_hour),
         _ => Ok(()),
     }
 }
@@ -126,12 +138,22 @@ fn validate_hours(awarded: impl Iterator<Item = i64>) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_slot(day: i64, hour: i64) -> AppResult<()> {
+/// `day_end_hour` ızgaranın bitişidir (HARİÇ): geçerli son saat `day_end_hour - 1`dir.
+/// Bu üst sınır olmadan, ızgara aralığı daraltıldığında (ör. `max_daily_lessons`
+/// düşürüldüğünde) eski, artık gösterilmeyen bir saat sessizce kaydedilip
+/// "görünmez saat" olarak kalabilirdi — bu göçün ele aldığı gerçek hata.
+fn validate_slot(day: i64, hour: i64, day_end_hour: i64) -> AppResult<()> {
     if !WEEKDAYS.contains(&day) {
         return Err(invalid("Gün Pazartesi ile Cuma arasında olmalı"));
     }
     if hour < FIRST_LESSON_HOUR {
         return Err(invalid("Ders saati 1 veya daha büyük olmalı"));
+    }
+    if hour >= day_end_hour {
+        return Err(invalid(format!(
+            "Ders saati en fazla {} olabilir (günlük azami ders saati sayısı ayarına göre)",
+            day_end_hour - 1
+        )));
     }
     Ok(())
 }
@@ -209,5 +231,61 @@ fn employment_column(employment: EmploymentType) -> &'static str {
     match employment {
         EmploymentType::Tenured => "tenured",
         EmploymentType::Contracted => "contracted",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::history::decide::CoordinatorRow;
+    use crate::domain::scheduling::Slot;
+
+    /// `max_daily_lessons = 9` iken ızgara `[1, 10)`tir: 9. saat kabul,
+    /// 10. saat (N+1) reddedilir. Bu, "görünmez saat" hatasının sınırdaki
+    /// kapısıdır — brief'in açıkça istediği N/N+1 testi.
+    #[test]
+    fn schedule_slot_at_the_grid_end_is_rejected_one_before_is_accepted() {
+        let day_end_hour = 10;
+        let command = |hour: i64| ChangeCommand::SetTeacherSchedule {
+            teacher_id: 1,
+            slots: vec![Slot::new(1, hour)],
+        };
+
+        assert!(validate_command(&command(9), day_end_hour).is_ok(), "N (9) kabul edilmeli");
+        assert!(validate_command(&command(10), day_end_hour).is_err(), "N+1 (10) reddedilmeli");
+    }
+
+    /// Aynı üst sınır `AssignCoordinators` için de geçerlidir; iki komut
+    /// aynı `validate_slot`'u paylaşır (DRY).
+    #[test]
+    fn coordinator_slot_at_the_grid_end_is_rejected_one_before_is_accepted() {
+        let day_end_hour = 10;
+        let row = |hour: i64| CoordinatorRow {
+            company_id: 1,
+            teacher_id: 1,
+            visit_day: 1,
+            visit_hour: hour,
+            is_forced: false,
+            force_reason: None,
+        };
+
+        let ok = ChangeCommand::AssignCoordinators { rows: vec![row(9)] };
+        let bad = ChangeCommand::AssignCoordinators { rows: vec![row(10)] };
+        assert!(validate_command(&ok, day_end_hour).is_ok());
+        assert!(validate_command(&bad, day_end_hour).is_err());
+    }
+
+    /// Alt sınır ayardan bağımsızdır: saat 0 veya daha küçükse her zaman ret.
+    #[test]
+    fn hour_below_one_is_always_rejected() {
+        let command = ChangeCommand::SetTeacherSchedule { teacher_id: 1, slots: vec![Slot::new(1, 0)] };
+        assert!(validate_command(&command, 17).is_err());
+    }
+
+    /// Hafta sonu günü, saat sınırının aralığından bağımsız olarak reddedilir.
+    #[test]
+    fn weekend_day_is_rejected_regardless_of_the_hour_bound() {
+        let command = ChangeCommand::SetTeacherSchedule { teacher_id: 1, slots: vec![Slot::new(6, 3)] };
+        assert!(validate_command(&command, 10).is_err());
     }
 }

@@ -85,49 +85,57 @@
             class="search"
           />
 
-          <div v-if="filteredUnassigned.length === 0" class="empty">
+          <div v-if="unassignedGroups.length === 0" class="empty">
             {{ labels.allocation.allAssigned }}
           </div>
 
-          <div
-            v-for="company in filteredUnassigned"
-            :key="company.companyId"
-            class="company-card"
-            :class="{ 'company-card--dragging': draggedCompanyId === company.companyId }"
-            draggable="true"
-            tabindex="0"
-            role="button"
-            :aria-label="company.companyName"
-            @dragstart="onDragStart($event, company.companyId)"
-            @dragend="onDragEnd"
-            @keydown.enter.prevent="toggleKeyboardSelection(company.companyId)"
-            @keydown.space.prevent="toggleKeyboardSelection(company.companyId)"
+          <Panel
+            v-for="group in unassignedGroups"
+            :key="group.district"
+            :header="group.label"
+            toggleable
+            class="district-group"
           >
-            <div class="company-name">{{ company.companyName }}</div>
-            <div class="company-meta">
-              <Tag v-if="company.isHonorary" :value="labels.hours.honorary" severity="info" />
-              <Tag
-                v-else-if="company.hoursMissing"
-                :value="labels.allocation.hoursMissing"
-                severity="warn"
-              />
-              <Tag v-else :value="`${company.awardedHours} saat`" severity="success" />
+            <div
+              v-for="company in group.companies"
+              :key="company.companyId"
+              class="company-card"
+              :class="{ 'company-card--dragging': draggedCompanyId === company.companyId }"
+              draggable="true"
+              tabindex="0"
+              role="button"
+              :aria-label="company.companyName"
+              @dragstart="onDragStart($event, company.companyId)"
+              @dragend="onDragEnd"
+              @keydown.enter.prevent="toggleKeyboardSelection(company.companyId)"
+              @keydown.space.prevent="toggleKeyboardSelection(company.companyId)"
+            >
+              <div class="company-name">{{ company.companyName }}</div>
+              <div class="company-meta">
+                <Tag v-if="company.isHonorary" :value="labels.hours.honorary" severity="info" />
+                <Tag
+                  v-else-if="company.hoursMissing"
+                  :value="labels.allocation.hoursMissing"
+                  severity="warn"
+                />
+                <Tag v-else :value="`${company.awardedHours} saat`" severity="success" />
 
-              <span class="muted">{{ company.studentCount }} öğrenci</span>
-              <span v-if="company.oneWayDistanceKm !== null" class="muted">
-                · {{ company.oneWayDistanceKm.toFixed(1) }} km
-              </span>
+                <span class="muted">{{ company.studentCount }} öğrenci</span>
+                <span v-if="company.oneWayDistanceKm !== null" class="muted">
+                  · {{ company.oneWayDistanceKm.toFixed(1) }} km
+                </span>
+              </div>
+              <div v-if="company.branches.length > 0" class="company-branches">
+                {{ company.branches.join(', ') }}
+              </div>
+              <div v-if="company.workplaceDays.length > 0" class="company-days">
+                {{ company.workplaceDays.map((d) => labels.allocation.days[d]).join(', ') }}
+              </div>
+              <div v-else class="company-days company-days--missing">
+                {{ labels.allocation.notWorkplaceDay }}
+              </div>
             </div>
-            <div v-if="company.branches.length > 0" class="company-branches">
-              {{ company.branches.join(', ') }}
-            </div>
-            <div v-if="company.workplaceDays.length > 0" class="company-days">
-              {{ company.workplaceDays.map((d) => labels.allocation.days[d]).join(', ') }}
-            </div>
-            <div v-else class="company-days company-days--missing">
-              {{ labels.allocation.notWorkplaceDay }}
-            </div>
-          </div>
+          </Panel>
 
           <!-- Atanmış işletmeler: kart solda kaybolmasın, nereye gittiği görünsün -->
           <Panel
@@ -518,6 +526,43 @@ const filteredUnassigned = computed(() => {
 const assignedCompanies = computed(
   () => board.value?.companies.filter((c) => c.assignedTeacherId !== null) ?? [],
 )
+
+interface CompanyDistrictGroup {
+  /** Boş dize: ilçesi ayrıştırılamamış işletmeler grubu. */
+  district: string
+  /** "Akdeniz (13)" gibi; sayaç arama filtresinden ETKİLENMEZ, o ilçedeki TÜM atanmamış
+   *  işletmeleri sayar. Arama yalnızca hangi kartların gösterileceğini daraltır. */
+  label: string
+  companies: BoardCompany[]
+}
+
+/** Atanmamış işletmeleri ilçeye göre gruplar; Türkçe alfabetik sıralanır, ilçesi boş
+ *  olanlar sonda ayrı bir grupta toplanır. Aramayla eşleşen kartı kalmayan grup hiç
+ *  gösterilmez. */
+const unassignedGroups = computed<CompanyDistrictGroup[]>(() => {
+  const namedDistricts = [
+    ...new Set(
+      unassignedCompanies.value
+        .map((c) => c.district)
+        .filter((district) => district.trim().length > 0),
+    ),
+  ].sort((a, b) => a.localeCompare(b, 'tr'))
+
+  const orderedDistricts = [...namedDistricts, '']
+
+  return orderedDistricts
+    .map((district) => {
+      const totalCount = unassignedCompanies.value.filter((c) => c.district === district).length
+      const visibleCompanies = filteredUnassigned.value.filter((c) => c.district === district)
+      const districtName = district.trim().length > 0 ? district : labels.allocation.districtUnknown
+      return {
+        district,
+        label: `${districtName} (${totalCount})`,
+        companies: visibleCompanies,
+      }
+    })
+    .filter((group) => group.companies.length > 0)
+})
 
 function showError(error: unknown): void {
   const detail = error instanceof Error ? error.message : labels.common.error
@@ -999,6 +1044,8 @@ onUnmounted(() => {
 
 .search { width: 100%; margin-bottom: 0.75rem; }
 .empty { color: var(--p-text-muted-color); padding: 1rem 0; }
+.district-group { margin-bottom: 0.75rem; }
+.district-group :deep(.company-card:last-child) { margin-bottom: 0; }
 
 .company-card {
   border: 1px solid var(--p-content-border-color);

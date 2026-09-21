@@ -407,7 +407,7 @@ mod tests {
         let new_company = NewCompany {
             name: "Yeni İşletme".into(), contact_first_name: String::new(), contact_last_name: String::new(),
             phone: String::new(), email: String::new(), address_text: String::new(), latitude: None,
-            longitude: None, one_way_distance_km: None, notes: String::new(),
+            longitude: None, one_way_distance_km: None, district: String::new(), notes: String::new(),
         };
         let to = TransferTarget::New { company: new_company };
         let req = request(ymd(2026, 11, 3), ChangeCommand::TransferStudent { student_id: 100, from_company_id: 1, to: to.clone() });

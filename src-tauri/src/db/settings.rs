@@ -1,6 +1,58 @@
 use crate::error::AppResult;
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use std::collections::BTreeMap;
+
+/// Ders saati numaralandırmasının başlangıcı. Kullanıcı kararı: "Gün
+/// Başlangıç Saati" ayarı kalkar, ders saatleri HER ZAMAN 1'den başlar.
+/// Bu artık bir AYAR değil sabittir — okunacak ikinci bir kaynak yoktur.
+pub const LESSON_HOUR_START: i64 = 1;
+
+/// `max_daily_lessons` ayarı yoksa ya da sayısal/pozitif değilse kullanılan
+/// varsayılan. "Gün Başlangıç Saati" ayarı kalkmadan ÖNCEKİ varsayılanlar
+/// (day_start_hour=8, day_end_hour=17 — migration 0001 seed'i) 9 saatlik bir
+/// gün veriyordu; göç sonrası kullanıcı deneyimi değişmesin diye AYNI 9 burada
+/// bilinçli olarak korunmuştur.
+pub const DEFAULT_MAX_DAILY_LESSONS: i64 = 9;
+
+/// `max_daily_lessons` değerini ayrıştırır; boş/bozuk/sıfır-veya-negatif bir
+/// metin sessizce varsayılana düşer (uydurma değil, tek bir adlandırılmış
+/// sabittir). `max_daily_lessons` ve `lesson_hour_end_in`in AYNI mantığı
+/// kullanması için tek yerde toplanır.
+fn parse_max_daily_lessons(value: Option<&str>) -> i64 {
+    value
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_MAX_DAILY_LESSONS)
+}
+
+/// Ayarlar haritasından günlük azami ders saati sayısını okur.
+pub fn max_daily_lessons(all: &BTreeMap<String, String>) -> i64 {
+    parse_max_daily_lessons(all.get("max_daily_lessons").map(String::as_str))
+}
+
+/// Ders saati ızgarasının `[başlangıç, bitiş)` aralığı — bitiş HARİÇTİR.
+/// TEK doğruluk kaynağı burasıdır: `AvailabilityBoard`, `AssignmentBoard`
+/// (bkz. `commands/availability_commands.rs`, `commands/assignment_commands.rs`)
+/// ve `DecisionContext` (bkz. `db/history_context.rs::load_capacity_settings`)
+/// hepsi bu türetmeyi kullanır. Başlangıç HER ZAMAN `LESSON_HOUR_START`tır;
+/// "Gün Başlangıç Saati" ayarı kalktığı için ikinci bir kaynak yoktur.
+pub fn lesson_hour_bounds(all: &BTreeMap<String, String>) -> (i64, i64) {
+    let max_lessons = max_daily_lessons(all);
+    (LESSON_HOUR_START, LESSON_HOUR_START + max_lessons)
+}
+
+/// `lesson_hour_bounds`'un bağlantı tabanlı sürümü: bir transaction İÇİNDE
+/// havuz kullanmak yasaktır (bkz. `services/change_service.rs` başlığı), bu
+/// yüzden burada TÜM ayarlar değil yalnız `max_daily_lessons` anahtarı
+/// doğrudan bağlantıdan okunur. Yalnız ızgaranın bitişi (HARİÇ) döner;
+/// başlangıç zaten sabit olduğu için çağıranın ona ihtiyacı yoktur.
+pub async fn lesson_hour_end_in(conn: &mut SqliteConnection) -> AppResult<i64> {
+    let value: Option<String> =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key = 'max_daily_lessons'")
+            .fetch_optional(&mut *conn)
+            .await?;
+    Ok(LESSON_HOUR_START + parse_max_daily_lessons(value.as_deref()))
+}
 
 /// Tüm ayarları anahtar/değer haritası olarak döner.
 pub async fn get_all(pool: &SqlitePool) -> AppResult<BTreeMap<String, String>> {
@@ -215,6 +267,57 @@ mod tests {
             terms.contains(&"2026-2027/1".to_string()),
             "seed'deki aktif dönem de görünmeye devam etmeli"
         );
+    }
+
+    /// Ayar hiç girilmemişse günlük azami ders saati sayısı 9'a düşer — bu,
+    /// kalkan "Gün Başlangıç/Bitiş Saati" ayarlarının (8, 17) verdiği günle
+    /// AYNI uzunluktadır.
+    #[test]
+    fn max_daily_lessons_defaults_to_nine_when_missing() {
+        assert_eq!(max_daily_lessons(&BTreeMap::new()), 9);
+    }
+
+    #[test]
+    fn max_daily_lessons_reads_the_setting() {
+        let mut all = BTreeMap::new();
+        all.insert("max_daily_lessons".to_string(), "6".to_string());
+        assert_eq!(max_daily_lessons(&all), 6);
+    }
+
+    /// Bozuk, sıfır ya da negatif bir değer "ayar yok" gibi ele alınır;
+    /// sessizce -6 saatlik bir gün üretmez.
+    #[test]
+    fn max_daily_lessons_falls_back_on_garbage_or_non_positive_values() {
+        for bad in ["bozuk", "0", "-3", ""] {
+            let mut all = BTreeMap::new();
+            all.insert("max_daily_lessons".to_string(), bad.to_string());
+            assert_eq!(max_daily_lessons(&all), 9, "değer: {bad:?}");
+        }
+    }
+
+    /// Ders saati ızgarası HER ZAMAN 1'den başlar; bitiş `max_daily_lessons`
+    /// kadar sonradır ve HARİÇtir (kullanıcı kararı: "Gün Başlangıç Saati"
+    /// ayarı kalktı, tek kaynak `max_daily_lessons`).
+    #[test]
+    fn lesson_hour_bounds_start_at_one_and_end_after_max_daily_lessons() {
+        let mut all = BTreeMap::new();
+        all.insert("max_daily_lessons".to_string(), "6".to_string());
+        assert_eq!(lesson_hour_bounds(&all), (1, 7));
+        assert_eq!(lesson_hour_bounds(&BTreeMap::new()), (1, 10));
+    }
+
+    /// Bağlantı tabanlı sürüm, ayarlar haritasıyla AYNI değeri üretmeli;
+    /// transaction içindeyken (`change_service.rs`) havuz yerine bağlantı
+    /// kullanılabilmesi bu ikisinin ayrışmamasına bağlıdır.
+    #[tokio::test]
+    async fn lesson_hour_end_in_matches_the_pool_based_derivation() {
+        let (_dir, pool) = test_pool().await;
+        set(&pool, "max_daily_lessons", "5").await.unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+
+        let end = lesson_hour_end_in(&mut conn).await.unwrap();
+
+        assert_eq!(end, 6);
     }
 
     #[tokio::test]

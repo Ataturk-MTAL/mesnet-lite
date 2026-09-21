@@ -157,10 +157,10 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let teacher_id = a_teacher(&pool, "Yilmaz").await;
 
-        set_schedule(&pool, teacher_id, &[(3, 14), (1, 9), (1, 10)], None, planning_today()).await;
+        set_schedule(&pool, teacher_id, &[(3, 7), (1, 2), (1, 3)], None, planning_today()).await;
 
         let slots = list_for_teacher(&pool, teacher_id, TERM).await.unwrap();
-        assert_eq!(pairs(&slots), vec![(1, 9), (1, 10), (3, 14)], "gün, saat sırasıyla");
+        assert_eq!(pairs(&slots), vec![(1, 2), (1, 3), (3, 7)], "gün, saat sırasıyla");
         assert!(slots.iter().all(|s| s.teacher_id == teacher_id));
     }
 
@@ -171,12 +171,12 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let teacher_id = a_teacher(&pool, "Yilmaz").await;
 
-        set_schedule(&pool, teacher_id, &[(1, 9)], None, planning_today()).await;
-        set_schedule(&pool, teacher_id, &[(2, 10)], Some(ymd(2026, 11, 5)), november_today()).await;
-        assert_eq!(pairs(&list_for_teacher(&pool, teacher_id, TERM).await.unwrap()), vec![(2, 10)]);
+        set_schedule(&pool, teacher_id, &[(1, 2)], None, planning_today()).await;
+        set_schedule(&pool, teacher_id, &[(2, 3)], Some(ymd(2026, 11, 5)), november_today()).await;
+        assert_eq!(pairs(&list_for_teacher(&pool, teacher_id, TERM).await.unwrap()), vec![(2, 3)]);
 
-        set_schedule(&pool, teacher_id, &[(4, 11)], Some(ymd(2026, 12, 1)), november_today()).await;
-        assert_eq!(pairs(&list_for_teacher(&pool, teacher_id, TERM).await.unwrap()), vec![(4, 11)]);
+        set_schedule(&pool, teacher_id, &[(4, 4)], Some(ymd(2026, 12, 1)), november_today()).await;
+        assert_eq!(pairs(&list_for_teacher(&pool, teacher_id, TERM).await.unwrap()), vec![(4, 4)]);
     }
 
     /// Sonuncuyu geri almak bir öncekini yeniden son durum yapar.
@@ -185,11 +185,11 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let teacher_id = a_teacher(&pool, "Yilmaz").await;
 
-        set_schedule(&pool, teacher_id, &[(1, 9)], None, planning_today()).await;
-        let latest = set_schedule(&pool, teacher_id, &[(2, 10)], Some(ymd(2026, 11, 5)), november_today()).await;
+        set_schedule(&pool, teacher_id, &[(1, 2)], None, planning_today()).await;
+        let latest = set_schedule(&pool, teacher_id, &[(2, 3)], Some(ymd(2026, 11, 5)), november_today()).await;
         revoke(&pool, latest, november_today()).await;
 
-        assert_eq!(pairs(&list_for_teacher(&pool, teacher_id, TERM).await.unwrap()), vec![(1, 9)]);
+        assert_eq!(pairs(&list_for_teacher(&pool, teacher_id, TERM).await.unwrap()), vec![(1, 2)]);
     }
 
     /// Boş liste "hiç boş saati yok" demektir ve geçerli bir son durumdur.
@@ -198,7 +198,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let teacher_id = a_teacher(&pool, "Yilmaz").await;
 
-        set_schedule(&pool, teacher_id, &[(1, 9)], None, planning_today()).await;
+        set_schedule(&pool, teacher_id, &[(1, 2)], None, planning_today()).await;
         set_schedule(&pool, teacher_id, &[], None, planning_today()).await;
 
         assert!(list_for_teacher(&pool, teacher_id, TERM).await.unwrap().is_empty());
@@ -221,16 +221,16 @@ mod tests {
         let first = a_teacher(&pool, "Bir").await;
         let second = a_teacher(&pool, "Iki").await;
 
-        set_schedule(&pool, second, &[(2, 11), (2, 10)], None, planning_today()).await;
-        set_schedule(&pool, first, &[(1, 9)], None, planning_today()).await;
+        set_schedule(&pool, second, &[(2, 4), (2, 3)], None, planning_today()).await;
+        set_schedule(&pool, first, &[(1, 2)], None, planning_today()).await;
 
         let all = list_all(&pool, TERM).await.unwrap();
         assert_eq!(
             all,
             vec![
-                AvailabilitySlot { teacher_id: first, day_of_week: 1, hour: 9 },
-                AvailabilitySlot { teacher_id: second, day_of_week: 2, hour: 10 },
-                AvailabilitySlot { teacher_id: second, day_of_week: 2, hour: 11 },
+                AvailabilitySlot { teacher_id: first, day_of_week: 1, hour: 2 },
+                AvailabilitySlot { teacher_id: second, day_of_week: 2, hour: 3 },
+                AvailabilitySlot { teacher_id: second, day_of_week: 2, hour: 4 },
             ]
         );
         assert!(list_all(&pool, "2027-2028/1").await.unwrap().is_empty(), "başka dönemin verisi karışmamalı");
@@ -243,7 +243,7 @@ mod tests {
     async fn deleted_teacher_schedule_is_not_returned() {
         let (_dir, pool) = test_pool().await;
         let teacher_id = a_teacher(&pool, "Yilmaz").await;
-        set_schedule(&pool, teacher_id, &[(1, 9)], None, planning_today()).await;
+        set_schedule(&pool, teacher_id, &[(1, 2)], None, planning_today()).await;
 
         teachers::remove(&pool, teacher_id).await.unwrap();
 
@@ -294,8 +294,12 @@ mod tests {
 
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
 
+        // Bu satırlar 0005 şemasının 8-16 numaralandırmasıyla yazıldı; TÜM
+        // göçler (0009 dahil) çalıştıktan sonra 1-9'a kaymış olmalılar —
+        // 0009 tam da bu göçün ele aldığı gerçek senaryodur (bkz.
+        // migrations/0009_lesson_numbering.sql). Kayma -7: 9->2, 10->3, 15->8.
         let slots = list_for_teacher(&pool, teacher_id, TERM).await.unwrap();
-        assert_eq!(pairs(&slots), vec![(1, 9), (1, 10), (5, 15)]);
+        assert_eq!(pairs(&slots), vec![(1, 2), (1, 3), (5, 8)]);
         assert_eq!(list_all(&pool, TERM).await.unwrap().len(), 3);
     }
 }

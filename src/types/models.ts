@@ -18,6 +18,8 @@ export interface Company {
   phone: string
   email: string
   addressText: string
+  /** Adresten türetilen veya elle girilen ilçe. Ayrıştırılamamışsa boş dize. */
+  district: string
   latitude: number | null
   longitude: number | null
   geocodeStatus: GeocodeStatus
@@ -35,6 +37,8 @@ export interface NewCompany {
   phone: string
   email: string
   addressText: string
+  /** Boş gönderilirse arka uç adresten türetir; doluysa aynen korunur. */
+  district: string
   latitude: number | null
   longitude: number | null
   oneWayDistanceKm: number | null

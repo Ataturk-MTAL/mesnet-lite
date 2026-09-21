@@ -13,7 +13,7 @@ use serde::Serialize;
 use sqlx::{SqliteConnection, SqlitePool};
 
 use super::change_input;
-use crate::db::{change_log, companies, history_context, projection, students, teachers};
+use crate::db::{change_log, companies, history_context, projection, settings, students, teachers};
 use crate::domain::history::decide::{decide, ChangeRequest, Decision, DecisionContext, ImpactSummary, RowAction};
 use crate::domain::history::rejection::{Rejection, RejectionCode};
 use crate::error::{AppError, AppResult};
@@ -81,7 +81,14 @@ pub async fn execute_change(pool: &SqlitePool, req: ChangeRequest, mode: ChangeM
 /// GERİ ALMALIDIR: yerinde oluşturulan satırlar (öğrenci, işletme, öğretmen)
 /// `decide`'dan önce yazıldığı için o bağlantıda kalmıştır.
 pub async fn execute_in(conn: &mut SqliteConnection, req: ChangeRequest, mode: ChangeMode, today: NaiveDate) -> AppResult<ChangeOutcome> {
-    change_input::validate_command(&req.command)?;
+    // Sınırda doğrulama `decide`'dan (ve dolayısıyla `history_context::load`'dan)
+    // ÖNCE çalışır; ızgaranın bitişi yine de AYNI bağlantıdan, tek doğruluk
+    // kaynağından (`settings::lesson_hour_end_in`) okunur — `decide` bunu
+    // ayrıca `DecisionContext.day_end_hour` olarak yükler ama karar
+    // fonksiyonları içinde denetlemez, bu yüzden görünmez saati burada
+    // engellemek gerekir (bkz. `change_input.rs::validate_slot`).
+    let day_end_hour = settings::lesson_hour_end_in(conn).await?;
+    change_input::validate_command(&req.command, day_end_hour)?;
     if let Some(stale) = stale_outcome(conn, mode).await? {
         return Ok(stale);
     }

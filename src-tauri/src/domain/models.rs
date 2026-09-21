@@ -55,6 +55,11 @@ pub struct Company {
     /// TEK YÖN yol mesafesi. Koordinatlardan hesaplanmaz; CSV'den gelir veya
     /// elle girilir. Saat tavanı kuralları iki katını kullanır.
     pub one_way_distance_km: Option<f64>,
+    /// İşletmenin bulunduğu ilçe. Atama tahtasında atanmamış işletmelerin
+    /// ilçe bazlı gruplanabilmesi için `address_text`ten ayrı bir sütunda
+    /// tutulur (bkz. `domain::address::parse_district`, migration 0010).
+    /// Adresten türetilemezse boş kalır; bu bir hata değildir.
+    pub district: String,
     pub notes: String,
     pub created_at: String,
     pub updated_at: String,
@@ -81,6 +86,13 @@ pub struct NewCompany {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub one_way_distance_km: Option<f64>,
+    /// Kullanıcı ilçeyi elle girdiyse (boş olmayan bir değer gönderdiyse) bu
+    /// değer KORUNUR; boşsa `db::companies` adresten türetir (bkz.
+    /// `domain::address::parse_district`). `#[serde(default)]`: Vue tarafı
+    /// bu alanı henüz göndermiyorsa (geçiş sürecinde) istek yine de kabul
+    /// edilir.
+    #[serde(default)]
+    pub district: String,
     pub notes: String,
 }
 
@@ -163,6 +175,7 @@ mod tests {
             longitude: None,
             geocode_status: "pending".into(),
             one_way_distance_km,
+            district: String::new(),
             notes: String::new(),
             created_at: "2026-09-18T00:00:00Z".into(),
             updated_at: "2026-09-18T00:00:00Z".into(),

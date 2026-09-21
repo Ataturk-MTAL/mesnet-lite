@@ -1,0 +1,11 @@
+-- İşletme Dağıtımı ekranında atanmamış işletmeler ilçe bazlı gruplanacak;
+-- bunun için ilçe, `address_text`'ten AYRI bir sütunda tutulur (kaynak
+-- talep: "İşletmelere ilçe alanı: adresten ayrıştır, ayrı sütunda sakla").
+--
+-- Mevcut satırların geri doldurulması burada YAPILMAZ: SQLite'ta regex
+-- yoktur ve ayrıştırma "posta kodu İlçe/İl" kalıbının SON eşleşmesini
+-- bulmayı gerektirir (bkz. domain/address.rs::parse_district) — bu mantığı
+-- saf SQL'e taşımak yerine, migration'lar uygulandıktan hemen sonra Rust
+-- tarafında BİR KEZ çalışan idempotent bir geri doldurma adımı vardır
+-- (bkz. db/mod.rs::backfill_company_districts).
+ALTER TABLE companies ADD COLUMN district TEXT NOT NULL DEFAULT '';

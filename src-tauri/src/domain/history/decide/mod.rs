@@ -666,7 +666,7 @@ mod tests {
         ctx.today = ymd(2026, 11, 10);
         ctx.companies.insert(3, CompanyFacts { name: "Yeni İşletme C".into(), round_trip_km: None, is_active: true });
         ctx.materialized = Materialized { company_id: Some(3), student_id: None, teacher_id: None };
-        let new_company = NewCompany { name: "Yeni İşletme C".into(), contact_first_name: String::new(), contact_last_name: String::new(), phone: String::new(), email: String::new(), address_text: String::new(), latitude: None, longitude: None, one_way_distance_km: None, notes: String::new() };
+        let new_company = NewCompany { name: "Yeni İşletme C".into(), contact_first_name: String::new(), contact_last_name: String::new(), phone: String::new(), email: String::new(), address_text: String::new(), latitude: None, longitude: None, one_way_distance_km: None, district: String::new(), notes: String::new() };
         let transfer_to_c = ChangeRequest {
             term: term_name.clone(),
             effective_date: Some(ymd(2026, 11, 3)),

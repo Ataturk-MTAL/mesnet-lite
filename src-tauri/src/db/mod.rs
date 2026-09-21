@@ -11,6 +11,8 @@ pub mod companies;
 pub mod company_hours;
 pub mod history_context;
 pub mod hour_rules;
+#[cfg(test)]
+mod migration_0009_tests;
 pub mod projection;
 pub mod settings;
 pub mod students;
@@ -47,7 +49,41 @@ pub async fn init_pool(db_path: &Path) -> AppResult<SqlitePool> {
         .await
         .map_err(|e| AppError::Database(format!("Migration başarısız: {e}")))?;
 
+    backfill_company_districts(&pool).await?;
+
     Ok(pool)
+}
+
+/// Migration 0010'un SQL ile yapamadığı işi tamamlar: `district = ''` olan
+/// (henüz ilçesi türetilmemiş) işletmeleri adreslerinden geriye dönük
+/// doldurur. SQLite'ta regex yoktur; ayrıştırma yalnızca Rust tarafındaki
+/// `domain::address::parse_district`te vardır.
+///
+/// İDEMPOTENT: yalnızca `district = ''` satırları okunur, bu yüzden bir
+/// kez doldurulan satır ikinci çalıştırmada bir daha işlenmez — elle
+/// girilmiş boş bir ilçe de (kullanıcı kasıtlı olarak boş bıraktıysa) her
+/// açılışta yeniden adresten türetilmeye çalışılır, ki bu istenen davranıştır:
+/// adres eşleşmiyorsa `parse_district` yine `None` döner ve satır boş kalır.
+async fn backfill_company_districts(pool: &SqlitePool) -> AppResult<()> {
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, address_text FROM companies WHERE district = ''")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| AppError::Database(format!("İlçe geri doldurma okunamadı: {e}")))?;
+
+    for (id, address_text) in rows {
+        let Some(district) = crate::domain::address::parse_district(&address_text) else {
+            continue;
+        };
+        sqlx::query("UPDATE companies SET district = ?1 WHERE id = ?2")
+            .bind(district)
+            .bind(id)
+            .execute(pool)
+            .await
+            .map_err(|e| AppError::Database(format!("İlçe geri doldurma yazılamadı: {e}")))?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -144,5 +180,75 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(hours, 11);
+    }
+
+    /// Migration 0010: `companies.district` yeni satırlarda boş metinle başlar.
+    #[tokio::test]
+    async fn migration_0010_adds_district_column_with_empty_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO companies (name, address_text, created_at, updated_at)
+             VALUES ('Test', 'adres', 'şimdi', 'şimdi')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let district: String = sqlx::query_scalar("SELECT district FROM companies WHERE name = 'Test'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(district, "");
+    }
+
+    /// Geri doldurma yalnızca `district = ''` satırlarını işler: adresi
+    /// eşleşen satır ilçesini alır, eşleşmeyen boş kalır, elle zaten bir
+    /// ilçesi olan satıra HİÇ dokunulmaz (adresi eşleşebilecek olsa bile).
+    #[tokio::test]
+    async fn backfill_company_districts_fills_only_blank_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+
+        // Bu üç satır, migration 0010'dan ÖNCE var olan gerçek verinin
+        // taklidi: doğrudan SQL ile eklenir (companies::create'i ATLAR),
+        // çünkü create zaten kendi içinde türetiyor — burada asıl test
+        // edilen, migration sonrası HAZIR BEKLEYEN eski satırların geri
+        // doldurulmasıdır.
+        sqlx::query(
+            "INSERT INTO companies (name, address_text, district, created_at, updated_at) VALUES
+                ('Eşleşen', '33130 Akdeniz/Mersin', '', 't', 't'),
+                ('Eşleşmeyen', 'posta kodu yok', '', 't', 't'),
+                ('Elle Girilmiş', '33130 Akdeniz/Mersin', 'Toroslar', 't', 't')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        backfill_company_districts(&pool).await.unwrap();
+
+        let districts: Vec<(String, String)> =
+            sqlx::query_as("SELECT name, district FROM companies ORDER BY name")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            districts,
+            vec![
+                ("Elle Girilmiş".to_string(), "Toroslar".to_string()),
+                ("Eşleşen".to_string(), "Akdeniz".to_string()),
+                ("Eşleşmeyen".to_string(), "".to_string()),
+            ]
+        );
+
+        // İkinci çalıştırma: hiçbir satır DEĞİŞMEMELİ (idempotent).
+        backfill_company_districts(&pool).await.unwrap();
+        let after_second_run: Vec<(String, String)> =
+            sqlx::query_as("SELECT name, district FROM companies ORDER BY name")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(after_second_run, districts);
     }
 }

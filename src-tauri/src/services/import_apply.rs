@@ -255,6 +255,7 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 one_way_distance_km: Some(1.0),
+                district: String::new(),
                 notes: String::new(),
             },
         )
@@ -341,6 +342,7 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 one_way_distance_km: Some(1.0),
+                district: String::new(),
                 notes: String::new(),
             },
         )

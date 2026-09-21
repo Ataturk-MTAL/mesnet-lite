@@ -163,6 +163,9 @@ pub fn parse_jotform_csv(content: &str) -> AppResult<ParsedCsv> {
             latitude: None,
             longitude: None,
             one_way_distance_km: locator.one_way_distance_km,
+            // CSV'de ilçe sütunu yok; boş bırakılır, `companies::create`
+            // adresten türetir (bkz. domain/address.rs::parse_district).
+            district: String::new(),
             notes: String::new(),
         };
 

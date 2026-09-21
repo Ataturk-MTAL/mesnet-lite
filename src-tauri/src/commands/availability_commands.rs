@@ -50,20 +50,15 @@ pub struct AvailabilityBoard {
     pub warnings: Vec<String>,
 }
 
-fn parse_hour_setting(all: &BTreeMap<String, String>, key: &str, fallback: i64) -> i64 {
-    all.get(key)
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .unwrap_or(fallback)
-}
-
 async fn load_board(pool: &SqlitePool) -> AppResult<AvailabilityBoard> {
     let all_settings = settings::get_all(pool).await?;
     let term = all_settings.get("active_term").cloned().unwrap_or_default();
+    let (day_start_hour, day_end_hour) = settings::lesson_hour_bounds(&all_settings);
 
     let mut board = AvailabilityBoard {
         term: term.clone(),
-        day_start_hour: parse_hour_setting(&all_settings, "day_start_hour", 8),
-        day_end_hour: parse_hour_setting(&all_settings, "day_end_hour", 17),
+        day_start_hour,
+        day_end_hour,
         ..Default::default()
     };
 
@@ -367,13 +362,13 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
 
-        let saved = save_availability(&pool, teacher_id, &[slot(1, 9), slot(3, 14)], planning_today())
+        let saved = save_availability(&pool, teacher_id, &[slot(1, 2), slot(3, 7)], planning_today())
             .await
             .unwrap();
-        assert_eq!(free_slots_of(&saved, teacher_id), vec!["1-9", "3-14"]);
+        assert_eq!(free_slots_of(&saved, teacher_id), vec!["1-2", "3-7"]);
 
         let reloaded = load_board(&pool).await.unwrap();
-        assert_eq!(free_slots_of(&reloaded, teacher_id), vec!["1-9", "3-14"]);
+        assert_eq!(free_slots_of(&reloaded, teacher_id), vec!["1-2", "3-7"]);
         assert_eq!(reloaded.teachers[0].free_count, 2);
         assert_eq!(count(&pool, "change_sets", Some("set_teacher_schedule")).await, 1, "olay yoluyla yazılmalı");
     }
@@ -384,7 +379,7 @@ mod tests {
     async fn board_and_the_shared_reader_agree() {
         let (_dir, pool) = test_pool().await;
         let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
-        save_availability(&pool, teacher_id, &[slot(2, 10), slot(4, 11)], planning_today()).await.unwrap();
+        save_availability(&pool, teacher_id, &[slot(2, 3), slot(4, 4)], planning_today()).await.unwrap();
 
         let from_reader: Vec<String> = availability::list_all(&pool, TERM)
             .await
@@ -395,7 +390,7 @@ mod tests {
 
         let board = load_board(&pool).await.unwrap();
         assert_eq!(free_slots_of(&board, teacher_id), from_reader);
-        assert_eq!(from_reader, vec!["2-10", "4-11"]);
+        assert_eq!(from_reader, vec!["2-3", "4-4"]);
     }
 
     /// İkinci kayıt öncekinin yerine geçer; birikmez. Boş liste de geçerlidir.
@@ -404,9 +399,9 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
 
-        save_availability(&pool, teacher_id, &[slot(1, 9), slot(1, 10)], planning_today()).await.unwrap();
-        let second = save_availability(&pool, teacher_id, &[slot(2, 11)], planning_today()).await.unwrap();
-        assert_eq!(free_slots_of(&second, teacher_id), vec!["2-11"]);
+        save_availability(&pool, teacher_id, &[slot(1, 2), slot(1, 3)], planning_today()).await.unwrap();
+        let second = save_availability(&pool, teacher_id, &[slot(2, 4)], planning_today()).await.unwrap();
+        assert_eq!(free_slots_of(&second, teacher_id), vec!["2-4"]);
 
         let cleared = save_availability(&pool, teacher_id, &[], planning_today()).await.unwrap();
         assert!(free_slots_of(&cleared, teacher_id).is_empty());
@@ -423,7 +418,7 @@ mod tests {
         let sets_before = count(&pool, "change_sets", None).await;
         let events_before = count(&pool, "change_events", None).await;
 
-        let result = save_availability(&pool, teacher_id, &[slot(1, 9)], november_today()).await;
+        let result = save_availability(&pool, teacher_id, &[slot(1, 2)], november_today()).await;
 
         assert!(matches!(result, Err(AppError::Validation(_))), "Validation beklenirdi: {result:?}");
         assert_eq!(count(&pool, "change_sets", None).await, sets_before);
@@ -438,7 +433,7 @@ mod tests {
         let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
         let sets_before = count(&pool, "change_sets", None).await;
 
-        let result = save_availability(&pool, teacher_id, &[slot(6, 9)], planning_today()).await;
+        let result = save_availability(&pool, teacher_id, &[slot(6, 2)], planning_today()).await;
 
         assert!(matches!(result, Err(AppError::Validation(_))));
         assert_eq!(count(&pool, "change_sets", None).await, sets_before);
@@ -448,14 +443,14 @@ mod tests {
     async fn copying_a_term_writes_events_and_shows_on_the_board() {
         let (_dir, pool) = test_pool().await;
         let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
-        seed_source_schedule(&pool, teacher_id, &[slot(1, 9), slot(5, 15)]).await;
+        seed_source_schedule(&pool, teacher_id, &[slot(1, 2), slot(5, 8)]).await;
 
         let copied = copy_schedules(&pool, TERM, SOURCE_TERM, planning_today()).await.unwrap();
 
         assert!(copied);
         assert_eq!(count(&pool, "change_sets", Some("copy_schedules_from_term")).await, 1);
         let board = load_board(&pool).await.unwrap();
-        assert_eq!(free_slots_of(&board, teacher_id), vec!["1-9", "5-15"]);
+        assert_eq!(free_slots_of(&board, teacher_id), vec!["1-2", "5-8"]);
     }
 
     /// Hedefte program varsa kopya üzerine yazmaz ve hiçbir şey yazmaz.
@@ -463,8 +458,8 @@ mod tests {
     async fn copying_refuses_when_the_target_already_has_a_schedule() {
         let (_dir, pool) = test_pool().await;
         let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
-        seed_source_schedule(&pool, teacher_id, &[slot(1, 9)]).await;
-        save_availability(&pool, teacher_id, &[slot(5, 15)], planning_today()).await.unwrap();
+        seed_source_schedule(&pool, teacher_id, &[slot(1, 2)]).await;
+        save_availability(&pool, teacher_id, &[slot(5, 8)], planning_today()).await.unwrap();
         let sets_before = count(&pool, "change_sets", None).await;
 
         let copied = copy_schedules(&pool, TERM, SOURCE_TERM, planning_today()).await.unwrap();
@@ -472,7 +467,7 @@ mod tests {
         assert!(!copied);
         assert_eq!(count(&pool, "change_sets", None).await, sets_before);
         let board = load_board(&pool).await.unwrap();
-        assert_eq!(free_slots_of(&board, teacher_id), vec!["5-15"], "mevcut kayıt korunmalı");
+        assert_eq!(free_slots_of(&board, teacher_id), vec!["5-8"], "mevcut kayıt korunmalı");
     }
 
     /// Kaynakta program yoksa kopyalanacak bir şey yoktur: hata değil, `false`.
@@ -492,7 +487,7 @@ mod tests {
     async fn copying_after_the_term_started_is_a_validation_error() {
         let (_dir, pool) = test_pool().await;
         let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
-        seed_source_schedule(&pool, teacher_id, &[slot(1, 9)]).await;
+        seed_source_schedule(&pool, teacher_id, &[slot(1, 2)]).await;
 
         let result = copy_schedules(&pool, TERM, SOURCE_TERM, november_today()).await;
 
@@ -500,23 +495,29 @@ mod tests {
         assert_eq!(count(&pool, "change_sets", Some("copy_schedules_from_term")).await, 0);
     }
 
-    fn settings_map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+    /// "Gün Başlangıç Saati" ayarı kalktı: `max_daily_lessons` hiç
+    /// girilmemişse ızgara `[1, 10)` olur (eski 8-17 aralığıyla AYNI 9
+    /// saatlik gün uzunluğu — bkz. `db/settings.rs::DEFAULT_MAX_DAILY_LESSONS`).
+    #[tokio::test]
+    async fn board_hours_default_to_one_through_ten_when_max_daily_lessons_is_unset() {
+        let (_dir, pool) = test_pool().await;
+
+        let board = load_board(&pool).await.unwrap();
+
+        assert_eq!(board.day_start_hour, 1);
+        assert_eq!(board.day_end_hour, 10);
     }
 
-    #[test]
-    fn hour_settings_fall_back_when_missing_or_invalid() {
-        let all = settings_map(&[("day_start_hour", "9"), ("day_end_hour", "bozuk")]);
+    /// `max_daily_lessons` değişince ızgaranın aralığı da değişir; başlangıç
+    /// her zaman 1'de sabit kalır.
+    #[tokio::test]
+    async fn board_hours_follow_the_max_daily_lessons_setting() {
+        let (_dir, pool) = test_pool().await;
+        settings::set(&pool, "max_daily_lessons", "6").await.unwrap();
 
-        assert_eq!(parse_hour_setting(&all, "day_start_hour", 8), 9);
-        assert_eq!(parse_hour_setting(&all, "day_end_hour", 17), 17);
-    }
+        let board = load_board(&pool).await.unwrap();
 
-    #[test]
-    fn missing_settings_use_the_fallback() {
-        assert_eq!(parse_hour_setting(&BTreeMap::new(), "day_start_hour", 8), 8);
+        assert_eq!(board.day_start_hour, 1);
+        assert_eq!(board.day_end_hour, 7);
     }
 }

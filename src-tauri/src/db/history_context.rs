@@ -19,10 +19,15 @@ use crate::domain::models::Company;
 use crate::domain::workload::{statutory_cap, InstitutionType};
 use crate::error::AppResult;
 
-use super::{change_log, teaching_load, terms};
+use super::{change_log, settings, teaching_load, terms};
 
+// `db::companies::SELECT_COLUMNS`in bir kopyası (private const olduğu için
+// paylaşılamıyor): `Company`nin FromRow eşlemesi ada göre çalıştığından, bu
+// listenin `companies` tablosundaki TÜM sütunları içermesi gerekir — 0010
+// göçüyle eklenen `district` de burada olmazsa "no column found" hatası
+// verir.
 const COMPANY_COLUMNS: &str = "id, name, contact_first_name, contact_last_name, phone, email, \
-     address_text, latitude, longitude, geocode_status, one_way_distance_km, notes, \
+     address_text, latitude, longitude, geocode_status, one_way_distance_km, district, notes, \
      created_at, updated_at";
 
 /// `source_term` yalnız `copySchedulesFromTerm` içindir: `Some(t)` ise `t`
@@ -85,18 +90,21 @@ async fn setting(conn: &mut SqliteConnection, key: &str) -> AppResult<Option<Str
     Ok(value)
 }
 
-/// MADDE 15/2 tavanı ve program ızgarasının bitiş saati — ikisi de
-/// `settings` anahtar/değer tablosundan (bkz. `commands/assignment_commands.rs`'in
-/// aynı ayarları okuma biçimi; burada AYNI varsayılanlar korunur).
+/// MADDE 15/2 tavanı ve program ızgarasının bitiş saati (HARİÇ).
+///
+/// İkincisi artık bir `settings` anahtarı DEĞİLDİR: "Gün Başlangıç/Bitiş
+/// Saati" ayarları kalktı (kullanıcı kararı, ders saatleri 1'den N'e
+/// numaralanır). Tek doğruluk kaynağı `settings::lesson_hour_end_in`dir —
+/// aynı türetme `commands/assignment_commands.rs` ve
+/// `commands/availability_commands.rs`'in kullandığı
+/// `settings::lesson_hour_bounds` ile AYNI sabitlerden (bkz. `db/settings.rs`)
+/// beslenir; kural burada ikinci kez yazılmaz.
 async fn load_capacity_settings(conn: &mut SqliteConnection) -> AppResult<(i64, i64)> {
     let institution_type = InstitutionType::parse(setting(conn, "institution_type").await?.as_deref().unwrap_or("other"));
     let is_metropolitan = setting(conn, "is_metropolitan_district").await?.as_deref() == Some("true");
     let cap = statutory_cap(institution_type, is_metropolitan);
 
-    let day_end_hour = setting(conn, "day_end_hour")
-        .await?
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(17);
+    let day_end_hour = settings::lesson_hour_end_in(conn).await?;
 
     Ok((cap, day_end_hour))
 }
@@ -199,7 +207,11 @@ mod tests {
 
         // seed: institution_type=other, is_metropolitan_district=true => 20 (MADDE 15/2-b-1)
         assert_eq!(ctx.statutory_cap, 20);
-        assert_eq!(ctx.day_end_hour, 17);
+        // "Gün Başlangıç/Bitiş Saati" ayarları kalktı; `max_daily_lessons`
+        // ayarı da girilmemişse varsayılanı (9) kullanılır, ızgara [1, 10)
+        // olur (bkz. db/settings.rs::DEFAULT_MAX_DAILY_LESSONS). ESKİDEN bu
+        // değer settings.day_end_hour'un seed varsayılanı olan 17'ydi.
+        assert_eq!(ctx.day_end_hour, 10);
         assert_eq!(ctx.pool_hours, 0, "ders yükü satırı hiç girilmemiş; havuz tanımsız");
         assert_eq!(ctx.rules.len(), 16, "seed 16 saat kuralı yazmalı");
         assert!(ctx.companies.is_empty());

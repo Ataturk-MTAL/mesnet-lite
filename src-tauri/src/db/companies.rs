@@ -1,10 +1,23 @@
+use crate::domain::address::parse_district;
 use crate::domain::models::{Company, NewCompany};
 use crate::error::{AppError, AppResult};
 use sqlx::{SqliteConnection, SqlitePool};
 
 const SELECT_COLUMNS: &str = "id, name, contact_first_name, contact_last_name, phone, email, \
-     address_text, latitude, longitude, geocode_status, one_way_distance_km, notes, \
+     address_text, latitude, longitude, geocode_status, one_way_distance_km, district, notes, \
      created_at, updated_at";
+
+/// İlçeyi belirler: kullanıcı elle girdiyse (boş olmayan bir değer
+/// gönderdiyse) o değer KORUNUR ve EZİLMEZ; boşsa adresten türetilir.
+/// Adresten de çıkarılamazsa boş kalır — bu bir hata değildir, yalnızca
+/// ilçe bazlı gruplamada işletme "ilçesiz" görünür.
+fn resolve_district(explicit_district: &str, address_text: &str) -> String {
+    let trimmed = explicit_district.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    parse_district(address_text).unwrap_or_default()
+}
 
 /// Mükerrer tespiti için işletme adını normalize eder: Unicode-doğru küçük harf
 /// ve ardışık boşlukları teke indirme. SQLite'ın UPPER()/LOWER() fonksiyonları
@@ -46,12 +59,13 @@ pub async fn create(pool: &SqlitePool, input: &NewCompany) -> AppResult<Company>
         "pending"
     };
 
+    let district = resolve_district(&input.district, &input.address_text);
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO companies
             (name, contact_first_name, contact_last_name, phone, email, address_text,
-             latitude, longitude, geocode_status, one_way_distance_km, notes,
+             latitude, longitude, geocode_status, one_way_distance_km, district, notes,
              created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          RETURNING id",
     )
     .bind(&input.name)
@@ -64,6 +78,7 @@ pub async fn create(pool: &SqlitePool, input: &NewCompany) -> AppResult<Company>
     .bind(input.longitude)
     .bind(status)
     .bind(input.one_way_distance_km)
+    .bind(district)
     .bind(&input.notes)
     .bind(&now)
     .bind(&now)
@@ -81,12 +96,13 @@ pub async fn create(pool: &SqlitePool, input: &NewCompany) -> AppResult<Company>
 pub async fn create_in(conn: &mut SqliteConnection, input: &NewCompany) -> AppResult<Company> {
     let now = now_iso();
     let status = if input.latitude.is_some() && input.longitude.is_some() { "manual" } else { "pending" };
+    let district = resolve_district(&input.district, &input.address_text);
     let sql = format!(
         "INSERT INTO companies
             (name, contact_first_name, contact_last_name, phone, email, address_text,
-             latitude, longitude, geocode_status, one_way_distance_km, notes,
+             latitude, longitude, geocode_status, one_way_distance_km, district, notes,
              created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          RETURNING {SELECT_COLUMNS}"
     );
     Ok(sqlx::query_as::<_, Company>(&sql)
@@ -100,6 +116,7 @@ pub async fn create_in(conn: &mut SqliteConnection, input: &NewCompany) -> AppRe
         .bind(input.longitude)
         .bind(status)
         .bind(input.one_way_distance_km)
+        .bind(district)
         .bind(&input.notes)
         .bind(&now)
         .bind(&now)
@@ -127,12 +144,15 @@ pub async fn set_active_in(conn: &mut SqliteConnection, id: i64, is_active: bool
 pub async fn update(pool: &SqlitePool, id: i64, input: &NewCompany) -> AppResult<Company> {
     // created_at korunur; yalnızca updated_at tazelenir.
     // Konum burada değişmez; onun için set_location kullanılır.
+    // İlçe elle verilmemişse (boşsa) GÜNCEL adresten yeniden türetilir; bu
+    // yüzden adres değişip ilçe boş bırakılırsa ilçe de değişmiş olur.
+    let district = resolve_district(&input.district, &input.address_text);
     let affected = sqlx::query(
         "UPDATE companies SET
             name = ?1, contact_first_name = ?2, contact_last_name = ?3, phone = ?4,
-            email = ?5, address_text = ?6, one_way_distance_km = ?7, notes = ?8,
-            updated_at = ?9
-         WHERE id = ?10",
+            email = ?5, address_text = ?6, one_way_distance_km = ?7, district = ?8,
+            notes = ?9, updated_at = ?10
+         WHERE id = ?11",
     )
     .bind(&input.name)
     .bind(&input.contact_first_name)
@@ -141,6 +161,7 @@ pub async fn update(pool: &SqlitePool, id: i64, input: &NewCompany) -> AppResult
     .bind(&input.email)
     .bind(&input.address_text)
     .bind(input.one_way_distance_km)
+    .bind(district)
     .bind(&input.notes)
     .bind(now_iso())
     .bind(id)
@@ -236,6 +257,7 @@ mod tests {
             latitude: None,
             longitude: None,
             one_way_distance_km: Some(6.8),
+            district: String::new(),
             notes: String::new(),
         }
     }
@@ -319,6 +341,21 @@ mod tests {
         assert_eq!(fetched.name, "Bağlantı Testi A.Ş.");
     }
 
+    /// `create_in` (transaction içi yerinde oluşturma) de `create` ile AYNI
+    /// ilçe türetme kuralını uygulamalı; iki yol arasında davranış farkı
+    /// olursa yalnız birinde test edilen kural fiilen uygulanmamış olur.
+    #[tokio::test]
+    async fn create_in_derives_district_from_address_when_left_blank() {
+        let (_dir, pool) = test_pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+        let mut input = sample_input("Bağlantı Testi A.Ş.");
+        input.address_text = "33130 Akdeniz/Mersin".into();
+
+        let created = create_in(&mut conn, &input).await.unwrap();
+
+        assert_eq!(created.district, "Akdeniz");
+    }
+
     #[tokio::test]
     async fn set_active_in_toggles_the_flag() {
         let (_dir, pool) = test_pool().await;
@@ -361,6 +398,70 @@ mod tests {
             get(&pool, created.id).await.unwrap().geocode_status,
             "failed"
         );
+    }
+
+    /// İlçe boş bırakılırsa adresten türetilmeli.
+    #[tokio::test]
+    async fn create_derives_district_from_address_when_left_blank() {
+        let (_dir, pool) = test_pool().await;
+        let mut input = sample_input("Test İşletme A");
+        input.address_text = "Mega Center, Çilek, 63143 sokak D:8. Blok No:4, 33020 Akdeniz/Mersin, Türkiye".into();
+
+        let created = create(&pool, &input).await.unwrap();
+
+        assert_eq!(created.district, "Akdeniz");
+    }
+
+    /// Kullanıcı ilçeyi elle girdiyse EZİLMEMELİ; adresten türetilen değer
+    /// farklı olsa bile elle girilen korunur.
+    #[tokio::test]
+    async fn create_keeps_the_explicit_district_instead_of_deriving_it() {
+        let (_dir, pool) = test_pool().await;
+        let mut input = sample_input("Test İşletme A");
+        input.address_text = "33020 Akdeniz/Mersin, Türkiye".into();
+        input.district = "Toroslar".into();
+
+        let created = create(&pool, &input).await.unwrap();
+
+        assert_eq!(created.district, "Toroslar");
+    }
+
+    /// Adresten hiç ilçe çıkarılamazsa ilçe boş kalmalı; hata fırlatılmamalı.
+    #[tokio::test]
+    async fn create_leaves_district_blank_when_address_does_not_match() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Test İşletme A")).await.unwrap();
+
+        assert_eq!(created.district, "");
+    }
+
+    /// Güncellemede ilçe elle verilmemişse GÜNCEL adresten yeniden türetilir.
+    #[tokio::test]
+    async fn update_rederives_district_when_address_changes_and_district_is_blank() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Test İşletme A")).await.unwrap();
+        assert_eq!(created.district, "", "başlangıç adresinde posta kodu yok");
+
+        let mut input = sample_input("Test İşletme A");
+        input.address_text = "33130 Akdeniz/Mersin".into();
+        let updated = update(&pool, created.id, &input).await.unwrap();
+
+        assert_eq!(updated.district, "Akdeniz");
+    }
+
+    /// Güncellemede ilçe elle verilmişse (boş değilse) korunmalı; adres
+    /// değişse bile ezilmez.
+    #[tokio::test]
+    async fn update_keeps_the_explicit_district_even_if_address_changes() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Test İşletme A")).await.unwrap();
+
+        let mut input = sample_input("Test İşletme A");
+        input.address_text = "33130 Akdeniz/Mersin".into();
+        input.district = "Toroslar".into();
+        let updated = update(&pool, created.id, &input).await.unwrap();
+
+        assert_eq!(updated.district, "Toroslar");
     }
 
     /// Mükerrer tespiti Unicode-doğru olmalı; SQL tarafında yapılamaz.

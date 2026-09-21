@@ -95,7 +95,7 @@ function lessonsInput(wrapper: ReturnType<typeof mountView>): HTMLInputElement {
   return wrapper.find('input#max-daily-lessons').element as HTMLInputElement
 }
 
-/** Ders saati sayısı `InputNumber`'ı; başlangıç saati alanı `#day-start` kimliğini taşır. */
+/** Ders saati sayısı `InputNumber`'ı; `input-id="max-daily-lessons"` ile bulunur. */
 function lessonsField(wrapper: ReturnType<typeof mountView>) {
   return wrapper.findAllComponents(InputNumber).find((field) => field.props('inputId') === 'max-daily-lessons')!
 }
@@ -139,7 +139,7 @@ describe('SettingsView max daily lessons', () => {
     wrapper.unmount()
   })
 
-  it('saves max_daily_lessons and derives day_end_hour from the start hour', async () => {
+  it('saves only max_daily_lessons, without day_start_hour or day_end_hour', async () => {
     getMock.mockResolvedValue({ ...baseSettings, max_daily_lessons: '9' })
     saveMock.mockResolvedValue(baseSettings)
 
@@ -151,12 +151,12 @@ describe('SettingsView max daily lessons', () => {
 
     const entries = saveMock.mock.calls[0][0]
     expect(entries.max_daily_lessons).toBe('7')
-    expect(entries.day_start_hour).toBe('8')
-    expect(entries.day_end_hour).toBe('15')
+    expect(entries.day_start_hour).toBeUndefined()
+    expect(entries.day_end_hour).toBeUndefined()
     wrapper.unmount()
   })
 
-  it('writes 8 + 9 = 17 for an unchanged legacy record', async () => {
+  it('keeps writing only max_daily_lessons for an unchanged legacy record', async () => {
     getMock.mockResolvedValue(baseSettings)
     saveMock.mockResolvedValue(baseSettings)
 
@@ -167,16 +167,17 @@ describe('SettingsView max daily lessons', () => {
 
     const entries = saveMock.mock.calls[0][0]
     expect(entries.max_daily_lessons).toBe('9')
-    expect(entries.day_end_hour).toBe('17')
+    expect(entries.day_start_hour).toBeUndefined()
+    expect(entries.day_end_hour).toBeUndefined()
     wrapper.unmount()
   })
 
-  it('does not save when start hour plus count exceeds 24', async () => {
+  it('does not save when the count exceeds the upper bound of 23', async () => {
     getMock.mockResolvedValue(baseSettings)
 
     const wrapper = mountView()
     await flushPromises()
-    await lessonsField(wrapper).vm.$emit('update:modelValue', 17) // 8 + 17 = 25
+    await lessonsField(wrapper).vm.$emit('update:modelValue', 24) // üst sınır 23
     await clickSave(wrapper)
 
     expect(saveMock).not.toHaveBeenCalled()
@@ -197,30 +198,17 @@ describe('SettingsView max daily lessons', () => {
     wrapper.unmount()
   })
 
-  it('accepts the exact upper bound (start 8 + 16 = 24)', async () => {
+  it('accepts the exact upper bound of 23', async () => {
     getMock.mockResolvedValue(baseSettings)
     saveMock.mockResolvedValue(baseSettings)
 
     const wrapper = mountView()
     await flushPromises()
-    await lessonsField(wrapper).vm.$emit('update:modelValue', 16)
+    await lessonsField(wrapper).vm.$emit('update:modelValue', 23)
     await clickSave(wrapper)
     await vi.waitFor(() => expect(saveMock).toHaveBeenCalledTimes(1))
 
-    expect(saveMock.mock.calls[0][0].day_end_hour).toBe('24')
-    wrapper.unmount()
-  })
-
-  it('caps the count when the start hour moves later', async () => {
-    getMock.mockResolvedValue({ ...baseSettings, max_daily_lessons: '16' })
-
-    const wrapper = mountView()
-    await flushPromises()
-    const startField = wrapper.findAllComponents(InputNumber).find((field) => field.attributes('id') === 'day-start')!
-    await startField.vm.$emit('update:modelValue', 12) // üst sınır 24 - 12 = 12
-    await flushPromises()
-
-    expect(lessonsInput(wrapper).value).toBe('12')
+    expect(saveMock.mock.calls[0][0].max_daily_lessons).toBe('23')
     wrapper.unmount()
   })
 })
