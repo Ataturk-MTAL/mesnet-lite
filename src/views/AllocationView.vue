@@ -73,118 +73,124 @@
     </Card>
 
     <div class="board">
-      <!-- Sol: atanmamış işletme kartları -->
-      <Card class="panel">
-        <template #title>
-          {{ labels.allocation.unassigned }} ({{ unassignedCompanies.length }})
-        </template>
-        <template #content>
-          <InputText
-            v-model="companySearch"
-            :placeholder="labels.allocation.searchCompany"
-            class="search"
-          />
+      <!-- Sol: atanmamış işletme kartları. Yuva akıştan çıkarılıp mutlak konumlandırılıyor
+           ki listenin kaç kart taşıdığı satırın (dolayısıyla sağdaki ızgaranın)
+           yüksekliğini etkilemesin — satırı SAĞ panel belirlesin. -->
+      <div class="panel-slot">
+        <Card class="panel panel--list">
+          <template #title>
+            {{ labels.allocation.unassigned }} ({{ unassignedCompanies.length }})
+          </template>
+          <template #content>
+            <InputText
+              v-model="companySearch"
+              :placeholder="labels.allocation.searchCompany"
+              class="search"
+            />
 
-          <div v-if="unassignedGroups.length === 0" class="empty">
-            {{ labels.allocation.allAssigned }}
-          </div>
+            <div class="company-list">
+              <div v-if="unassignedGroups.length === 0" class="empty">
+                {{ labels.allocation.allAssigned }}
+              </div>
 
-          <Panel
-            v-for="group in unassignedGroups"
-            :key="group.district"
-            :header="group.label"
-            toggleable
-            class="district-group"
-          >
-            <div
-              v-for="company in group.companies"
-              :key="company.companyId"
-              class="company-card"
-              :class="{ 'company-card--dragging': draggedCompanyId === company.companyId }"
-              draggable="true"
-              tabindex="0"
-              role="button"
-              :aria-label="company.companyName"
-              @dragstart="onDragStart($event, company.companyId)"
-              @dragend="onDragEnd"
-              @keydown.enter.prevent="toggleKeyboardSelection(company.companyId)"
-              @keydown.space.prevent="toggleKeyboardSelection(company.companyId)"
-            >
-              <div class="company-name">{{ company.companyName }}</div>
-              <div
-                v-if="company.addressText.trim().length > 0"
-                class="company-address"
-                v-tooltip.top="addressTooltip(company.addressText)"
+              <Panel
+                v-for="group in unassignedGroups"
+                :key="group.district"
+                :header="group.label"
+                toggleable
+                class="district-group"
               >
-                {{ company.addressText }}
-              </div>
-              <div class="company-meta">
-                <Tag v-if="company.isHonorary" :value="labels.hours.honorary" severity="info" />
-                <Tag
-                  v-else-if="company.hoursMissing"
-                  :value="labels.allocation.hoursMissing"
-                  severity="warn"
-                />
-                <Tag v-else :value="`${company.awardedHours} saat`" severity="success" />
-
-                <span class="muted">{{ company.studentCount }} öğrenci</span>
-                <span v-if="company.oneWayDistanceKm !== null" class="muted">
-                  · {{ company.oneWayDistanceKm.toFixed(1) }} km
-                </span>
-              </div>
-              <div v-if="company.branches.length > 0" class="company-branches">
-                {{ company.branches.join(', ') }}
-              </div>
-              <div v-if="company.workplaceDays.length > 0" class="company-days">
-                {{ company.workplaceDays.map((d) => labels.allocation.days[d]).join(', ') }}
-              </div>
-              <div v-else class="company-days company-days--missing">
-                {{ labels.allocation.notWorkplaceDay }}
-              </div>
-            </div>
-          </Panel>
-
-          <!-- Atanmış işletmeler: kart solda kaybolmasın, nereye gittiği görünsün -->
-          <Panel
-            v-if="assignedCompanies.length > 0"
-            :header="`${labels.allocation.assignedSection} (${assignedCompanies.length})`"
-            toggleable
-            class="assigned-panel"
-          >
-            <div
-              v-for="company in assignedCompanies"
-              :key="company.companyId"
-              class="assigned-card"
-              :class="{ 'assigned-card--settle': recentlyAssignedCompanyId === company.companyId }"
-            >
-              <div class="assigned-card-info">
-                <div class="company-name">{{ company.companyName }}</div>
                 <div
-                  v-if="company.addressText.trim().length > 0"
-                  class="company-address"
-                  v-tooltip.top="addressTooltip(company.addressText)"
+                  v-for="company in group.companies"
+                  :key="company.companyId"
+                  class="company-card"
+                  :class="{ 'company-card--dragging': draggedCompanyId === company.companyId }"
+                  draggable="true"
+                  tabindex="0"
+                  role="button"
+                  :aria-label="company.companyName"
+                  @dragstart="onDragStart($event, company.companyId)"
+                  @dragend="onDragEnd"
+                  @keydown.enter.prevent="toggleKeyboardSelection(company.companyId)"
+                  @keydown.space.prevent="toggleKeyboardSelection(company.companyId)"
                 >
-                  {{ company.addressText }}
+                  <div class="company-name">{{ company.companyName }}</div>
+                  <div
+                    v-if="company.addressText.trim().length > 0"
+                    class="company-address"
+                    v-tooltip.top="addressTooltip(company.addressText)"
+                  >
+                    {{ company.addressText }}
+                  </div>
+                  <div class="company-meta">
+                    <Tag v-if="company.isHonorary" :value="labels.hours.honorary" severity="info" />
+                    <Tag
+                      v-else-if="company.hoursMissing"
+                      :value="labels.allocation.hoursMissing"
+                      severity="warn"
+                    />
+                    <Tag v-else :value="`${company.awardedHours} saat`" severity="success" />
+
+                    <span class="muted">{{ company.studentCount }} öğrenci</span>
+                    <span v-if="company.oneWayDistanceKm !== null" class="muted">
+                      · {{ company.oneWayDistanceKm.toFixed(1) }} km
+                    </span>
+                  </div>
+                  <div v-if="company.branches.length > 0" class="company-branches">
+                    {{ company.branches.join(', ') }}
+                  </div>
+                  <div v-if="company.workplaceDays.length > 0" class="company-days">
+                    {{ company.workplaceDays.map((d) => labels.allocation.days[d]).join(', ') }}
+                  </div>
+                  <div v-else class="company-days company-days--missing">
+                    {{ labels.allocation.notWorkplaceDay }}
+                  </div>
                 </div>
-                <div class="company-meta">
-                  <Tag :value="assignedTeacherName(company)" severity="secondary" />
-                  <span class="muted">{{ assignedSlotLabel(company) }}</span>
+              </Panel>
+
+              <!-- Atanmış işletmeler: kart solda kaybolmasın, nereye gittiği görünsün -->
+              <Panel
+                v-if="assignedCompanies.length > 0"
+                :header="`${labels.allocation.assignedSection} (${assignedCompanies.length})`"
+                toggleable
+                class="assigned-panel"
+              >
+                <div
+                  v-for="company in assignedCompanies"
+                  :key="company.companyId"
+                  class="assigned-card"
+                  :class="{ 'assigned-card--settle': recentlyAssignedCompanyId === company.companyId }"
+                >
+                  <div class="assigned-card-info">
+                    <div class="company-name">{{ company.companyName }}</div>
+                    <div
+                      v-if="company.addressText.trim().length > 0"
+                      class="company-address"
+                      v-tooltip.top="addressTooltip(company.addressText)"
+                    >
+                      {{ company.addressText }}
+                    </div>
+                    <div class="company-meta">
+                      <Tag :value="assignedTeacherName(company)" severity="secondary" />
+                      <span class="muted">{{ assignedSlotLabel(company) }}</span>
+                    </div>
+                  </div>
+                  <Button
+                    icon="pi pi-times"
+                    severity="danger"
+                    text
+                    rounded
+                    size="small"
+                    :aria-label="labels.allocation.removeAssignment"
+                    v-tooltip.top="labels.allocation.removeAssignment"
+                    @click="unassign(company.companyId)"
+                  />
                 </div>
-              </div>
-              <Button
-                icon="pi pi-times"
-                severity="danger"
-                text
-                rounded
-                size="small"
-                :aria-label="labels.allocation.removeAssignment"
-                v-tooltip.top="labels.allocation.removeAssignment"
-                @click="unassign(company.companyId)"
-              />
+              </Panel>
             </div>
-          </Panel>
-        </template>
-      </Card>
+          </template>
+        </Card>
+      </div>
 
       <!-- Sağ: öğretmen seçimi + haftalık ızgara -->
       <Card class="panel panel--grid">
@@ -1071,9 +1077,22 @@ onUnmounted(() => {
 .summary-value--over { color: var(--p-red-500); }
 .summary-label { font-size: 0.8125rem; color: var(--p-text-muted-color); margin-top: 0.125rem; }
 
-.board { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
-.panel { flex: 1; min-width: 20rem; }
+/* Satırın yüksekliğini SAĞ panel belirler. `.panel-slot`un tek çocuğu mutlak
+ * konumlu olduğu için yuvanın kendi içerik yüksekliği sıfırdır ve satıra
+ * katkı vermez; `align-items: stretch` ile yuva satır boyuna uzar, kart da
+ * yuvayı doldurur. Sol listenin kaç işletme taşıdığı artık sayfa boyunu
+ * etkilemez. `min-height`, öğretmen seçili değilken sağ panel çok kısa
+ * kaldığında listenin birkaç satıra düşmesini engeller. */
+.board { display: flex; gap: 1rem; align-items: stretch; flex-wrap: wrap; }
+
+.panel-slot { flex: 1; min-width: 20rem; min-height: 28rem; position: relative; }
+.panel--list { position: absolute; inset: 0; display: flex; flex-direction: column; }
+
 .panel--grid { flex: 2; min-width: 28rem; }
+.panel--list :deep(.p-card-body) { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.panel--list :deep(.p-card-content) { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+
+.company-list { flex: 1; min-height: 0; overflow-y: auto; }
 
 .search { width: 100%; margin-bottom: 0.75rem; }
 .empty { color: var(--p-text-muted-color); padding: 1rem 0; }

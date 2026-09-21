@@ -7,7 +7,7 @@ import ConfirmationService from 'openvue/confirmationservice'
 import Tooltip from 'openvue/tooltip'
 import Aura from '@openvue/themes/aura'
 import AllocationView from './AllocationView.vue'
-import type { AssignmentBoard, BoardCompany } from '../api/assignments'
+import type { AssignmentBoard, BoardCompany, BoardTeacher } from '../api/assignments'
 import { labels } from '../i18n/labels'
 
 // Dönem, `AllocationView` içinde `watch()` ile izlenir; gerçek bir `ref` olmalı.
@@ -54,7 +54,27 @@ function companyFixture(overrides: Partial<BoardCompany> = {}): BoardCompany {
   }
 }
 
-function boardFixture(companies: BoardCompany[]): AssignmentBoard {
+function teacherFixture(overrides: Partial<BoardTeacher> = {}): BoardTeacher {
+  return {
+    teacherId: 1,
+    teacherName: 'Ahmet Yılmaz',
+    branches: ['Elektrik-Elektronik'],
+    capacity: 40,
+    assignedHours: 0,
+    companyCount: 0,
+    freeSlots: [],
+    occupiedBy: {},
+    hoursPerDay: {},
+    daysOverCap: [],
+    isOverCapacity: false,
+    ...overrides,
+  }
+}
+
+function boardFixture(
+  companies: BoardCompany[],
+  overrides: Partial<AssignmentBoard> = {},
+): AssignmentBoard {
   return {
     term: '2026-2027/1',
     teachers: [],
@@ -68,11 +88,12 @@ function boardFixture(companies: BoardCompany[]): AssignmentBoard {
     totalCompanyCount: companies.length,
     honoraryCount: 0,
     warnings: [],
+    ...overrides,
   }
 }
 
-async function mountView(companies: BoardCompany[]) {
-  getBoardMock.mockResolvedValue(boardFixture(companies))
+async function mountView(companies: BoardCompany[], boardOverrides: Partial<AssignmentBoard> = {}) {
+  getBoardMock.mockResolvedValue(boardFixture(companies, boardOverrides))
   const wrapper = mount(AllocationView, {
     global: {
       plugins: [
@@ -176,6 +197,81 @@ describe('AllocationView atanmamış işletme gruplaması', () => {
     // Assert
     const card = wrapper.find('.company-card')
     expect(card.attributes('draggable')).toBe('true')
+    wrapper.unmount()
+  })
+})
+
+describe('AllocationView sol panelin kendi içinde kayması', () => {
+  it('ilçe gruplarını "company-list" sarmalayıcısının içinde çizer', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz' }),
+      companyFixture({ companyId: 2, companyName: 'Firma B', district: 'Toroslar' }),
+    ])
+
+    // Assert: sayfa değil kartın kendisi kayacağı için ilçe grupları
+    // "company-list" sarmalayıcısının içinde olmalı.
+    const list = wrapper.find('.company-list')
+    expect(list.exists()).toBe(true)
+    expect(list.findAll('.district-group')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it('arama kutusunu "company-list" sarmalayıcısının dışında tutar, liste kayarken sabit kalsın', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz' }),
+    ])
+
+    // Assert
+    const list = wrapper.find('.company-list')
+    expect(list.find('input[type="text"]').exists()).toBe(false)
+    expect(wrapper.find('.search').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('atanmış işletmeler panelini de "company-list" sarmalayıcısının içinde tutar', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz', assignedTeacherId: 7 }),
+    ])
+
+    // Assert
+    const list = wrapper.find('.company-list')
+    expect(list.find('.assigned-panel').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('sol kartı "panel-slot" yuvasının içine koyar ki listenin uzunluğu satır yüksekliğini etkilemesin', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz' }),
+    ])
+
+    // Assert: yuva akıştan çıkarılan kartı taşımalı; satırın (dolayısıyla sağ
+    // paneldeki ızgaranın) yüksekliğine sol listenin içeriği katkı vermemeli.
+    const slot = wrapper.find('.panel-slot')
+    expect(slot.exists()).toBe(true)
+    expect(slot.find('.panel--list').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('AllocationView sağ panelin kendi içinde kayması', () => {
+  it('haftalık ızgarayı "grid-scroll" sarmalayıcısının içinde çizer, öğretmen seçici dışında kalır', async () => {
+    // Arrange & Act: geniş saat aralığı ızgarayı uzatır, sarmalayıcı bunu kendi
+    // içinde kaydırmalı.
+    const wrapper = await mountView(
+      [companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz' })],
+      { teachers: [teacherFixture()], dayStartHour: 8, dayEndHour: 22 },
+    )
+
+    // Assert
+    const gridScroll = wrapper.find('.grid-scroll')
+    expect(gridScroll.exists()).toBe(true)
+    expect(gridScroll.find('table.grid').exists()).toBe(true)
+    expect(gridScroll.find('.teacher-select').exists()).toBe(false)
+    expect(wrapper.find('.teacher-select').exists()).toBe(true)
     wrapper.unmount()
   })
 })
