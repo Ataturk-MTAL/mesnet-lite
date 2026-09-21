@@ -92,10 +92,15 @@ fn append_initial_placement(
     Ok(())
 }
 
-pub(super) fn place_student(ctx: &DecisionContext, req: &ChangeRequest, student_id: i64, company_id: i64) -> Result<Decision, Rejection> {
+/// Yeni öğrenci ataması `create_student`in initial placement'ı DIŞINDA, halihazırda
+/// var olan bir öğrenciyi ilk kez bir işletmeye yerleştirir. `to`, nakil
+/// komutuyla AYNI `resolve_transfer_target`i paylaşır (DRY): böylece bu ilk
+/// yerleştirme de nakil gibi ya var olan bir işletmeyi ya da yerinde
+/// oluşturulmuş yeni bir işletmeyi hedef alabilir.
+pub(super) fn place_student(ctx: &DecisionContext, req: &ChangeRequest, student_id: i64, to: &TransferTarget) -> Result<Decision, Rejection> {
     let d = ctx.term.resolve_effective_date(req.effective_date, ctx.today)?;
     ctx.require_student(student_id)?;
-    ctx.require_active_company(company_id)?;
+    let (company_id, company_created) = resolve_transfer_target(ctx, to)?;
     let label = ctx.student_label(student_id);
     let candidate = EventPayload::StudentPlaced { to_company_id: company_id, from_company_id: None, source: "manual".to_string(), labels: labels(&[("student", &label)]) };
     validate_placement_change(ctx, student_id, d, None, &candidate)?;
@@ -113,6 +118,17 @@ pub(super) fn place_student(ctx: &DecisionContext, req: &ChangeRequest, student_
     events.extend(cascade);
     impact.warnings.extend(warnings);
     impact.notices.extend(notices);
+
+    // Nakildeki `NewCompanyNeedsSetup` bildirimiyle AYNI gerekçe (DRY): yeni
+    // işletme kurulduysa kullanıcı saat/atama girmesi gerektiğini görmeli.
+    if company_created {
+        impact.notices.push(ImpactNotice {
+            code: NoticeCode::NewCompanyNeedsSetup,
+            message: format!("{}: yeni işletme oluşturuldu; saat ve atama elle girilmeli", ctx.company_label(company_id)),
+            subject_label: ctx.company_label(company_id),
+            date: d,
+        });
+    }
 
     finish(ctx, req, d, events, impact, Vec::new())
 }
@@ -465,11 +481,83 @@ mod tests {
             .with_student(100, "Ahmet Yılmaz")
             .build();
 
-        let req = request(ymd(2026, 10, 28), ChangeCommand::PlaceStudent { student_id: 100, company_id: 1 });
-        let result = place_student(&ctx, &req, 100, 1);
+        let to = TransferTarget::Existing { company_id: 1 };
+        let req = request(ymd(2026, 10, 28), ChangeCommand::PlaceStudent { student_id: 100, to: to.clone() });
+        let result = place_student(&ctx, &req, 100, &to);
         let rejection = result.unwrap_err();
         assert_eq!(rejection.code, RejectionCode::PreviousMonthClosed);
         assert_eq!(rejection.suggested_date, Some(ymd(2026, 11, 1)));
+    }
+
+    /// `PlaceStudent{ to: Existing }` eski davranışı korur: var olan işletmeye
+    /// ilk yerleştirme.
+    #[test]
+    fn place_student_to_existing_company_places_the_student() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_student(100, "Ahmet Yılmaz")
+            .build();
+
+        let to = TransferTarget::Existing { company_id: 1 };
+        let req = request(ymd(2026, 11, 3), ChangeCommand::PlaceStudent { student_id: 100, to: to.clone() });
+        let decision = place_student(&ctx, &req, 100, &to).unwrap();
+
+        match &decision.events[0].payload {
+            EventPayload::StudentPlaced { to_company_id, from_company_id, .. } => {
+                assert_eq!(*to_company_id, 1);
+                assert_eq!(*from_company_id, None);
+            }
+            other => panic!("beklenmedik olay: {other:?}"),
+        }
+    }
+
+    /// `PlaceStudent{ to: New }` yerinde oluşturulmuş yeni bir işletmeye
+    /// yerleştirir ve kurulum bildirimi üretir — `transfer_to_new_company_...`
+    /// testiyle AYNI mekanizma (`resolve_transfer_target`).
+    #[test]
+    fn place_student_to_new_company_uses_materialized_id_and_notices_setup() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_company(9, "Yeni İşletme", None)
+            .with_student(100, "Ahmet Yılmaz")
+            .materialized(Materialized { company_id: Some(9), student_id: None, teacher_id: None })
+            .build();
+
+        let new_company = NewCompany {
+            name: "Yeni İşletme".into(), contact_first_name: String::new(), contact_last_name: String::new(),
+            phone: String::new(), email: String::new(), address_text: String::new(), latitude: None,
+            longitude: None, one_way_distance_km: None, district: String::new(), notes: String::new(),
+        };
+        let to = TransferTarget::New { company: new_company };
+        let req = request(ymd(2026, 11, 3), ChangeCommand::PlaceStudent { student_id: 100, to: to.clone() });
+        let decision = place_student(&ctx, &req, 100, &to).unwrap();
+
+        match &decision.events[0].payload {
+            EventPayload::StudentPlaced { to_company_id, .. } => assert_eq!(*to_company_id, 9),
+            other => panic!("beklenmedik olay: {other:?}"),
+        }
+        assert!(decision.impact.notices.iter().any(|n| n.code == NoticeCode::NewCompanyNeedsSetup));
+    }
+
+    /// Regresyon koruması: yerleştirmesi ZATEN açık olan bir öğrenciye
+    /// `PlaceStudent` reddedilir (`validate_placement_change`in `d⁻` anındaki
+    /// durum denetimi — spec §5.2). Bu davranış `PlaceStudent`in `to:
+    /// TransferTarget` şekline geçmesiyle değişmemeli.
+    #[test]
+    fn place_student_already_placed_is_rejected() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_company(2, "İşletme B", Some(10.0))
+            .with_student(100, "Ahmet Yılmaz")
+            .with_event(opened(1, 1, ymd(2026, 9, 1)))
+            .build();
+
+        let to = TransferTarget::Existing { company_id: 2 };
+        let req = request(ymd(2026, 11, 3), ChangeCommand::PlaceStudent { student_id: 100, to: to.clone() });
+        let result = place_student(&ctx, &req, 100, &to);
+        assert_eq!(result.unwrap_err().code, RejectionCode::FactNotTrueAtDate, "zaten yerleşik bir öğrenci yeniden 'ilk' yerleştirilemez");
     }
 
     #[test]

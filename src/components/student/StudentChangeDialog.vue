@@ -5,16 +5,16 @@
     modal
     :closable="change.status.value === 'idle'"
     :close-on-escape="change.status.value === 'idle'"
-    :header="labels.studentChange.title"
+    :header="isPlacing ? labels.studentChange.placeTitle : labels.studentChange.title"
     :style="{ width: '32rem' }"
   >
     <div class="form-grid">
-      <div class="field">
+      <div v-if="!isPlacing" class="field">
         <label>{{ labels.studentChange.fromCompany }}</label>
         <p class="readonly-value">{{ student.companyName ?? labels.student.noCompany }}</p>
       </div>
 
-      <div class="field">
+      <div v-if="!isPlacing" class="field">
         <SelectButton
           ref="modeSelect"
           :model-value="mode"
@@ -49,11 +49,29 @@
             :options="companyOptions"
             optionLabel="label"
             optionValue="value"
-            :placeholder="labels.studentChange.targetCompany"
+            :placeholder="labels.studentChange.targetCompanyPlaceholder"
             :aria-label="labels.studentChange.targetCompany"
             filter
+            :filterFields="['label', 'district', 'addressText']"
             @update:model-value="(value: number | null) => (targetCompanyId = value)"
-          />
+          >
+            <template #value="slotProps">
+              <span v-if="targetCompanyId !== null">{{ companyLabelById(targetCompanyId) }}</span>
+              <span v-else>{{ slotProps.placeholder }}</span>
+            </template>
+            <template #option="slotProps">
+              <div class="company-option">
+                <span class="company-option-name">{{ slotProps.option.label }}</span>
+                <span
+                  v-if="companySecondaryLine(slotProps.option)"
+                  class="company-option-secondary"
+                  v-tooltip.top="slotProps.option.oneWayDistanceKm !== null ? labels.company.distanceHint : undefined"
+                >
+                  {{ companySecondaryLine(slotProps.option) }}
+                </span>
+              </div>
+            </template>
+          </Select>
         </div>
 
         <div v-else class="field">
@@ -68,7 +86,14 @@
         </div>
       </template>
 
-      <EffectiveDateField ref="dateField" v-model="effectiveDate" :label="dateLabel" :term="term" />
+      <EffectiveDateField
+        ref="dateField"
+        :model-value="effectiveDate"
+        :label="dateLabel"
+        :term="term"
+        :show-error="isDateTouched"
+        @update:model-value="handleDateChange"
+      />
 
       <div class="field">
         <label :for="reasonId">{{ labels.history.reason }}</label>
@@ -77,10 +102,11 @@
           ref="reasonField"
           v-model="reason"
           rows="2"
-          :placeholder="labels.studentChange.reasonPlaceholder"
+          :placeholder="isPlacing ? labels.studentChange.placeReasonPlaceholder : labels.studentChange.reasonPlaceholder"
           :aria-label="labels.history.reason"
+          @blur="isReasonTouched = true"
         />
-        <small v-if="isReasonEmpty" class="field-error">{{ labels.history.reasonRequired }}</small>
+        <small v-if="showReasonError" class="field-error">{{ labels.history.reasonRequired }}</small>
       </div>
     </div>
 
@@ -123,6 +149,23 @@ export interface StudentChangeSubject {
 type ChangeMode = 'transfer' | 'leave'
 type TargetMode = 'existing' | 'new'
 
+/**
+ * Hedef işletme `Select`'inin seçenek nesnesi. `value`/`label` dışındaki
+ * alanlar yalnız `#option` slot'unda ikincil satırı oluşturmak ve
+ * `filterFields` ile aramayı ilçe/adrese de yaymak için taşınır.
+ */
+interface CompanyOption {
+  value: number
+  label: string
+  district: string
+  addressText: string
+  oneWayDistanceKm: number | null
+}
+
+// İkincil satırda adres kırpılırken kelime ortasından kesilmesin diye
+// kullanılan üst sınır.
+const ADDRESS_PREVIEW_LENGTH = 60
+
 const props = defineProps<{
   visible: boolean
   student: StudentChangeSubject
@@ -147,6 +190,11 @@ const effectiveDate = ref<string | null>(null)
 const reason = ref('')
 const companies = ref<Company[]>([])
 
+// Boş diyalog sakin açılmalı: hata yalnız alana dokunulduktan sonra görünür
+// (bkz. ChangeDetailsDialog.vue'daki aynı desen).
+const isReasonTouched = ref(false)
+const isDateTouched = ref(false)
+
 const reasonId = useId()
 
 const modeOptions = [
@@ -154,31 +202,72 @@ const modeOptions = [
   { value: 'leave' as const, label: labels.studentChange.leaveOption },
 ]
 const targetModeOptions = [
-  { value: 'existing' as const, label: labels.studentChange.targetCompany },
+  { value: 'existing' as const, label: labels.studentChange.targetCompanyExisting },
   { value: 'new' as const, label: labels.studentChange.targetCompanyNew },
 ]
 
-// Öğrenci hâlihazırda bu işletmede olduğu için hedef listesinden çıkarılır.
-const companyOptions = computed(() =>
+// Öğrenci hâlihazırda bu işletmede olduğu için hedef listesinden çıkarılır;
+// ilk yerleştirmede `companyId` zaten null olduğundan filtre etkisizdir.
+const companyOptions = computed<CompanyOption[]>(() =>
   companies.value
     .filter((company) => company.id !== props.student.companyId)
-    .map((company) => ({ value: company.id, label: company.name })),
+    .map((company) => ({
+      value: company.id,
+      label: company.name,
+      district: company.district,
+      addressText: company.addressText,
+      oneWayDistanceKm: company.oneWayDistanceKm,
+    })),
 )
+
+/**
+ * Adresi kelime ortasından kesmeden kısaltır; kesme yapıldıysa sonuna
+ * "…" eklenir. 60 karakter sınırının altındaki adresler değişmeden döner.
+ */
+function truncateAddress(addressText: string): string {
+  if (addressText.length <= ADDRESS_PREVIEW_LENGTH) return addressText
+  const cut = addressText.slice(0, ADDRESS_PREVIEW_LENGTH)
+  const lastSpaceIndex = cut.lastIndexOf(' ')
+  const safeCut = lastSpaceIndex > 0 ? cut.slice(0, lastSpaceIndex) : cut
+  return `${safeCut}…`
+}
+
+/**
+ * Seçenek satırının ikinci satırı: ilçe (varsa) yoksa kısaltılmış adres,
+ * ardından tek yön mesafe. İkisi de yoksa `null` döner ve satır hiç
+ * render edilmez (spec: "Hiçbiri yoksa ikincil satırı hiç render etme").
+ */
+function companySecondaryLine(option: CompanyOption): string | null {
+  const locationPart =
+    option.district.trim().length > 0 ? option.district : truncateAddress(option.addressText.trim())
+  const parts: string[] = []
+  if (locationPart.length > 0) parts.push(locationPart)
+  if (option.oneWayDistanceKm !== null) parts.push(`${option.oneWayDistanceKm.toLocaleString('tr-TR')} km`)
+  return parts.length > 0 ? parts.join(' · ') : null
+}
+
+/** Kapalı `Select`'te yalnız işletme adı görünsün diye `#value` slot'unda kullanılır. */
+function companyLabelById(companyId: number): string {
+  return companyOptions.value.find((option) => option.value === companyId)?.label ?? ''
+}
+
+// Öğrencinin hiç işletmesi yoksa diyalog "ilk yerleştirme" kipinde açılır:
+// nakil/ayrılış seçimi ve mevcut işletme satırı anlamsız olduğu için gizlenir.
+const isPlacing = computed(() => props.student.companyId === null)
 
 const dateLabel = computed(() =>
   mode.value === 'leave' ? labels.effectiveDateField.contractEnd : labels.effectiveDateField.contractStart,
 )
 
 const isReasonEmpty = computed(() => reason.value.trim().length === 0)
+const showReasonError = computed(() => isReasonEmpty.value && isReasonTouched.value)
 const isDateMissing = computed(() => !props.term.isPlanning && effectiveDate.value === null)
 const isTargetMissing = computed(() => {
   if (mode.value !== 'transfer') return false
   return targetMode.value === 'existing' ? targetCompanyId.value === null : newCompany.value === null
 })
 
-const isFormValid = computed(
-  () => props.student.companyId !== null && !isReasonEmpty.value && !isDateMissing.value && !isTargetMissing.value,
-)
+const isFormValid = computed(() => !isReasonEmpty.value && !isDateMissing.value && !isTargetMissing.value)
 
 const isSubmitDisabled = computed(() => !isFormValid.value || change.status.value !== 'idle')
 
@@ -202,6 +291,8 @@ function resetForm(): void {
   newCompany.value = null
   effectiveDate.value = null
   reason.value = ''
+  isReasonTouched.value = false
+  isDateTouched.value = false
   change.reset()
 }
 
@@ -231,6 +322,11 @@ function handleNewCompanySave(input: NewCompany): void {
   newCompany.value = input
 }
 
+function handleDateChange(value: string | null): void {
+  effectiveDate.value = value
+  isDateTouched.value = true
+}
+
 function buildTarget(): TransferTarget | null {
   if (targetMode.value === 'existing') {
     return targetCompanyId.value === null ? null : { type: 'existing', companyId: targetCompanyId.value }
@@ -239,6 +335,10 @@ function buildTarget(): TransferTarget | null {
 }
 
 function buildCommand(): ChangeCommand | null {
+  if (isPlacing.value) {
+    const to = buildTarget()
+    return to === null ? null : { type: 'placeStudent', studentId: props.student.id, to }
+  }
   const fromCompanyId = props.student.companyId
   if (fromCompanyId === null) return null
   if (mode.value === 'leave') {
@@ -272,4 +372,13 @@ function close(): void {
 label { font-size: 0.875rem; font-weight: 500; }
 .readonly-value { margin: 0; font-size: 0.9375rem; }
 .field-error { color: var(--p-red-500); font-size: 0.75rem; }
+.company-option { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.company-option-name { font-weight: 400; }
+.company-option-secondary {
+  font-size: 0.75rem;
+  color: var(--p-text-muted-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 </style>

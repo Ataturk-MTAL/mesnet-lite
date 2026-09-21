@@ -416,7 +416,10 @@ mod tests {
     use super::*;
     use crate::db::company_hours::HoursInput;
     use crate::db::init_pool;
-    use crate::domain::models::{NewCompany, NewStudent, NewTeacher};
+    use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewStudentInput};
+    use crate::domain::models::{NewCompany, NewTeacher};
+    use crate::services::change_service::{execute_change, ChangeMode, ChangeOutcome};
+    use chrono::NaiveDate;
 
     const TERM: &str = "2026-2027/1";
 
@@ -487,22 +490,41 @@ mod tests {
         .unwrap();
     }
 
+    /// Dönem başlamadan önceki "bugün" (`ChangeRequest::effective_date`
+    /// boş bırakılabilir) — `commission_minutes_test_support::planning_today`
+    /// ile AYNI sabit.
+    fn planning_today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 8, 15).unwrap()
+    }
+
+    /// GERÇEK yazma yolunu (`execute_change`) kullanır: yerleştirmenin tek
+    /// doğruluk kaynağı `student_placements` projeksiyonudur (bkz.
+    /// `domain::models::NewStudent` başındaki yorum) — ham `students::create`
+    /// artık `company_id` YAZMAZ. Bu dosyanın `build_row`u öğrenci adlarını
+    /// `student.company_id` ile gruplar (`students_by_company`); kapıdan
+    /// geçmezse öğrenci "atanmamış" görünür.
     async fn seed_student(pool: &SqlitePool, company_id: i64, first: &str, last: &str) {
-        students::create(
-            pool,
-            &NewStudent {
-                first_name: first.into(),
-                last_name: last.into(),
-                student_no: None,
-                grade: "12/C".into(),
-                branch: "Elektronik Haberleşme".into(),
+        let req = ChangeRequest {
+            term: TERM.into(),
+            effective_date: None,
+            document_date: None,
+            reason: "test".into(),
+            command: ChangeCommand::CreateStudent {
+                student: NewStudentInput {
+                    first_name: first.into(),
+                    last_name: last.into(),
+                    student_no: None,
+                    grade: "12/C".into(),
+                    branch: "Elektronik Haberleşme".into(),
+                    submitted_at: Some("2026-09-11".into()),
+                },
                 company_id: Some(company_id),
-                submitted_at: Some("2026-09-11".into()),
-                term: TERM.into(),
             },
-        )
-        .await
-        .unwrap();
+        };
+        let outcome = execute_change(pool, req, ChangeMode::Commit { expected_high_water: None }, planning_today())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, ChangeOutcome::Committed { .. }), "Committed beklenirdi: {outcome:?}");
     }
 
     /// Boş bir dönem (hiç öğretmen, işletme veya atama yok) bile geçerli bir

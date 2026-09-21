@@ -53,7 +53,8 @@ fn innermost(command: &ChangeCommand) -> &ChangeCommand {
 pub(super) fn validate_command(command: &ChangeCommand, day_end_hour: i64) -> AppResult<()> {
     match command {
         ChangeCommand::CreateStudent { student, .. } => validate_student(student),
-        ChangeCommand::TransferStudent { to: TransferTarget::New { company }, .. } => validate_company(company),
+        ChangeCommand::TransferStudent { to: TransferTarget::New { company }, .. }
+        | ChangeCommand::PlaceStudent { to: TransferTarget::New { company }, .. } => validate_company(company),
         ChangeCommand::CreateTeacher { teacher, load } => {
             validate_teacher_profile(teacher)?;
             validate_load(load)
@@ -158,17 +159,18 @@ fn validate_slot(day: i64, hour: i64, day_end_hour: i64) -> AppResult<()> {
     Ok(())
 }
 
-/// Yerinde oluşturulan satırın kimliklerini toplar. `students.company_id`
-/// bilinçli olarak `None` yazılır: yerleşimin tek doğruluk kaynağı
-/// `student_placements` projeksiyonudur (spec §4.1); eski sütun `0007`'de
-/// düşer ve komutun `companyId`'si günlüğe yerleştirme olayı olarak girer.
+/// Yerinde oluşturulan satırın kimliklerini toplar. `NewStudent`de artık
+/// `company_id` alanı YOK: yerleşimin tek doğruluk kaynağı `student_placements`
+/// projeksiyonudur (spec §4.1); komutun `companyId`si `decide` tarafından
+/// günlüğe AYRI bir yerleştirme olayı (`StudentPlaced`) olarak yazılır.
 pub(super) async fn materialize(conn: &mut SqliteConnection, term: &str, command: &ChangeCommand) -> AppResult<Materialized> {
     match innermost(command) {
         ChangeCommand::CreateStudent { student, .. } => {
             let created = students::create_in(conn, &student_row(term, student)).await?;
             Ok(Materialized { student_id: Some(created.id), ..Materialized::default() })
         }
-        ChangeCommand::TransferStudent { to: TransferTarget::New { company }, .. } => {
+        ChangeCommand::TransferStudent { to: TransferTarget::New { company }, .. }
+        | ChangeCommand::PlaceStudent { to: TransferTarget::New { company }, .. } => {
             let created = companies::create_in(conn, company).await?;
             Ok(Materialized { company_id: Some(created.id), ..Materialized::default() })
         }
@@ -195,7 +197,6 @@ fn student_row(term: &str, student: &NewStudentInput) -> NewStudent {
         student_no: student.student_no.clone(),
         grade: student.grade.clone(),
         branch: student.branch.clone(),
-        company_id: None,
         submitted_at: student.submitted_at.clone(),
         term: term.to_string(),
     }

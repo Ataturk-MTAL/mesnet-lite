@@ -1,0 +1,125 @@
+{
+  "get_settings": {
+    "active_term": "2026-2027/1",
+    "school_name": "Atatürk MTAL"
+  },
+  "get_known_terms": [
+    "2026-2027/1"
+  ],
+  "list_terms_with_dates": [
+    {
+      "term": "2026-2027/1",
+      "startDate": "2026-09-14",
+      "endDate": "2027-06-30",
+      "datesConfirmed": true,
+      "isPlanning": false,
+      "defaultAsOf": "2026-09-19",
+      "earliestAllowedDate": "2026-10-05"
+    }
+  ],
+  "list_companies": [
+    {
+      "id": 1,
+      "name": "Akdeniz Elektronik San. Tic. Ltd. Şti.",
+      "contactFirstName": "Ali",
+      "contactLastName": "Veli",
+      "phone": "0532 000 00 00",
+      "email": "ali@example.com",
+      "addressText": "Karaduvar Mah. Serbest Bölge 14. Cadde No:13 Akdeniz/Mersin",
+      "district": "Akdeniz",
+      "latitude": null,
+      "longitude": null,
+      "geocodeStatus": "pending",
+      "oneWayDistanceKm": 12.4,
+      "notes": "",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01"
+    },
+    {
+      "id": 2,
+      "name": "Örnek Mekatronik Havacılık Sanayi A.Ş.",
+      "contactFirstName": "Zeynep",
+      "contactLastName": "Şahin",
+      "phone": "",
+      "email": "",
+      "addressText": "Adana Sanayi Sitesi",
+      "district": "Yüreğir",
+      "latitude": null,
+      "longitude": null,
+      "geocodeStatus": "pending",
+      "oneWayDistanceKm": 8.2,
+      "notes": "",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01"
+    },
+    {
+      "id": 3,
+      "name": "İlçesiz Uzun Adresli Elektronik Sistemleri Sanayi ve Ticaret Limited Şirketi",
+      "contactFirstName": "Elif",
+      "contactLastName": "Demir",
+      "phone": "",
+      "email": "",
+      "addressText": "Bu işletmenin ilçesi ayrıştırılamadı; yalnızca uzun bir açık adres metni girildi buraya",
+      "district": "",
+      "latitude": null,
+      "longitude": null,
+      "geocodeStatus": "pending",
+      "oneWayDistanceKm": null,
+      "notes": "",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01"
+    },
+    {
+      "id": 4,
+      "name": "Yeni Teknoloji A.Ş.",
+      "contactFirstName": "Can",
+      "contactLastName": "Yıldız",
+      "phone": "",
+      "email": "",
+      "addressText": "",
+      "district": "",
+      "latitude": null,
+      "longitude": null,
+      "geocodeStatus": "pending",
+      "oneWayDistanceKm": null,
+      "notes": "",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01"
+    }
+  ],
+  "list_students": [
+    {
+      "id": 1,
+      "firstName": "Ayşe",
+      "lastName": "Kaya",
+      "studentNo": "101",
+      "grade": "12/A",
+      "branch": "Elektrik-Elektronik Teknolojisi",
+      "companyId": 1,
+      "submittedAt": "2026-09-15",
+      "term": "2026-2027/1"
+    },
+    {
+      "id": 2,
+      "firstName": "Mehmet Emin",
+      "lastName": "Yıldırımoğlu",
+      "studentNo": "102",
+      "grade": "12/C",
+      "branch": "Elektronik Haberleşme",
+      "companyId": null,
+      "submittedAt": null,
+      "term": "2026-2027/1"
+    },
+    {
+      "id": 3,
+      "firstName": "Can",
+      "lastName": "Demir",
+      "studentNo": null,
+      "grade": "11/B",
+      "branch": "Endüstriyel Bakım Onarım",
+      "companyId": null,
+      "submittedAt": null,
+      "term": "2026-2027/1"
+    }
+  ]
+}

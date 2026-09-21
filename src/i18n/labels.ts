@@ -627,12 +627,16 @@ export const labels = {
   },
   studentChange: {
     title: 'Nakil / Ayrılış',
+    placeTitle: 'Yeni Sözleşme',
     transferOption: 'Nakil',
     leaveOption: 'İşletmeden Ayrılış',
     targetCompany: 'Hedef İşletme',
+    targetCompanyExisting: 'Mevcut işletme',
+    targetCompanyPlaceholder: 'İşletme seçin',
     targetCompanyNew: 'Yeni işletme oluştur',
     fromCompany: 'Mevcut İşletme',
     reasonPlaceholder: 'Nakil / ayrılış gerekçesi',
+    placeReasonPlaceholder: 'Yerleştirme gerekçesi',
   },
   teacherLoadChange: {
     title: 'Yük Değişikliği',

@@ -111,6 +111,14 @@ pub struct Student {
     pub term: String,
 }
 
+/// İşletme ataması BİLİNÇLİ OLARAK burada YOK: yerleştirmenin tek doğruluk
+/// kaynağı `student_placements` projeksiyonudur (spec §4.1) ve oraya yazmanın
+/// tek yolu tarihçe kapısıdır (`domain::history::decide`/`services::change_service`).
+/// Bu alan eskiden `students.company_id` sütununu doğrudan yazıyordu; bu,
+/// kapıyı atlayan ikinci bir yerleştirme yoluydu ve nakil/ayrılış gibi
+/// kapıdan geçen değişiklikler bu sütunu asla güncellemediği için sütun
+/// donup kalıyordu (arayüz, PDF raporu ve komisyon tutanağı bu yüzden eski
+/// işletmeyi gösteriyordu).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewStudent {
@@ -119,7 +127,6 @@ pub struct NewStudent {
     pub student_no: Option<String>,
     pub grade: String,
     pub branch: String,
-    pub company_id: Option<i64>,
     pub submitted_at: Option<String>,
     pub term: String,
 }

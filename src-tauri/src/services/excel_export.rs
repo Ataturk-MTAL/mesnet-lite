@@ -361,7 +361,6 @@ mod tests {
                 student_no: Some("1001".into()),
                 grade: "12/C".into(),
                 branch: "Elektronik Haberleşme".into(),
-                company_id: Some(company.id),
                 submitted_at: Some("2026-09-11".into()),
                 term: TERM.into(),
             },

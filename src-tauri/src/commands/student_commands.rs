@@ -69,7 +69,6 @@ mod tests {
             student_no: None,
             grade: "12/C".into(),
             branch: "Elektronik Haberleşme".into(),
-            company_id: None,
             submitted_at: None,
             term: "2026-2027/1".into(),
         }

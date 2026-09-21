@@ -186,6 +186,38 @@ pub async fn update(pool: &SqlitePool, id: i64, input: &NewCompany) -> AppResult
     get(pool, id).await
 }
 
+/// `update`in aynı transaction'daki bağlantı üzerinden çalışan hâli.
+/// `services::import_apply` (CSV içe aktarımı) TÜM okuma ve yazmayı tek
+/// `BEGIN IMMEDIATE` transaction'ında yapar (`create_in` üstündeki yorumla
+/// aynı gerekçe): transaction açıkken havuzdan yazmak "database is locked"
+/// hatası verir.
+pub async fn update_in(conn: &mut SqliteConnection, id: i64, input: &NewCompany) -> AppResult<Company> {
+    let district = resolve_district(&input.district, &input.address_text);
+    let sql = format!(
+        "UPDATE companies SET
+            name = ?1, contact_first_name = ?2, contact_last_name = ?3, phone = ?4,
+            email = ?5, address_text = ?6, one_way_distance_km = ?7, district = ?8,
+            notes = ?9, updated_at = ?10
+         WHERE id = ?11
+         RETURNING {SELECT_COLUMNS}"
+    );
+    sqlx::query_as::<_, Company>(&sql)
+        .bind(&input.name)
+        .bind(&input.contact_first_name)
+        .bind(&input.contact_last_name)
+        .bind(&input.phone)
+        .bind(&input.email)
+        .bind(&input.address_text)
+        .bind(input.one_way_distance_km)
+        .bind(district)
+        .bind(&input.notes)
+        .bind(now_iso())
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await?
+        .ok_or_else(|| not_found(id))
+}
+
 pub async fn remove(pool: &SqlitePool, id: i64) -> AppResult<()> {
     let affected = sqlx::query("DELETE FROM companies WHERE id = ?1")
         .bind(id)
@@ -243,6 +275,16 @@ pub async fn mark_geocode_failed(pool: &SqlitePool, id: i64) -> AppResult<()> {
 pub async fn find_by_normalized_name(pool: &SqlitePool, name: &str) -> AppResult<Option<Company>> {
     let target = normalize_name(name);
     let rows = list(pool).await?;
+    Ok(rows.into_iter().find(|c| normalize_name(&c.name) == target))
+}
+
+/// `find_by_normalized_name`in aynı transaction'daki bağlantı üzerinden
+/// çalışan hâli — `services::import_apply` bunu kullanır (`update_in`
+/// üstündeki yorumla aynı gerekçe).
+pub async fn find_by_normalized_name_in(conn: &mut SqliteConnection, name: &str) -> AppResult<Option<Company>> {
+    let target = normalize_name(name);
+    let sql = format!("SELECT {SELECT_COLUMNS} FROM companies ORDER BY name COLLATE NOCASE");
+    let rows: Vec<Company> = sqlx::query_as(&sql).fetch_all(&mut *conn).await?;
     Ok(rows.into_iter().find(|c| normalize_name(&c.name) == target))
 }
 
@@ -350,6 +392,42 @@ mod tests {
         let created = create_in(&mut conn, &sample_input("Bağlantı Testi A.Ş.")).await.unwrap();
         let fetched = get(&pool, created.id).await.unwrap();
         assert_eq!(fetched.name, "Bağlantı Testi A.Ş.");
+    }
+
+    #[tokio::test]
+    async fn update_in_writes_through_the_given_connection() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Bağlantı Testi A.Ş.")).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let mut input = sample_input("Bağlantı Testi A.Ş. — Güncel");
+        input.one_way_distance_km = Some(9.5);
+        let updated = update_in(&mut conn, created.id, &input).await.unwrap();
+
+        assert_eq!(updated.name, "Bağlantı Testi A.Ş. — Güncel");
+        assert_eq!(updated.one_way_distance_km, Some(9.5));
+        assert_eq!(updated.created_at, created.created_at, "created_at korunmalı");
+    }
+
+    #[tokio::test]
+    async fn update_in_missing_record_returns_not_found() {
+        let (_dir, pool) = test_pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+        let err = update_in(&mut conn, 999, &sample_input("Yok")).await.unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn find_by_normalized_name_in_matches_regardless_of_case_and_spacing() {
+        let (_dir, pool) = test_pool().await;
+        create(&pool, &sample_input("MEKA OTOMASYON")).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let found = find_by_normalized_name_in(&mut conn, "  meka   otomasyon ").await.unwrap();
+        assert!(found.is_some());
+
+        let missing = find_by_normalized_name_in(&mut conn, "baska isletme").await.unwrap();
+        assert!(missing.is_none());
     }
 
     /// `create_in` (transaction içi yerinde oluşturma) de `create` ile AYNI

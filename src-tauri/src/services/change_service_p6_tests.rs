@@ -108,7 +108,7 @@ fn student_command(rng: &mut Lcg, pools: &mut Pools) -> ChangeCommand {
             ChangeCommand::TransferStudent { student_id, from_company_id: from, to: TransferTarget::New { company } }
         }
         3 => ChangeCommand::StudentLeaves { student_id, from_company_id: from },
-        4 => ChangeCommand::PlaceStudent { student_id, company_id: rng.pick(&pools.companies) },
+        4 => ChangeCommand::PlaceStudent { student_id, to: TransferTarget::Existing { company_id: rng.pick(&pools.companies) } },
         _ => {
             let company_id = if rng.percent(50) { Some(rng.pick(&pools.companies)) } else { None };
             ChangeCommand::CreateStudent { student: student_input(&format!("P6-{}", pools.counter)), company_id }

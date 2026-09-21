@@ -106,7 +106,12 @@ pub enum TransferTarget {
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ChangeCommand {
     CreateStudent { student: NewStudentInput, company_id: Option<i64> },
-    PlaceStudent { student_id: i64, company_id: i64 },
+    // `to` `transferStudent`in `TransferTarget`iyle AYNI şekli kullanır:
+    // var olan bir işletme (`Existing`) ya da yerinde oluşturulmuş yeni bir
+    // işletme (`New`) — teşhis: eskiden yalnız var olan işletme kabul
+    // edilirdi, bu da yeni bir işletmeye ilk yerleştirmeyi kapıdan yapmayı
+    // imkansız kılıyordu.
+    PlaceStudent { student_id: i64, to: TransferTarget },
     TransferStudent { student_id: i64, from_company_id: i64, to: TransferTarget },
     StudentLeaves { student_id: i64, from_company_id: i64 },
     DeleteStudent { student_id: i64 },
@@ -275,7 +280,7 @@ pub fn decide(ctx: &DecisionContext, req: &ChangeRequest) -> Result<Decision, Re
 fn dispatch(ctx: &DecisionContext, req: &ChangeRequest) -> Result<Decision, Rejection> {
     match &req.command {
         ChangeCommand::CreateStudent { student, company_id } => student::create_student(ctx, req, student, *company_id),
-        ChangeCommand::PlaceStudent { student_id, company_id } => student::place_student(ctx, req, *student_id, *company_id),
+        ChangeCommand::PlaceStudent { student_id, to } => student::place_student(ctx, req, *student_id, to),
         ChangeCommand::TransferStudent { student_id, from_company_id, to } => {
             student::transfer_student(ctx, req, *student_id, *from_company_id, to)
         }
@@ -535,7 +540,18 @@ mod tests {
                 "student": {"firstName": "Ahmet", "lastName": "Yılmaz", "studentNo": "123", "grade": "12", "branch": "A", "submittedAt": null},
                 "companyId": null,
             }),
-            "placeStudent" => serde_json::json!({"type": "placeStudent", "studentId": 1, "companyId": 2}),
+            "placeStudent" => serde_json::json!({
+                "type": "placeStudent", "studentId": 1,
+                "to": {"type": "existing", "companyId": 2},
+            }),
+            "placeStudentNew" => serde_json::json!({
+                "type": "placeStudent", "studentId": 1,
+                "to": {"type": "new", "company": {
+                    "name": "Yeni İşletme", "contactFirstName": "", "contactLastName": "", "phone": "",
+                    "email": "", "addressText": "", "latitude": null, "longitude": null,
+                    "oneWayDistanceKm": null, "notes": "",
+                }},
+            }),
             "transferStudent" => serde_json::json!({
                 "type": "transferStudent", "studentId": 1, "fromCompanyId": 2,
                 "to": {"type": "existing", "companyId": 3},
@@ -585,7 +601,7 @@ mod tests {
     #[test]
     fn every_change_command_wire_shape_deserializes() {
         let kinds = [
-            "createStudent", "placeStudent", "transferStudent", "transferStudentNew", "studentLeaves",
+            "createStudent", "placeStudent", "placeStudentNew", "transferStudent", "transferStudentNew", "studentLeaves",
             "deleteStudent", "setCompanyHours", "assignCoordinators", "endCoordination", "clearCoordination",
             "createTeacher", "setTeacherLoad", "setTeacherSchedule", "copySchedulesFromTerm", "deleteTeacher",
             "revoke", "correct",

@@ -94,7 +94,6 @@ export interface NewStudent {
   studentNo: string | null
   grade: string
   branch: string
-  companyId: number | null
   submittedAt: string | null
   /** Boş bırakılırsa backend aktif dönemi yazar. */
   term: string
@@ -243,7 +242,7 @@ export type TransferTarget = { type: 'existing'; companyId: number } | { type: '
  */
 export type ChangeCommand =
   | { type: 'createStudent'; student: NewStudentInput; companyId: number | null }
-  | { type: 'placeStudent'; studentId: number; companyId: number }
+  | { type: 'placeStudent'; studentId: number; to: TransferTarget }
   | { type: 'transferStudent'; studentId: number; fromCompanyId: number; to: TransferTarget }
   | { type: 'studentLeaves'; studentId: number; fromCompanyId: number }
   | { type: 'deleteStudent'; studentId: number }

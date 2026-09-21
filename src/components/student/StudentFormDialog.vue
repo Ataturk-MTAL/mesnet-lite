@@ -34,20 +34,6 @@
         <label for="student-branch">{{ labels.student.branch }}</label>
         <InputText id="student-branch" v-model="form.branch" />
       </div>
-
-      <div v-if="!isEdit" class="field">
-        <label for="student-company">{{ labels.student.company }}</label>
-        <Select
-          id="student-company"
-          v-model="form.companyId"
-          :options="companyOptions"
-          optionLabel="label"
-          optionValue="value"
-          :placeholder="labels.student.noCompany"
-          showClear
-          filter
-        />
-      </div>
     </div>
 
     <template #footer>
@@ -60,12 +46,11 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { labels } from '../../i18n/labels'
-import type { Company, NewStudent, Student } from '../../types/models'
+import type { NewStudent, Student } from '../../types/models'
 
 const props = defineProps<{
   visible: boolean
   student: Student | null
-  companies: Company[]
 }>()
 
 const emit = defineEmits<{
@@ -80,7 +65,6 @@ function emptyForm(): NewStudent {
     studentNo: null,
     grade: '',
     branch: '',
-    companyId: null,
     submittedAt: null,
     // Boş bırakılır; backend aktif dönemi yazar.
     term: '',
@@ -102,10 +86,6 @@ const isValid = computed(
     form.branch.trim().length > 0,
 )
 
-const companyOptions = computed(() =>
-  props.companies.map((company) => ({ value: company.id, label: company.name })),
-)
-
 watch(
   () => [props.visible, props.student] as const,
   ([isVisible, student]) => {
@@ -117,7 +97,6 @@ watch(
         studentNo: student.studentNo,
         grade: student.grade,
         branch: student.branch,
-        companyId: student.companyId,
         submittedAt: student.submittedAt,
         term: student.term,
       })

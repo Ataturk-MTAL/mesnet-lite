@@ -5,7 +5,7 @@ import OpenVue from 'openvue/config'
 import Aura from '@openvue/themes/aura'
 import ToastService from 'openvue/toastservice'
 import CompanyFormDialog from '../company/CompanyFormDialog.vue'
-import StudentChangeDialog from './StudentChangeDialog.vue'
+import StudentChangeDialog, { type StudentChangeSubject } from './StudentChangeDialog.vue'
 import { labels } from '../../i18n/labels'
 import type { ChangeOutcome, ChangeRequest, Company, ImpactSummary, NewCompany, TermWithDates } from '../../types/models'
 
@@ -66,7 +66,41 @@ const companiesFixture: Company[] = [
     contactLastName: 'Veli',
     phone: '',
     email: '',
-    addressText: 'Adres',
+    addressText: '',
+    district: '',
+    latitude: null,
+    longitude: null,
+    geocodeStatus: 'pending',
+    oneWayDistanceKm: null,
+    notes: '',
+    createdAt: '2026-01-01',
+    updatedAt: '2026-01-01',
+  },
+  {
+    id: 6,
+    name: 'Örnek Mekatronik Havacılık Sanayi A.Ş.',
+    contactFirstName: 'Zeynep',
+    contactLastName: 'Şahin',
+    phone: '',
+    email: '',
+    addressText: 'Adana Sanayi Sitesi 14. Cadde No:13 Yüreğir/Adana',
+    district: 'Yüreğir',
+    latitude: null,
+    longitude: null,
+    geocodeStatus: 'pending',
+    oneWayDistanceKm: 8.2,
+    notes: '',
+    createdAt: '2026-01-01',
+    updatedAt: '2026-01-01',
+  },
+  {
+    id: 7,
+    name: 'İlçesiz Adresli İşletme',
+    contactFirstName: 'Can',
+    contactLastName: 'Yıldız',
+    phone: '',
+    email: '',
+    addressText: 'Bu işletmenin ilçesi ayrıştırılamadı; yalnızca uzun bir açık adres metni girildi buraya',
     district: '',
     latitude: null,
     longitude: null,
@@ -78,11 +112,14 @@ const companiesFixture: Company[] = [
   },
 ]
 
-function mountDialog(term: TermWithDates) {
+const transferSubject: StudentChangeSubject = { id: 42, fullName: 'Ayşe Kaya', companyId: 2, companyName: 'Eski İşletme' }
+const placingSubject: StudentChangeSubject = { id: 43, fullName: 'Mehmet Can', companyId: null, companyName: null }
+
+function mountDialog(term: TermWithDates, student: StudentChangeSubject = transferSubject) {
   return mount(StudentChangeDialog, {
     props: {
       visible: true,
-      student: { id: 42, fullName: 'Ayşe Kaya', companyId: 2, companyName: 'Eski İşletme' },
+      student,
       term,
     },
     global: {
@@ -100,6 +137,22 @@ async function fillReason(text: string): Promise<void> {
   textarea.value = text
   textarea.dispatchEvent(new Event('input'))
   await nextTick()
+}
+
+// Hedef işletme `Select`'ini açar; seçenek satırları ancak açılınca DOM'a gelir
+// (Portal ile `document.body`'ye teleport edilir).
+async function openCompanySelect(): Promise<void> {
+  const container = document.body.querySelector<HTMLElement>('.p-select')
+  if (!container) throw new Error('işletme select bulunamadı')
+  container.click()
+  await nextTick()
+  await nextTick()
+}
+
+function optionByLabel(companyName: string): HTMLElement {
+  const option = document.body.querySelector<HTMLElement>(`[role="option"][aria-label="${companyName}"]`)
+  if (!option) throw new Error(`"${companyName}" seçeneği bulunamadı`)
+  return option
 }
 
 function getByTestId(testId: string): HTMLButtonElement {
@@ -228,11 +281,22 @@ describe('StudentChangeDialog', () => {
     wrapper.unmount()
   })
 
-  it('requires a reason', async () => {
+  it('boş diyalog açılışta gerekçe hatasını göstermez', async () => {
+    const wrapper = mountDialog(planningTerm)
+    await nextTick()
+
+    expect(document.body.textContent ?? '').not.toContain(labels.history.reasonRequired)
+    expect(submitButton().disabled).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('gerekçe alanına dokunulup boş bırakılınca hatayı gösterir', async () => {
     const wrapper = mountDialog(planningTerm)
     await nextTick()
 
     await wrapper.getComponent({ ref: 'companySelect' }).vm.$emit('update:modelValue', 5)
+    document.body.querySelector('textarea')!.dispatchEvent(new Event('blur'))
     await nextTick()
 
     expect(document.body.textContent ?? '').toContain(labels.history.reasonRequired)
@@ -240,6 +304,147 @@ describe('StudentChangeDialog', () => {
 
     click(submitButton())
     expect(previewChangeMock).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+  })
+})
+
+describe('StudentChangeDialog — ilk yerleştirme kipi', () => {
+  it('işletmesi olmayan öğrenci için kip seçiciyi gizler, başlığı değiştirir', async () => {
+    const wrapper = mountDialog(planningTerm, placingSubject)
+    await nextTick()
+
+    expect(document.body.textContent ?? '').toContain(labels.studentChange.placeTitle)
+    expect(document.body.querySelector(`[aria-label="${labels.studentChange.title}"]`)).toBeNull()
+    expect(document.body.textContent ?? '').not.toContain(labels.studentChange.fromCompany)
+
+    wrapper.unmount()
+  })
+
+  it('mevcut işletme seçilirse placeStudent komutu üretir', async () => {
+    previewChangeMock.mockResolvedValueOnce({ status: 'preview', impact: impactFixture, highWater: 1 })
+
+    const wrapper = mountDialog(planningTerm, placingSubject)
+    await nextTick()
+
+    await fillReason('ilk yerleştirme gerekçesi')
+    await wrapper.getComponent({ ref: 'companySelect' }).vm.$emit('update:modelValue', 5)
+    await nextTick()
+
+    expect(submitButton().disabled).toBe(false)
+    click(submitButton())
+    await vi.waitFor(() => expect(previewChangeMock).toHaveBeenCalledTimes(1))
+
+    expect(previewChangeMock).toHaveBeenCalledWith({
+      term: planningTerm.term,
+      effectiveDate: null,
+      documentDate: null,
+      reason: 'ilk yerleştirme gerekçesi',
+      command: { type: 'placeStudent', studentId: 43, to: { type: 'existing', companyId: 5 } },
+    })
+
+    wrapper.unmount()
+  })
+
+  it('yeni işletme seçilirse placeStudent komutu new hedefiyle üretir', async () => {
+    previewChangeMock.mockResolvedValueOnce({ status: 'preview', impact: impactFixture, highWater: 1 })
+
+    const wrapper = mountDialog(planningTerm, placingSubject)
+    await nextTick()
+
+    const newCompany: NewCompany = {
+      name: 'Yeni Kurulan İşletme',
+      contactFirstName: 'Elif',
+      contactLastName: 'Aydın',
+      phone: '',
+      email: '',
+      addressText: 'Adres',
+      district: '',
+      latitude: null,
+      longitude: null,
+      oneWayDistanceKm: null,
+      notes: '',
+    }
+
+    await wrapper.getComponent({ ref: 'targetModeSelect' }).vm.$emit('update:modelValue', 'new')
+    await nextTick()
+    await wrapper.getComponent(CompanyFormDialog).vm.$emit('save', newCompany)
+    await nextTick()
+
+    await fillReason('ilk yerleştirme gerekçesi')
+    click(submitButton())
+    await vi.waitFor(() => expect(previewChangeMock).toHaveBeenCalledTimes(1))
+
+    expect(previewChangeMock).toHaveBeenCalledWith({
+      term: planningTerm.term,
+      effectiveDate: null,
+      documentDate: null,
+      reason: 'ilk yerleştirme gerekçesi',
+      command: { type: 'placeStudent', studentId: 43, to: { type: 'new', company: newCompany } },
+    })
+
+    wrapper.unmount()
+  })
+
+  it('hedef seçilmeden kaydet düğmesi kapalı kalır', async () => {
+    const wrapper = mountDialog(planningTerm, placingSubject)
+    await nextTick()
+
+    await fillReason('ilk yerleştirme gerekçesi')
+
+    expect(submitButton().disabled).toBe(true)
+    click(submitButton())
+    expect(previewChangeMock).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+  })
+})
+
+describe('StudentChangeDialog — hedef işletme seçeneklerinde konum', () => {
+  it('ilçesi olan işletmenin seçeneğinde ilçe ve tek yön mesafe görünür', async () => {
+    const wrapper = mountDialog(planningTerm)
+    await nextTick()
+    await openCompanySelect()
+
+    const option = optionByLabel('Örnek Mekatronik Havacılık Sanayi A.Ş.')
+    expect(option.querySelector('.company-option-secondary')?.textContent?.trim()).toBe('Yüreğir · 8,2 km')
+
+    wrapper.unmount()
+  })
+
+  it('ilçesi boş, adresi olan işletmenin seçeneğinde kısaltılmış adres görünür', async () => {
+    const wrapper = mountDialog(planningTerm)
+    await nextTick()
+    await openCompanySelect()
+
+    const option = optionByLabel('İlçesiz Adresli İşletme')
+    expect(option.querySelector('.company-option-secondary')?.textContent?.trim()).toBe(
+      'Bu işletmenin ilçesi ayrıştırılamadı; yalnızca uzun bir…',
+    )
+
+    wrapper.unmount()
+  })
+
+  it('ilçesi ve adresi boş işletmenin seçeneğinde ikincil satır render edilmez', async () => {
+    const wrapper = mountDialog(planningTerm)
+    await nextTick()
+    await openCompanySelect()
+
+    const option = optionByLabel('Yeni Teknoloji A.Ş.')
+    expect(option.querySelector('.company-option-secondary')).toBeNull()
+
+    wrapper.unmount()
+  })
+
+  it('kapalı select yalnız işletme adını gösterir', async () => {
+    const wrapper = mountDialog(planningTerm)
+    await nextTick()
+
+    await wrapper.getComponent({ ref: 'companySelect' }).vm.$emit('update:modelValue', 6)
+    await nextTick()
+
+    const closedLabel = document.body.querySelector('.p-select-label')
+    expect(closedLabel?.textContent?.trim()).toBe('Örnek Mekatronik Havacılık Sanayi A.Ş.')
 
     wrapper.unmount()
   })

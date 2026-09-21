@@ -552,7 +552,6 @@ mod tests {
                 student_no: None,
                 grade: grade.into(),
                 branch: branch.into(),
-                company_id: None,
                 submitted_at: None,
                 term: term.into(),
             },

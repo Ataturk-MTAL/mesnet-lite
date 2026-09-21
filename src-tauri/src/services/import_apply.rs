@@ -1,10 +1,18 @@
 use crate::db::{companies, settings, students};
+use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewStudentInput};
 use crate::domain::models::{NewCompany, NewStudent};
-use crate::error::AppResult;
+use crate::domain::terms::today_local;
+use crate::error::{AppError, AppResult};
+use crate::services::change_service::{self, ChangeMode, ChangeOutcome};
 use crate::services::csv_import::{parse_jotform_csv, ImportRow};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::BTreeMap;
+
+/// `change_sets.reason` sütununa yazılan sabit gerekçe metni; kullanıcı bu
+/// içe aktarma için ayrı bir gerekçe girmez (JotForm formu zaten "neden"i
+/// taşır).
+const IMPORT_REASON: &str = "CSV içe aktarımı (JotForm)";
 
 /// Mevcut kayıtla çakışan işletme için ne yapılacağı.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -115,14 +123,41 @@ pub async fn preview(pool: &SqlitePool, content: &str) -> AppResult<ImportPrevie
     Ok(preview)
 }
 
-/// Önizlemede onaylanan içe aktarmayı uygular.
+/// `execute_in`in `Committed` dışındaki sonuçlarını `AppError::Validation`a
+/// çevirir; hata mesajına HANGİ öğrencinin reddedildiği eklenir (brief madde
+/// 3: "hangi öğrencinin neden reddedildiği kullanıcıya Türkçe ulaşsın").
+/// `Err` dönüşü transaction'ı düşürür, sqlx TÜM içe aktarmayı geri alır.
+fn commit_outcome_to_result(student: &NewStudent, outcome: ChangeOutcome) -> AppResult<()> {
+    match outcome {
+        ChangeOutcome::Committed { .. } => Ok(()),
+        ChangeOutcome::Rejected { reason, .. } => Err(AppError::Validation(format!(
+            "{} {}: {reason}",
+            student.first_name, student.last_name
+        ))),
+        ChangeOutcome::Stale { message } => Err(AppError::Validation(message)),
+        ChangeOutcome::Preview { .. } => {
+            unreachable!("ChangeMode::Commit ile çağrıldığında Preview dönmez")
+        }
+    }
+}
+
+/// Önizlemede onaylanan içe aktarmayı TEK bir transaction'da uygular.
 /// `policies` yalnızca mevcut kayıtla çakışan gruplar için anlamlıdır; anahtarı
 /// `PreviewGroup::key` değeridir. Belirtilmeyen çakışmalar `Merge` sayılır.
+///
+/// Öğrenci yerleştirmesi KAPIDAN geçer (teşhis: `students::create` ham
+/// yazımı `student_placements` projeksiyonuna hiç dokunmaz — içe aktarılan
+/// her öğrenci "atanmamış" görünürdü). Bir öğrenci kapıdan reddedilirse
+/// (`Rejected`) TÜM içe aktarma geri alınır: transaction commit edilmeden
+/// düşer, önceki gruplarda zaten oluşturulmuş işletmeler dahil hiçbir şey
+/// yazılmaz (`services::student_list_apply`teki tek-transaction desenin
+/// AYNISI).
 pub async fn apply(
     pool: &SqlitePool,
     content: &str,
     policies: &BTreeMap<String, DuplicatePolicy>,
 ) -> AppResult<ImportSummary> {
+    let today = today_local();
     // İçe aktarılan öğrenciler aktif eğitim-öğretim yılına damgalanır.
     let term = settings::get_active_term(pool).await?;
     let parsed = parse_jotform_csv(content)?;
@@ -133,8 +168,10 @@ pub async fn apply(
         ..Default::default()
     };
 
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
     for (key, (company, group_students)) in grouped {
-        let existing = companies::find_by_normalized_name(pool, &company.name).await?;
+        let existing = companies::find_by_normalized_name_in(&mut tx, &company.name).await?;
         let policy = policies.get(&key).copied().unwrap_or_default();
 
         let company_id = match (&existing, policy) {
@@ -144,7 +181,7 @@ pub async fn apply(
                 continue;
             }
             (Some(found), DuplicatePolicy::Update) => {
-                companies::update(pool, found.id, &company).await?;
+                companies::update_in(&mut tx, found.id, &company).await?;
                 summary.companies_updated += 1;
                 found.id
             }
@@ -153,7 +190,7 @@ pub async fn apply(
                 found.id
             }
             (None, _) => {
-                let created = companies::create(pool, &company).await?;
+                let created = companies::create_in(&mut tx, &company).await?;
                 summary.companies_created += 1;
                 created.id
             }
@@ -165,19 +202,42 @@ pub async fn apply(
             // Arama aktif dönem içinde yapılır.
             let mut candidate = student.clone();
             candidate.term = term.clone();
-            if students::find_duplicate(pool, &candidate).await?.is_some() {
+            if students::find_duplicate_in(&mut tx, &candidate).await?.is_some() {
                 summary.students_skipped += 1;
                 continue;
             }
 
-            let mut to_create = student;
-            to_create.company_id = Some(company_id);
-            to_create.term = term.clone();
-            students::create(pool, &to_create).await?;
+            // Yürürlük tarihi BUGÜNdür: içe aktarma "şimdi" olan bir eylemdir.
+            // `None` bırakılırsa dönem başladıktan sonra (MADDE 5/1-ç) kapı
+            // her öğrenciyi EffectiveDateRequired ile reddeder — CSV içe
+            // aktarımının kendi bir tarih alanı yoktur, o yüzden `today`
+            // burada açıkça verilir (`resolve_effective_date` `today`nin
+            // dönem içinde olduğunu zaten doğrular).
+            let req = ChangeRequest {
+                term: term.clone(),
+                effective_date: Some(today),
+                document_date: None,
+                reason: IMPORT_REASON.to_string(),
+                command: ChangeCommand::CreateStudent {
+                    student: NewStudentInput {
+                        first_name: student.first_name.clone(),
+                        last_name: student.last_name.clone(),
+                        student_no: student.student_no.clone(),
+                        grade: student.grade.clone(),
+                        branch: student.branch.clone(),
+                        submitted_at: student.submitted_at.clone(),
+                    },
+                    company_id: Some(company_id),
+                },
+            };
+            let outcome =
+                change_service::execute_in(&mut tx, req, ChangeMode::Commit { expected_high_water: None }, today).await?;
+            commit_outcome_to_result(&student, outcome)?;
             summary.students_created += 1;
         }
     }
 
+    tx.commit().await?;
     Ok(summary)
 }
 
@@ -285,6 +345,86 @@ mod tests {
         assert_eq!(summary.students_created, 2);
         assert_eq!(companies::list(&pool).await.unwrap().len(), 2);
         assert_eq!(students::list(&pool).await.unwrap().len(), 2);
+    }
+
+    /// Teşhis'in kanıtı: içe aktarılan öğrenci kapıdan (`CreateStudent{ companyId }`)
+    /// geçer, bu yüzden hem `student_placements`te açık bir satırı hem de
+    /// `change_events`te bir `student_placed` olayı vardır — ham `students::create`
+    /// bunların HİÇBİRİNİ üretmezdi.
+    #[tokio::test]
+    async fn apply_places_the_imported_student_through_the_gate() {
+        let (_dir, pool) = test_pool().await;
+        let content = csv(&row("Ahmet", "Yilmaz", "TEST A", "12/C"));
+
+        apply(&pool, &content, &BTreeMap::new()).await.unwrap();
+
+        let term = settings::get_active_term(&pool).await.unwrap();
+        let student = students::list_by_term(&pool, &term).await.unwrap().into_iter().next().unwrap();
+        let company = companies::list(&pool).await.unwrap().into_iter().find(|c| c.name == "TEST A").unwrap();
+
+        assert_eq!(student.company_id, Some(company.id), "öğrenci kapıdan işletmeye yerleştirilmeli");
+
+        let placed_kind_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM change_events WHERE kind = 'student_placed' AND subject_id = ?1",
+        )
+        .bind(student.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(placed_kind_count, 1, "student_placed olayı oluşmalı");
+
+        let open_row: Option<i64> = sqlx::query_scalar(
+            "SELECT company_id FROM student_placements WHERE student_id = ?1 AND term = ?2 AND valid_to IS NULL",
+        )
+        .bind(student.id)
+        .bind(&term)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert_eq!(open_row, Some(company.id), "açık yerleştirme satırı oluşmalı");
+    }
+
+    /// Bir öğrenci kapıdan reddedilirse (`Rejected`) TÜM içe aktarma geri
+    /// alınır: önceki gruplarda zaten oluşturulmuş ya da eşleşmiş kayıtlar
+    /// dahil hiçbir şey kalıcı olmaz (brief madde 3).
+    #[tokio::test]
+    async fn apply_rolls_back_everything_when_the_gate_rejects_a_student() {
+        let (_dir, pool) = test_pool().await;
+        // "TEST A" pasif olarak önceden var: o gruptaki öğrenci reddedilecek
+        // (pasif işletme yeni atama hedefi olamaz).
+        let inactive = companies::create(
+            &pool,
+            &NewCompany {
+                name: "TEST A".into(),
+                contact_first_name: String::new(),
+                contact_last_name: String::new(),
+                phone: String::new(),
+                email: String::new(),
+                address_text: "Eski adres".into(),
+                latitude: None,
+                longitude: None,
+                one_way_distance_km: Some(1.0),
+                district: String::new(),
+                notes: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        companies::set_active_in(&mut conn, inactive.id, false).await.unwrap();
+        drop(conn);
+
+        let content = csv(&format!(
+            "{}{}",
+            row("Ahmet", "Yilmaz", "TEST A", "12/C"),
+            row("Ayse", "Demir", "TEST B", "12/D"),
+        ));
+
+        let result = apply(&pool, &content, &BTreeMap::new()).await;
+
+        assert!(matches!(result, Err(AppError::Validation(_))), "beklenmeyen sonuç: {result:?}");
+        assert_eq!(companies::list(&pool).await.unwrap().len(), 1, "yalnız önceden var olan pasif işletme kalmalı");
+        assert_eq!(students::list(&pool).await.unwrap().len(), 0, "hiçbir öğrenci kalıcı olmamalı");
     }
 
     /// Varsayılan politika Merge: mevcut işletme kullanılır, yenisi açılmaz.

@@ -47,9 +47,11 @@
             <Button icon="pi pi-pencil" severity="secondary" outlined size="small"
                     :aria-label="labels.common.edit" v-tooltip.top="labels.common.edit"
                     @click="openEdit(data)" />
-            <Button icon="pi pi-arrow-right-arrow-left" severity="secondary" outlined size="small"
-                    :disabled="data.companyId === null || currentTerm === null"
-                    :aria-label="labels.studentChange.title" v-tooltip.top="labels.studentChange.title"
+            <Button :icon="data.companyId === null ? 'pi pi-briefcase' : 'pi pi-arrow-right-arrow-left'"
+                    severity="secondary" outlined size="small"
+                    :disabled="currentTerm === null"
+                    :aria-label="data.companyId === null ? labels.studentChange.placeTitle : labels.studentChange.title"
+                    v-tooltip.top="data.companyId === null ? labels.studentChange.placeTitle : labels.studentChange.title"
                     @click="openChangeDialog(data)" />
             <Button icon="pi pi-trash" severity="danger" outlined size="small"
                     :aria-label="labels.common.delete" v-tooltip.top="labels.common.delete"
@@ -62,7 +64,6 @@
     <StudentFormDialog
       v-model:visible="isDialogOpen"
       :student="selected"
-      :companies="companies"
       @save="handleSave"
     />
 

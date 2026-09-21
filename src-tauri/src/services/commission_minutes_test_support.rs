@@ -4,10 +4,10 @@
 
 use crate::db::assignments::{self, NewAssignment};
 use crate::db::company_hours::{self, HoursInput};
-use crate::db::{companies, init_pool, students, teachers};
-use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewTeacherProfile};
+use crate::db::{companies, init_pool, teachers};
+use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewStudentInput, NewTeacherProfile};
 use crate::domain::history::events::TeacherLoad;
-use crate::domain::models::{ChiefType, EmploymentType, NewCompany, NewStudent, NewTeacher};
+use crate::domain::models::{ChiefType, EmploymentType, NewCompany, NewTeacher};
 use crate::services::change_service::{execute_change, ChangeMode, ChangeOutcome};
 use chrono::NaiveDate;
 use sqlx::SqlitePool;
@@ -65,22 +65,45 @@ pub async fn seed_company(pool: &SqlitePool, name: &str, distance_km: Option<f64
     .id
 }
 
+/// GERÇEK yazma yolunu (`execute_change`) kullanır: yerleştirmenin tek
+/// doğruluk kaynağı `student_placements` projeksiyonudur (bkz. `domain::models::
+/// NewStudent` başındaki yorum) — ham `students::create` artık `company_id`
+/// YAZMAZ. `commission_minutes.rs` öğrencileri `student.company_id` ile
+/// gruplar (`ordered_companies`ın `has_students` denetimi dahil); bu kapıdan
+/// geçmezse öğrenci "atanmamış" görünür ve testler sessizce iddiasını
+/// kaybeder.
 pub async fn seed_student(pool: &SqlitePool, company_id: Option<i64>, first: &str, last: &str) {
-    students::create(
-        pool,
-        &NewStudent {
-            first_name: first.into(),
-            last_name: last.into(),
-            student_no: None,
-            grade: "12/C".into(),
-            branch: "Elektronik Haberleşme".into(),
+    let req = ChangeRequest {
+        term: TERM.into(),
+        effective_date: None,
+        document_date: None,
+        reason: "test".into(),
+        command: ChangeCommand::CreateStudent {
+            student: NewStudentInput {
+                first_name: first.into(),
+                last_name: last.into(),
+                student_no: None,
+                grade: "12/C".into(),
+                branch: "Elektronik Haberleşme".into(),
+                submitted_at: Some("2026-09-11".into()),
+            },
             company_id,
-            submitted_at: Some("2026-09-11".into()),
-            term: TERM.into(),
         },
+    };
+    let outcome = execute_change(
+        pool,
+        req,
+        ChangeMode::Commit {
+            expected_high_water: None,
+        },
+        planning_today(),
     )
     .await
     .unwrap();
+    assert!(
+        matches!(outcome, ChangeOutcome::Committed { .. }),
+        "Committed beklenirdi: {outcome:?}"
+    );
 }
 
 pub async fn seed_hours(pool: &SqlitePool, company_id: i64, awarded: i64, is_honorary: bool) {
