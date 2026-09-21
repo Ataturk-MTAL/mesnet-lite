@@ -44,11 +44,47 @@
 #pad(left: 6.57 / 155 * 100% + 0.3em)[#data.closingLine]
 #v(1.1em)
 
-// A15:E17 — imza etiketleri: Alan Şefi (A:B) ve Alan Öğretmenleri (C:E).
+// A15:G17 — imza etiketleri: Alan Şefi (A:B) ve Alan Öğretmenleri (C:G).
+// Öğretmenler ızgarası eskiden yalnız C:E genişliğindeydi; kullanıcının
+// "biraz boşlukla 4 sütunlu bir yapı" isteği için önceden boş duran F:G de
+// bu genişliğe katıldı (bkz. Excel karşılığı: aynı gerekçe).
+#let teachers-grid-width = 82.14fr + 26.99fr
 #grid(
-  columns: (46fr, 82.14fr, 26.99fr),
+  columns: (46fr, teachers-grid-width),
   align: center + horizon,
-  lines(data.chiefLabel), lines(data.teachersLabel), [],
+  lines(data.chiefLabel), lines(data.teachersLabel),
+)
+#v(0.8em)
+
+// Alan şefi ızgaraya karışmaz (kullanıcı isteği: "ayrı kalır"); okulda en
+// fazla bir bölüm şefi olduğundan (bkz. `decide/chief.rs`) tek satır yeterli,
+// kendi dar sütununda (A:B) ortalanır.
+//
+// Alan öğretmenleri kullanıcının tarif ettiği biçimde basılır: "4 sütunlu,
+// soldan sağa, satır satır aşağı akan bir ızgara; ismin altında unvan olsun".
+// `grid` hücreleri zaten sırayla soldan sağa, satır dolunca alta yerleştirir
+// (sütun sütun DEĞİL) — bu yüzden `field-teacher-entries` listesini sırayla
+// vermek yeterli, satır/sütun indeksini elle hesaplamaya gerek yok. Her
+// hücrenin altındaki `#v` boşluğu, kişinin adının altına gerçekten imza
+// atabileceği yeri ayırır (bu bir imza şeridi, yalnız bir isim listesi değil).
+#let field-teacher-cell(t) = align(center + top)[
+  #text(weight: "bold")[#t.name] \
+  #text(size: 6.5pt, fill: gray.darken(20%))[#t.title]
+  #v(1.6em)
+]
+#let field-teacher-entries = data.fieldTeachers.map(field-teacher-cell)
+#let field-teacher-grid = if field-teacher-entries.len() > 0 {
+  grid(
+    columns: (1fr, 1fr, 1fr, 1fr),
+    column-gutter: 1.4em,
+    row-gutter: 0.6em,
+    ..field-teacher-entries,
+  )
+} else { [] }
+#grid(
+  columns: (46fr, teachers-grid-width),
+  align: (center + top, left + top),
+  [#align(center)[#data.chiefName]], field-teacher-grid,
 )
 #v(1.1em)
 

@@ -126,6 +126,37 @@ mod tests {
         assert!(build_minutes_pdf(&pool, "").await.is_err());
     }
 
+    /// Brief'teki gerçek senaryo: 1 alan şefi + 11 alan öğretmeni imza
+    /// şeridine sığmalı. Adlar iki sütuna bölünür (bkz. şablon); şablon hata
+    /// verirse (taşma, bozuk grid) bu test düşer.
+    #[tokio::test]
+    async fn a_full_signature_roster_of_twelve_teachers_compiles() {
+        use crate::domain::models::ChiefType;
+
+        let (_dir, pool) = test_pool().await;
+        seed_teacher_with_chief(&pool, "Ayşe", "Yılmaz", ChiefType::Department).await;
+        for (first, last) in [
+            ("Mehmet", "Öztürk"),
+            ("Zeynep", "Çelik"),
+            ("Ali", "Şahin"),
+            ("Fatma", "Güneş"),
+            ("Kemal", "İyi"),
+            ("Elif", "Ünlü"),
+            ("Burak", "Işık"),
+            ("Ece", "Arı"),
+            ("Deniz", "Doğan"),
+        ] {
+            seed_teacher_with_chief(&pool, first, last, ChiefType::WorkshopLab).await;
+        }
+        for (first, last) in [("Selin", "Ak"), ("Emre", "Bulut")] {
+            seed_teacher_with_chief(&pool, first, last, ChiefType::None).await;
+        }
+
+        let pdf = build_minutes_pdf(&pool, TERM).await.unwrap();
+
+        assert!(pdf.starts_with(b"%PDF"));
+    }
+
     /// Elle inceleme yardımcısı: tohumlu senaryodan iki örnek dosya yazar.
     /// Hedef klasör `COMMISSION_MINUTES_SAMPLE_DIR` ortam değişkeninden gelir;
     /// normal `cargo test` çalışmasında atlanır.
@@ -134,6 +165,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "elle inceleme için örnek dosya yazar"]
     async fn write_sample_files() {
+        use crate::domain::models::ChiefType;
+
         let dir = std::env::var("COMMISSION_MINUTES_SAMPLE_DIR")
             .expect("COMMISSION_MINUTES_SAMPLE_DIR ortam değişkeni ayarlanmalı");
         let (_db_dir, pool) = test_pool().await;
@@ -144,6 +177,28 @@ mod tests {
         settings::set(&pool, "principal_name", "Ömer Yiğit")
             .await
             .unwrap();
+
+        // İmza şeridi örneği: 1 alan şefi + 9 atölye/laboratuvar şefi + 2 sade
+        // öğretmen (brief'teki gerçek senaryo). `seed_full_scenario`'nun
+        // atadığı koordinatörlerden (Ayşe Yılmaz, Mehmet Öztürk) farklı adlar
+        // seçildi ki elle incelemede aynı isim iki farklı rolde görünmesin.
+        seed_teacher_with_chief(&pool, "Nur", "Aydın", ChiefType::Department).await;
+        for (first, last) in [
+            ("Cem", "Bozkurt"),
+            ("Derya", "Çınar"),
+            ("Emre", "Doğan"),
+            ("Gül", "Erdem"),
+            ("Halil", "Fındık"),
+            ("İpek", "Güler"),
+            ("Kaan", "Hoşgör"),
+            ("Leyla", "Işık"),
+            ("Onur", "Şen"),
+        ] {
+            seed_teacher_with_chief(&pool, first, last, ChiefType::WorkshopLab).await;
+        }
+        for (first, last) in [("Pınar", "Ünal"), ("Rıza", "Vural")] {
+            seed_teacher_with_chief(&pool, first, last, ChiefType::None).await;
+        }
 
         let pdf = build_minutes_pdf(&pool, TERM).await.unwrap();
         let xlsx = crate::services::commission_minutes_xlsx::build_minutes_xlsx(&pool, TERM)

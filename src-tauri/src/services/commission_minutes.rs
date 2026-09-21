@@ -12,8 +12,9 @@
 
 use crate::db::assignments::{self, Assignment};
 use crate::db::company_hours::{self, CompanyTermHours};
-use crate::db::{companies, settings, students, teachers};
-use crate::domain::models::{Company, Student, Teacher};
+use crate::db::teachers::TeacherWithLoadAsOf;
+use crate::db::{companies, settings, students, teachers, teaching_load};
+use crate::domain::models::{ChiefType, Company, Student, Teacher};
 use crate::error::{AppError, AppResult};
 use crate::services::pdf_report::day_name;
 use serde::Serialize;
@@ -65,6 +66,12 @@ const CLOSING_LINE: &str = "Olurlarınıza arz ederiz.";
 const CHIEF_SIGNATURE_LABEL: &str = "Alan Şefi\nİmza";
 const TEACHERS_SIGNATURE_LABEL: &str = "Alan Öğretmenleri İmza";
 
+/// Atölye/Laboratuvar şefinin unvanı (MADDE 6/4: haftada 6 saat).
+const WORKSHOP_LAB_TITLE: &str = "Atölye/Laboratuvar Şefi";
+/// Hiçbir şeflik taşımayan öğretmenin unvanı. Kullanıcının açık isteği:
+/// "şef değil" değil, sade "Öğretmen" yazılır.
+const TEACHER_TITLE: &str = "Öğretmen";
+
 /// Tablodaki bir öğrenci satırı. D–G sütunları işletme düzeyindedir; aynı
 /// işletmenin bütün satırlarında tekrarlanır, çıktılar yalnızca grubun ilk
 /// satırındaki değeri birleşik hücreye yazar.
@@ -96,6 +103,14 @@ pub struct MinutesGroup {
     pub len: usize,
 }
 
+/// İmza şeridindeki bir alan öğretmeni: adı ve MADDE 6/4 unvanı.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignatureTeacher {
+    pub name: String,
+    pub title: String,
+}
+
 /// Her iki çıktının da bastığı tüm metin ve tablo.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,6 +123,12 @@ pub struct MinutesData {
     pub closing_line: String,
     pub chief_label: String,
     pub teachers_label: String,
+    /// Alan şefinin ("Ad SOYAD") adı; alan şefi yoksa boş. İmza şeridinde
+    /// `chief_label` başlığının altına basılır.
+    pub chief_name: String,
+    /// Alan şefi DIŞINDAKİ tüm aktif öğretmenler, soyada göre Türkçe sırayla.
+    /// İmza şeridinde `teachers_label` başlığının altına basılır.
+    pub field_teachers: Vec<SignatureTeacher>,
     pub column_headers: Vec<String>,
     pub rows: Vec<MinutesRow>,
     /// İşletme başına satır aralıkları: D, F, G sütunlarındaki birleşik hücreler.
@@ -272,6 +293,13 @@ async fn load_source(pool: &SqlitePool, term: &str) -> AppResult<Source> {
     })
 }
 
+/// "Ad SOYAD" biçiminde basılabilir öğretmen adı; soyad her yerde (tablo
+/// hücresi, imza şeridi) BÜYÜK HARFtir — resmî belge biçimi tekildir, bu
+/// yüzden format tek yerde yazılır.
+fn teacher_display_name(t: &Teacher) -> String {
+    format!("{} {}", t.first_name, turkish_uppercase(&t.last_name))
+}
+
 /// Bir işletmenin D–G sütunlarına giren, grup düzeyindeki hücreler.
 struct GroupCells {
     round_trip_km: Option<f64>,
@@ -295,7 +323,7 @@ fn group_cells(source: &Source, company: &Company) -> GroupCells {
     let assignment = source.assignments.get(&company.id);
 
     let teacher = assigned_teacher(source, company.id)
-        .map(|t| format!("{} {}", t.first_name, turkish_uppercase(&t.last_name)))
+        .map(teacher_display_name)
         .unwrap_or_default();
     let day = assignment
         .map(|a| turkish_uppercase(&day_name(a.visit_day)))
@@ -447,6 +475,50 @@ fn extend_teacher_groups(
     }
 }
 
+/// Şeflik türünün imza şeridinde basılacak unvanı (MADDE 6/4). Bölüm şefliği
+/// burada hiç görünmez; o zaten kendi bloğuna (chief_name) ayrılmıştır.
+fn signature_title(chief_type: ChiefType) -> &'static str {
+    match chief_type {
+        ChiefType::WorkshopLab => WORKSHOP_LAB_TITLE,
+        ChiefType::None | ChiefType::Department => TEACHER_TITLE,
+    }
+}
+
+/// İmza şeridi: alan şefinin adı ve şef DIŞINDAKİ aktif öğretmenlerin ad ve
+/// unvan listesi, soyada göre Türkçe sırayla. Şeflik `teacher_load_periods`
+/// projeksiyonundan (`as_of` günü geçerli aralık) okunur; eski
+/// `teachers.chief_type` sütunu artık kaynak değildir (bkz. dosya başı ve
+/// `db::teachers::list_with_load_as_of`). Okulda en fazla bir bölüm şefi
+/// olabilir (`domain::history::decide::chief`), bu yüzden `chief_name` tek
+/// bir isimdir.
+fn build_signature_block(mut with_load: Vec<TeacherWithLoadAsOf>) -> (String, Vec<SignatureTeacher>) {
+    with_load.retain(|t| t.teacher.is_active != 0);
+    with_load.sort_by_cached_key(|t| {
+        (
+            turkish_sort_key(&t.teacher.last_name),
+            turkish_sort_key(&t.teacher.first_name),
+            t.teacher.id,
+        )
+    });
+
+    let chief_name = with_load
+        .iter()
+        .find(|t| t.load.chief_type == ChiefType::Department)
+        .map(|t| teacher_display_name(&t.teacher))
+        .unwrap_or_default();
+
+    let field_teachers = with_load
+        .into_iter()
+        .filter(|t| t.load.chief_type != ChiefType::Department)
+        .map(|t| SignatureTeacher {
+            name: teacher_display_name(&t.teacher),
+            title: signature_title(t.load.chief_type).to_string(),
+        })
+        .collect();
+
+    (chief_name, field_teachers)
+}
+
 /// Boş değer yerine noktalı yer tutucuyu seçer.
 fn or_placeholder(value: &str, placeholder: &str) -> String {
     if value.is_empty() {
@@ -473,6 +545,14 @@ pub async fn build_minutes_data(pool: &SqlitePool, term: &str) -> AppResult<Minu
     let source = load_source(pool, term).await?;
     let table = build_table(&source);
 
+    // İmza şeridi ayrı bir okuma: kapasite hesaplayan her yerin (`teacher_
+    // commands`, `dashboard_commands`) kullandığı aynı "bugün geçerli"
+    // deseni (`current_as_of` + `list_with_load_as_of`), çünkü şeflik burada
+    // da projeksiyondan gelmeli, eski sütundan değil.
+    let as_of = teaching_load::current_as_of(pool, term).await?;
+    let teachers_with_load = teachers::list_with_load_as_of(pool, term, as_of).await?;
+    let (chief_name, field_teachers) = build_signature_block(teachers_with_load);
+
     let school_upper = turkish_uppercase(&school_name);
     let title_field = or_placeholder(&turkish_uppercase(&field_name), TITLE_FIELD_PLACEHOLDER);
     let intro_field = or_placeholder(&field_name, INTRO_FIELD_PLACEHOLDER);
@@ -489,6 +569,8 @@ pub async fn build_minutes_data(pool: &SqlitePool, term: &str) -> AppResult<Minu
         closing_line: CLOSING_LINE.to_string(),
         chief_label: CHIEF_SIGNATURE_LABEL.to_string(),
         teachers_label: TEACHERS_SIGNATURE_LABEL.to_string(),
+        chief_name,
+        field_teachers,
         column_headers: COLUMN_HEADERS.iter().map(|h| h.to_string()).collect(),
         rows: table.rows,
         groups: table.groups,
@@ -953,5 +1035,163 @@ mod tests {
             let err = validate_minutes_settings(&entries(&[(key, value)])).unwrap_err();
             assert!(matches!(err, AppError::Validation(_)), "{key}");
         }
+    }
+
+    /// Komisyon tutanağı toplantı tutanağının gerçek boyutu: 1 bölüm şefi, 9
+    /// atölye/laboratuvar şefi, 2 sade öğretmen — hepsi aktif. İsimler Türkçe
+    /// sıralamayı da sınıyor (Ç, İ, Ö, Ş, Ü, I/İ ayrımı).
+    async fn seed_signature_scenario(pool: &SqlitePool) -> Vec<i64> {
+        let mut ids = vec![seed_teacher_with_chief(pool, "Ayşe", "Yılmaz", ChiefType::Department).await];
+        for (first, last) in [
+            ("Mehmet", "Öztürk"),
+            ("Zeynep", "Çelik"),
+            ("Ali", "Şahin"),
+            ("Fatma", "Güneş"),
+            ("Kemal", "İyi"),
+            ("Elif", "Ünlü"),
+            ("Burak", "Işık"),
+            ("Ece", "Arı"),
+            ("Deniz", "Doğan"),
+        ] {
+            ids.push(seed_teacher_with_chief(pool, first, last, ChiefType::WorkshopLab).await);
+        }
+        for (first, last) in [("Selin", "Ak"), ("Emre", "Bulut")] {
+            ids.push(seed_teacher_with_chief(pool, first, last, ChiefType::None).await);
+        }
+        ids
+    }
+
+    #[tokio::test]
+    async fn signature_block_lists_the_chief_apart_and_titles_the_rest() {
+        let (_dir, pool) = test_pool().await;
+        seed_signature_scenario(&pool).await;
+
+        let data = build_minutes_data(&pool, TERM).await.unwrap();
+
+        assert_eq!(data.chief_name, "Ayşe YILMAZ");
+        assert_eq!(data.field_teachers.len(), 11, "12 aktif öğretmen - 1 alan şefi");
+        assert!(
+            data.field_teachers.iter().all(|t| t.name != "Ayşe YILMAZ"),
+            "alan şefi kendi bloğunda görünmemeli"
+        );
+
+        let workshop_count = data
+            .field_teachers
+            .iter()
+            .filter(|t| t.title == "Atölye/Laboratuvar Şefi")
+            .count();
+        assert_eq!(workshop_count, 9);
+
+        let none_titles: Vec<&str> = ["Selin AK", "Emre BULUT"]
+            .iter()
+            .map(|name| {
+                data.field_teachers
+                    .iter()
+                    .find(|t| t.name == *name)
+                    .unwrap_or_else(|| panic!("{name} bulunamadı: {:?}", data.field_teachers))
+                    .title
+                    .as_str()
+            })
+            .collect();
+        assert_eq!(none_titles, ["Öğretmen", "Öğretmen"]);
+    }
+
+    #[tokio::test]
+    async fn without_a_department_chief_every_active_teacher_is_a_field_teacher() {
+        let (_dir, pool) = test_pool().await;
+        for (first, last) in [
+            ("Mehmet", "Öztürk"),
+            ("Zeynep", "Çelik"),
+            ("Ali", "Şahin"),
+            ("Fatma", "Güneş"),
+            ("Kemal", "İyi"),
+            ("Elif", "Ünlü"),
+            ("Burak", "Işık"),
+            ("Ece", "Arı"),
+            ("Deniz", "Doğan"),
+        ] {
+            seed_teacher_with_chief(&pool, first, last, ChiefType::WorkshopLab).await;
+        }
+        for (first, last) in [("Selin", "Ak"), ("Emre", "Bulut"), ("Kaan", "Er")] {
+            seed_teacher_with_chief(&pool, first, last, ChiefType::None).await;
+        }
+
+        let data = build_minutes_data(&pool, TERM).await.unwrap();
+
+        assert_eq!(data.chief_name, "", "alan şefi yoksa başlık altı boş kalır");
+        assert_eq!(data.field_teachers.len(), 12);
+    }
+
+    #[tokio::test]
+    async fn inactive_teachers_appear_in_neither_signature_block() {
+        let (_dir, pool) = test_pool().await;
+        seed_teacher_with_chief(&pool, "Ayşe", "Yılmaz", ChiefType::Department).await;
+        let inactive = seed_teacher_with_chief(&pool, "Pasif", "Kişi", ChiefType::WorkshopLab).await;
+        deactivate_teacher(&pool, inactive).await;
+
+        let data = build_minutes_data(&pool, TERM).await.unwrap();
+
+        assert_eq!(data.chief_name, "Ayşe YILMAZ");
+        assert!(
+            data.field_teachers.iter().all(|t| !t.name.contains("Pasif")),
+            "pasif öğretmen listede: {:?}",
+            data.field_teachers
+        );
+        assert!(data.field_teachers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn field_teachers_are_sorted_by_last_name_in_turkish_alphabet() {
+        let (_dir, pool) = test_pool().await;
+        // Aynı sekiz soyadın Türkçe sırası zaten `turkish_sort_key_follows_
+        // the_turkish_alphabet`de kanıtlı; burada imza şeridi bu sırayı
+        // uyguluyor mu diye bakılıyor.
+        for (first, last) in [
+            ("A", "Zeytin"),
+            ("B", "Şirin"),
+            ("C", "İyi"),
+            ("D", "Işık"),
+            ("E", "Iğdır"),
+            ("F", "Çiftçi"),
+            ("G", "Cem"),
+            ("H", "Acar"),
+        ] {
+            seed_teacher_with_chief(&pool, first, last, ChiefType::None).await;
+        }
+
+        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let order: Vec<&str> = data.field_teachers.iter().map(|t| t.name.as_str()).collect();
+
+        assert_eq!(
+            order,
+            [
+                "H ACAR", "G CEM", "F ÇİFTÇİ", "E IĞDIR", "D IŞIK", "C İYİ", "B ŞİRİN", "A ZEYTİN",
+            ]
+        );
+    }
+
+    /// R5c: `teacher_load_periods` projeksiyonunda satırı olmayan öğretmen
+    /// `None` sayılır (bkz. `db::teachers::zero_load`). Eski `teachers.
+    /// chief_type` sütunu burada bilerek yanlış ("department") bırakılır;
+    /// çıktı bunu yok sayıp projeksiyon varsayılanını (None → "Öğretmen")
+    /// vermeli — aksi hâlde bu test, bayat sütun okunduğunda düşerdi.
+    #[tokio::test]
+    async fn signature_titles_follow_the_projection_even_when_the_legacy_column_is_stale() {
+        let (_dir, pool) = test_pool().await;
+        let id = seed_teacher(&pool, "Test", "Öğretmen").await;
+        sqlx::query("UPDATE teachers SET chief_type = 'department' WHERE id = ?1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let data = build_minutes_data(&pool, TERM).await.unwrap();
+
+        assert_eq!(
+            data.chief_name, "",
+            "projeksiyonda satır yok; bayat sütun şef üretmemeli"
+        );
+        assert_eq!(data.field_teachers.len(), 1);
+        assert_eq!(data.field_teachers[0].title, "Öğretmen");
     }
 }

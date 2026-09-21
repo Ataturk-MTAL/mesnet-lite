@@ -105,7 +105,7 @@ export const labels = {
     deleteConfirm: 'Bu öğretmeni silmek istediğinize emin misiniz? Atamaları da silinir.',
   },
   chiefType: {
-    none: 'Şef Değil',
+    none: 'Öğretmen',
     workshop_lab: 'Atölye/Laboratuvar Şefi',
     department: 'Bölüm Şefi',
   },

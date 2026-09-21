@@ -5,7 +5,11 @@
 use crate::db::assignments::{self, NewAssignment};
 use crate::db::company_hours::{self, HoursInput};
 use crate::db::{companies, init_pool, students, teachers};
-use crate::domain::models::{NewCompany, NewStudent, NewTeacher};
+use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewTeacherProfile};
+use crate::domain::history::events::TeacherLoad;
+use crate::domain::models::{ChiefType, EmploymentType, NewCompany, NewStudent, NewTeacher};
+use crate::services::change_service::{execute_change, ChangeMode, ChangeOutcome};
+use chrono::NaiveDate;
 use sqlx::SqlitePool;
 
 pub const TERM: &str = "2026-2027/1";
@@ -52,6 +56,7 @@ pub async fn seed_company(pool: &SqlitePool, name: &str, distance_km: Option<f64
             latitude: None,
             longitude: None,
             one_way_distance_km: distance_km,
+            district: String::new(),
             notes: String::new(),
         },
     )
@@ -155,6 +160,78 @@ pub async fn seed_full_scenario(pool: &SqlitePool) {
     // Öğrencisi var ama hiç atanmamış ve saati de yok.
     let zeytin = seed_company(pool, "Zeytin Bobinaj", Some(6.25)).await;
     seed_student(pool, Some(zeytin), "Selin", "Ak").await;
+}
+
+/// Dönem başlamadan önceki "bugün": tarih verilmeden yapılan açılış dönem
+/// başına (2026-09-01) yürürlüğe girer. Okuma tarafı (`teaching_load::
+/// current_as_of`) GERÇEK bugünü kullanır; o gün dönem aralığında
+/// (2026-09-01 – 2027-01-31) kaldığı sürece bu satır hemen görünür.
+fn planning_today() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 8, 15).unwrap()
+}
+
+/// Şeflik türü artık `teacher_load_periods` projeksiyonundan okunur
+/// (`db::teachers::list_with_load_as_of`); bu yüzden eski `teachers::create`
+/// (yalnız eski `teachers.chief_type` sütununu doldurur) yerine gerçek yazma
+/// yolu (`execute_change`) kullanılır. Böylece imza şeridi testleri, üretimde
+/// şefliğin gerçekten nasıl kaydedildiğini görür.
+pub async fn seed_teacher_with_chief(
+    pool: &SqlitePool,
+    first: &str,
+    last: &str,
+    chief_type: ChiefType,
+) -> i64 {
+    let teacher = NewTeacherProfile {
+        first_name: first.into(),
+        last_name: last.into(),
+        registry_no: String::new(),
+        field: "Elektrik-Elektronik Teknolojisi".into(),
+        branches: vec![],
+        is_active: true,
+    };
+    let load = TeacherLoad {
+        base_hours: 15,
+        max_extra_hours: 24,
+        other_extra_hours: 0,
+        chief_type,
+        employment_type: EmploymentType::Tenured,
+    };
+    let req = ChangeRequest {
+        term: TERM.into(),
+        effective_date: None,
+        document_date: None,
+        reason: "test".into(),
+        command: ChangeCommand::CreateTeacher { teacher, load },
+    };
+    let outcome = execute_change(
+        pool,
+        req,
+        ChangeMode::Commit {
+            expected_high_water: None,
+        },
+        planning_today(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, ChangeOutcome::Committed { .. }),
+        "Committed beklenirdi: {outcome:?}"
+    );
+    sqlx::query_scalar("SELECT id FROM teachers WHERE first_name = ?1 AND last_name = ?2")
+        .bind(first)
+        .bind(last)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Öğretmeni pasif işaretler; imza şeridi yalnız aktif öğretmenleri listeler.
+pub async fn deactivate_teacher(pool: &SqlitePool, teacher_id: i64) {
+    sqlx::query("UPDATE teachers SET is_active = 0 WHERE id = ?1")
+        .bind(teacher_id)
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 /// Çok sayfalık uzun tablo: 3 öğretmen, 40 işletme (her biri 3 öğrenci), her
