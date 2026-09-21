@@ -136,6 +136,7 @@ function studentListPreviewFixture(): StudentListPreview {
         newCount: 1,
         changedCount: 1,
         unchangedCount: 1,
+        removedCount: 0,
         rows: [
           {
             studentNo: '101',
@@ -169,7 +170,7 @@ function studentListPreviewFixture(): StudentListPreview {
 }
 
 function studentListSummaryFixture(): StudentListSummary {
-  return { created: 1, updated: 1, skipped: 0, warnings: [] }
+  return { created: 1, updated: 1, skipped: 0, removed: 0, warnings: [] }
 }
 
 /** Gerçek `FileList`i taklit eden dizi benzeri nesne; `Array.from` bunu düz bir diziye çevirebilir. */
@@ -361,6 +362,123 @@ describe('ImportExportView e-Okul sınıf listesi içe aktarma', () => {
         }),
       ),
     )
+
+    wrapper.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// e-Okul sınıf listesi — içe aktarmada listede olmayan öğrencinin silinmesi.
+// ---------------------------------------------------------------------------
+
+function studentListPreviewWithRemovedFixture(): StudentListPreview {
+  return {
+    classes: [
+      {
+        fileName: '12-C.xls',
+        grade: '12',
+        fieldName: 'Elektrik-Elektronik Teknolojisi',
+        newCount: 0,
+        changedCount: 0,
+        unchangedCount: 0,
+        removedCount: 1,
+        rows: [
+          {
+            // `removed` satırda dosyadan gelen üst alanlar boştur; kimlik
+            // yalnız `previous` içindedir.
+            studentNo: null,
+            firstName: '',
+            lastName: '',
+            branch: '',
+            status: 'removed',
+            previous: { firstName: 'Zeynep', lastName: 'Yıldız', grade: '12', branch: 'Elektrik Tesisatları' },
+          },
+        ],
+      },
+    ],
+    warnings: [],
+  }
+}
+
+describe('ImportExportView e-Okul sınıf listesi — silinecek öğrenciler', () => {
+  it('reads the removed row identity from previous, not from the empty top-level fields', async () => {
+    callMock.mockImplementation(async (command) =>
+      command === 'preview_student_list_import' ? studentListPreviewWithRemovedFixture() : undefined,
+    )
+    const wrapper = mountView()
+
+    await selectStudentListFile(wrapper)
+    clickButton(wrapper, 'student-list-preview-button')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Zeynep'))
+
+    expect(wrapper.text()).toContain('Zeynep Yıldız')
+    expect(wrapper.text()).toContain(labels.studentListImport.statusRemoved)
+
+    wrapper.unmount()
+  })
+
+  it('shows a visible destructive warning with the removed count before the user can confirm', async () => {
+    callMock.mockImplementation(async (command) =>
+      command === 'preview_student_list_import' ? studentListPreviewWithRemovedFixture() : undefined,
+    )
+    const wrapper = mountView()
+
+    await selectStudentListFile(wrapper)
+    clickButton(wrapper, 'student-list-preview-button')
+    await vi.waitFor(() =>
+      expect(wrapper.find('[data-testid="student-list-removal-warning"]').exists()).toBe(true),
+    )
+
+    expect(wrapper.text()).toContain(labels.studentListImport.removalWarning(1))
+    // Sınıf başlığında da sayaç görünmeli.
+    expect(wrapper.text()).toContain(`1 ${labels.studentListImport.statusRemoved}`)
+
+    wrapper.unmount()
+  })
+
+  it('does not show the destructive warning when nothing will be removed', async () => {
+    callMock.mockImplementation(async (command) =>
+      command === 'preview_student_list_import' ? studentListPreviewFixture() : undefined,
+    )
+    const wrapper = mountView()
+
+    await selectStudentListFile(wrapper)
+    clickButton(wrapper, 'student-list-preview-button')
+    await vi.waitFor(() => expect(wrapper.text()).toContain(labels.studentListImport.previewTitle))
+
+    expect(wrapper.find('[data-testid="student-list-removal-warning"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('includes the removed count in the result summary after applying', async () => {
+    callMock.mockImplementation(async (command) => {
+      if (command === 'preview_student_list_import') return studentListPreviewWithRemovedFixture()
+      if (command === 'list_terms_with_dates') return [planningTerm]
+      if (command === 'apply_student_list_import') return { created: 0, updated: 0, skipped: 0, removed: 1, warnings: [] }
+      return undefined
+    })
+    const wrapper = mountView()
+
+    await selectStudentListFile(wrapper)
+    clickButton(wrapper, 'student-list-preview-button')
+    await vi.waitFor(() => expect(wrapper.text()).toContain(labels.studentListImport.previewTitle))
+
+    clickButton(wrapper, 'student-list-apply-button')
+    await vi.waitFor(() =>
+      expect(document.body.querySelector('[data-testid="change-details-dialog"]')).not.toBeNull(),
+    )
+
+    const reasonField = document.body.querySelector<HTMLTextAreaElement>('[data-testid="change-details-reason"]')!
+    reasonField.value = 'e-Okul listesi güncellemesi'
+    reasonField.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+
+    document.body
+      .querySelector<HTMLButtonElement>('[data-testid="change-details-confirm-button"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain(`1 ${labels.studentListImport.resultRemoved}`))
 
     wrapper.unmount()
   })

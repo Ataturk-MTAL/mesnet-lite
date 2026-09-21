@@ -103,29 +103,65 @@
     </div>
 
     <template #footer>
-      <Button :label="labels.common.cancel" severity="secondary" outlined @click="close" />
-      <Button :label="labels.common.save" :disabled="!isValid" @click="save" />
+      <Button
+        :label="labels.common.cancel"
+        severity="secondary"
+        outlined
+        data-testid="teacher-form-cancel-button"
+        @click="close"
+      />
+      <Button
+        :label="labels.common.save"
+        :disabled="!isValid"
+        data-testid="teacher-form-save-button"
+        @click="save"
+      />
     </template>
   </Dialog>
+
+  <!-- Dönem başladıktan sonra yük/şeflik değişen bir kayıt, yürürlük tarihi
+       ve gerekçe girilmeden Rust tarafından reddedilir; bu pencere onları
+       burada sorar. Yalnız kimlik alanları değiştiyse hiç açılmaz. -->
+  <ChangeDetailsDialog
+    :visible="isChangeDetailsOpen"
+    :term="changeDetailsTerm"
+    :title="labels.history.changeDetailsTitle"
+    :effective-date="null"
+    reason=""
+    @confirm="onChangeDetailsConfirm"
+    @cancel="isChangeDetailsOpen = false"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { labels } from '../../i18n/labels'
 import { parseBranches } from '../../types/models'
-import type { ChiefType, NewTeacher, TeacherWithCapacity } from '../../types/models'
+import type { ChiefType, EmploymentType, NewTeacher, TeacherWithCapacity, TermWithDates } from '../../types/models'
+import ChangeDetailsDialog from '../history/ChangeDetailsDialog.vue'
 
 const props = defineProps<{
   visible: boolean
   teacher: TeacherWithCapacity | null
   /** Mevcut kayıtlardan toplanan dal adları; öneri olarak sunulur. */
   knownBranches: string[]
+  /** Aktif dönemin tarihleri; `null` iken henüz yüklenmemiştir, tarih/gerekçe sorulmaz. */
+  term: TermWithDates | null
 }>()
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
-  save: [input: NewTeacher]
+  save: [input: NewTeacher, details: { effectiveDate: string | null; reason: string | null }]
 }>()
+
+/** `update_teacher`'ın `load_changed` kontrolüyle birebir aynı alan kümesi. */
+interface LoadSnapshot {
+  employmentType: EmploymentType
+  baseHours: number
+  maxExtraHours: number
+  otherExtraHours: number
+  chiefType: ChiefType
+}
 
 function emptyForm(): NewTeacher {
   return {
@@ -145,6 +181,9 @@ function emptyForm(): NewTeacher {
 
 const form = reactive<NewTeacher>(emptyForm())
 const branchSuggestions = ref<string[]>([])
+/** Düzenlemede pencere açılırken alınan yük anlık görüntüsü; yeni kayıtta `null`. */
+const originalLoad = ref<LoadSnapshot | null>(null)
+const isChangeDetailsOpen = ref(false)
 
 const isEdit = computed(() => props.teacher !== null)
 
@@ -182,6 +221,45 @@ const isValid = computed(
     capacityWarning.value === null,
 )
 
+/**
+ * `update_teacher` içindeki `load_changed` denetimiyle birebir aynı beş
+ * alanı karşılaştırır. Yeni kayıtta karşılaştıracak bir öncekisi yoktur;
+ * Rust tarafı `create_teacher`'da yükü KOŞULSUZ tarihçeye yazdığından
+ * (bkz. `decide/teacher.rs::create_teacher`), burada da koşulsuz `true`.
+ */
+const loadChanged = computed<boolean>(() => {
+  if (!isEdit.value) return true
+  if (!originalLoad.value) return false
+  const original = originalLoad.value
+  return (
+    form.employmentType !== original.employmentType ||
+    form.baseHours !== original.baseHours ||
+    form.maxExtraHours !== original.maxExtraHours ||
+    form.otherExtraHours !== original.otherExtraHours ||
+    form.chiefType !== original.chiefType
+  )
+})
+
+/** Dönem başlamışsa VE yük/şeflik değişiyorsa yürürlük tarihi/gerekçe sorulur. */
+const needsChangeDetails = computed(
+  () => props.term !== null && !props.term.isPlanning && loadChanged.value,
+)
+
+// `ChangeDetailsDialog` `TermWithDates` zorunlu kılar; dönem henüz
+// yüklenmediyse (`needsChangeDetails` zaten false olur) zararsız bir yer tutucu döner.
+const changeDetailsTerm = computed<TermWithDates>(
+  () =>
+    props.term ?? {
+      term: '',
+      startDate: '',
+      endDate: '',
+      datesConfirmed: false,
+      isPlanning: true,
+      defaultAsOf: '',
+      earliestAllowedDate: '',
+    },
+)
+
 function onBranchComplete(event: { query: string }): void {
   const query = event.query.trim().toLowerCase()
   branchSuggestions.value = props.knownBranches.filter((branch) =>
@@ -207,20 +285,44 @@ watch(
         chiefType: teacher.chiefType,
         isActive: teacher.isActive === 1,
       })
+      originalLoad.value = {
+        employmentType: teacher.employmentType,
+        baseHours: teacher.baseHours,
+        maxExtraHours: teacher.maxExtraHours,
+        otherExtraHours: teacher.otherExtraHours,
+        chiefType: teacher.chiefType,
+      }
     } else {
       Object.assign(form, emptyForm())
+      originalLoad.value = null
     }
+    isChangeDetailsOpen.value = false
   },
   { immediate: true },
 )
 
 function close(): void {
+  isChangeDetailsOpen.value = false
   emit('update:visible', false)
 }
 
-function save(): void {
-  emit('save', { ...form, branches: [...form.branches] })
+function emitSave(effectiveDate: string | null, reason: string | null): void {
+  emit('save', { ...form, branches: [...form.branches] }, { effectiveDate, reason })
   close()
+}
+
+/** Yalnız kimlik alanları değiştiyse doğrudan kaydeder; yük/şeflik değiştiyse
+ * önce yürürlük tarihi ve gerekçeyi soran pencereyi açar. */
+function save(): void {
+  if (needsChangeDetails.value) {
+    isChangeDetailsOpen.value = true
+    return
+  }
+  emitSave(null, null)
+}
+
+function onChangeDetailsConfirm(details: { effectiveDate: string | null; reason: string }): void {
+  emitSave(details.effectiveDate, details.reason)
 }
 </script>
 

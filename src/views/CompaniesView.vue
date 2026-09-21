@@ -25,7 +25,7 @@
       :rows="15"
       dataKey="id"
       v-model:filters="filters"
-      :globalFilterFields="['name', 'addressText']"
+      :globalFilterFields="['name', 'addressText', 'contactFirstName', 'contactLastName']"
       sortMode="single"
       stripedRows
     >
@@ -33,13 +33,18 @@
         <InputText
           v-model="filters.global.value"
           :placeholder="labels.company.searchPlaceholder"
+          class="search-input"
         />
       </template>
 
       <template #empty>{{ labels.company.empty }}</template>
 
       <Column field="name" :header="labels.company.name" sortable />
-      <Column field="addressText" :header="labels.company.address" />
+      <Column :header="labels.company.contact">
+        <template #body="{ data }">
+          {{ contactName(data) }}
+        </template>
+      </Column>
       <Column field="phone" :header="labels.company.phone" />
 
       <Column field="oneWayDistanceKm" :header="labels.company.oneWayDistance" sortable>
@@ -180,6 +185,13 @@ function formatKm(value: number | null): string {
   return value === null ? '—' : value.toFixed(1)
 }
 
+// Yetkili adı boşsa tabloda diğer boş alanlarla (mesafe vb.) tutarlı olacak
+// şekilde tire gösterilir.
+function contactName(company: Company): string {
+  const fullName = `${company.contactFirstName} ${company.contactLastName}`.trim()
+  return fullName === '' ? '—' : fullName
+}
+
 function statusSeverity(status: GeocodeStatus): string {
   const map: Record<GeocodeStatus, string> = {
     pending: 'secondary',
@@ -299,4 +311,7 @@ onMounted(() => {
 .header-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .page-title { font-size: 1.5rem; font-weight: 600; margin: 0; }
 .row-actions { display: flex; gap: 0.25rem; }
+/* Yer tutucu (İşletme adı, adres veya yetkili ara) kırpılmadan sığsın diye
+   tarayıcının varsayılan girdi genişliği yerine sabit bir genişlik verilir. */
+.search-input { width: 22rem; }
 </style>

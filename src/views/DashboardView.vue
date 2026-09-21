@@ -60,6 +60,50 @@
       </template>
     </Card>
 
+    <!-- Alan koordinatörlük ders yükü havuzu: öğretmen kapasitesinden farklı, mevzuata dayalı ayrı bir sınır. -->
+    <Card>
+      <template #title>{{ labels.dashboard.poolCardTitle }}</template>
+      <template #subtitle>{{ labels.dashboard.poolCardSubtitle }}</template>
+      <template #content>
+        <div class="balance-grid">
+          <div class="balance-item">
+            <div class="balance-value" data-test="pool-hours">{{ stats?.poolHours ?? 0 }}</div>
+            <div class="balance-label">{{ labels.dashboard.poolHours }}</div>
+            <small class="balance-note">{{ labels.dashboard.poolHoursNote }}</small>
+          </div>
+
+          <div class="balance-item">
+            <div class="balance-value" data-test="awarded-hours">{{ stats?.awardedHours ?? 0 }}</div>
+            <div class="balance-label">{{ labels.dashboard.awardedHours }}</div>
+            <small class="balance-note">{{ labels.dashboard.awardedHoursNote }}</small>
+          </div>
+
+          <div class="balance-item">
+            <div
+              class="balance-value"
+              data-test="remaining-pool-hours"
+              :class="{ 'balance-value--over': isPoolExceeded }"
+            >
+              {{ stats?.remainingPoolHours ?? 0 }}
+            </div>
+            <div class="balance-label">{{ labels.dashboard.remainingPoolHours }}</div>
+            <small class="balance-note">{{ labels.dashboard.remainingPoolHoursNote }}</small>
+          </div>
+        </div>
+
+        <ProgressBar
+          :value="poolUsagePercent"
+          :class="{ 'usage-over': isPoolExceeded }"
+          class="usage-bar"
+        />
+        <small class="usage-caption">{{ labels.dashboard.usage }}: %{{ poolUsagePercent }}</small>
+
+        <Message v-if="isPoolExceeded" severity="error" :closable="false" class="balance-note-box">
+          {{ labels.dashboard.poolExceededWarning }}
+        </Message>
+      </template>
+    </Card>
+
     <div class="stat-grid">
       <RouterLink v-for="card in statCards" :key="card.to" :to="card.to" class="stat-link">
         <Card class="stat-card">
@@ -126,6 +170,15 @@ const usagePercent = computed(() => {
   const current = stats.value
   if (!current || current.totalCapacityHours <= 0) return 0
   return Math.round((current.assignedHours / current.totalCapacityHours) * 100)
+})
+
+const isPoolExceeded = computed(() => (stats.value?.remainingPoolHours ?? 0) < 0)
+
+/** Takdir edilenin havuza oranı. Havuz sıfırken oran tanımsızdır, 0 gösterilir. */
+const poolUsagePercent = computed(() => {
+  const current = stats.value
+  if (!current || current.poolHours <= 0) return 0
+  return Math.round((current.awardedHours / current.poolHours) * 100)
 })
 
 interface StatCard {

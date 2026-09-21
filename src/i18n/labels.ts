@@ -13,7 +13,7 @@ export const labels = {
     allocation: 'İşletme Dağıtımı',
     teachingLoad: 'Ders Yükü',
     companyHours: 'İşletme Saat Ayarları',
-    availability: 'Müsaitlik Takvimi',
+    availability: 'Öğretmen/Sınıf Programı',
     assignmentSheet: 'Görevlendirme Çizelgesi',
     visitLists: 'Ziyaret Listeleri',
     settings: 'Ayarlar',
@@ -43,6 +43,7 @@ export const labels = {
     name: 'İşletme Adı',
     contactFirstName: 'Yetkili Adı',
     contactLastName: 'Yetkili Soyadı',
+    contact: 'Yetkili',
     phone: 'Telefon',
     email: 'E-posta',
     address: 'Adres',
@@ -53,7 +54,7 @@ export const labels = {
     studentCount: 'Öğrenci Sayısı',
     distanceHint: 'Okuldan işletmeye TEK YÖN yol mesafesi. Saat tavanı bunun iki katına göre hesaplanır.',
     empty: 'Kayıtlı işletme yok.',
-    searchPlaceholder: 'İşletme adı veya adres ara',
+    searchPlaceholder: 'İşletme adı, adres veya yetkili ara',
     setLocation: 'Konum',
     locationDialogTitle: 'İşletme Konumu',
     locationSaved: 'Konum kaydedildi',
@@ -230,7 +231,7 @@ export const labels = {
     assignedSection: 'Atanmış İşletmeler',
   },
   availability: {
-    title: 'Müsaitlik Takvimi',
+    title: 'Öğretmen/Sınıf Programı',
     subtitle:
       'Öğretmenlerin boş saatleri ve sınıfların işletme günleri burada girilir. İşletme dağıtımı bu iki bilginin kesişimine göre çalışır.',
     teacherSection: 'Öğretmen Boş Saatleri',
@@ -343,7 +344,7 @@ export const labels = {
     studentsThisTerm: 'Bu Yılın Öğrencileri',
 
     hourBalance: 'Koordinatörlük Saat Dengesi',
-    totalCapacity: 'Dağıtılabilir Azami Saat',
+    totalCapacity: 'Takdir Edilebilecek Koordinatörlük Saati',
     totalCapacityNote: 'Aktif öğretmenlerin kapasiteleri toplamı (MADDE 15/2 tavanı eksi şeflik saati).',
     assignedHours: 'Dağıtılmış Saat',
     assignedHoursNote: 'Atamalarda takdir edilmiş toplam haftalık saat.',
@@ -355,6 +356,18 @@ export const labels = {
     teachersOverCapacity: 'öğretmen kapasitesini aşmış',
     noActiveTeachers: 'Aktif öğretmen yok. Dağıtım yapılabilmesi için Öğretmenler ekranından öğretmen ekleyin.',
     companiesWithoutAssignment: 'işletmede öğrenci var ama koordinatör atanmamış',
+
+    poolCardTitle: 'Alan Koordinatörlük Ders Yükü',
+    poolCardSubtitle:
+      'Öğretmen kapasitesinden farklı bir sınır: alanın mevzuata göre işletmelere dağıtabileceği toplam ders yükü. Gerçek sınır, bu iki karttan küçük olanıdır.',
+    poolHours: 'Ders Yükü Havuzu',
+    poolHoursNote: 'Haftalık ders saati × grup sayısı toplamı, artı şeflerin planlama/bakım-onarım saatleri.',
+    awardedHours: 'Takdir Edilen Saat',
+    awardedHoursNote: 'İşletmelere takdir edilen toplam haftalık saat.',
+    remainingPoolHours: 'Kalan Havuz Saati',
+    remainingPoolHoursNote: 'Ders yükü havuzundan kalan. Negatifse havuz aşılmıştır.',
+    poolExceededWarning:
+      'Takdir edilen saat, ders yükü havuzunu aşıyor. Bu mevzuata aykırıdır; işletmelere takdir edilen saatleri düşürün.',
 
     attentionTitle: 'Dikkat Gerektirenler',
     allClear: 'Eksik kayıt yok.',
@@ -473,12 +486,16 @@ export const labels = {
     statusNew: 'Yeni',
     statusChanged: 'Değişecek',
     statusUnchanged: 'Aynı',
+    statusRemoved: 'Silinecek',
     previousValue: (firstName: string, lastName: string, grade: string, branch: string) =>
       `Önceki: ${firstName} ${lastName} — ${grade}/${branch}`,
     warningsTitle: 'Uyarılar',
     apply: 'İçe Aktar',
     applied: 'İçe aktarma tamamlandı',
     fileReadError: (fileNames: string) => `Şu dosyalar okunamadı: ${fileNames}`,
+    resultRemoved: 'silindi',
+    removalWarning: (count: number) =>
+      `${count} öğrenci silinecek; bu işlem geçmişe kaydedilir.`,
   },
   map: {
     latitude: 'Enlem',
@@ -551,6 +568,7 @@ export const labels = {
       planningOnly: 'Yalnız planlamada yapılabilir',
       invalidRequest: 'Geçersiz istek',
       chiefAlreadyAssigned: 'Alan şefi zaten var',
+      poolExceeded: 'Ders yükü havuzu aşılıyor',
     },
     warningCode: {
       lockedAboveCap: 'Kilitli satır tavanın üstünde',

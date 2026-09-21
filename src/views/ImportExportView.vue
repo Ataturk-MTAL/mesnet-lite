@@ -166,18 +166,23 @@
             <Tag :value="`${classPreview.newCount} ${labels.studentListImport.statusNew}`" severity="success" />
             <Tag :value="`${classPreview.changedCount} ${labels.studentListImport.statusChanged}`" severity="warn" />
             <Tag :value="`${classPreview.unchangedCount} ${labels.studentListImport.statusUnchanged}`" severity="secondary" />
+            <Tag
+              v-if="classPreview.removedCount > 0"
+              :value="`${classPreview.removedCount} ${labels.studentListImport.statusRemoved}`"
+              severity="danger"
+            />
           </div>
 
           <!-- `dataKey` verilmez: öğrenci no e-Okul dosyasında boş olabilir (Option<String>),
                bu yüzden benzersizliği garanti etmez; salt okunur bir tabloda gerekli de değildir. -->
           <DataTable :value="classPreview.rows" paginator :rows="15" stripedRows>
             <Column :header="labels.studentListImport.studentNo">
-              <template #body="{ data }">{{ data.studentNo ?? '—' }}</template>
+              <template #body="{ data }">{{ displayRow(data).studentNo }}</template>
             </Column>
             <Column :header="labels.studentListImport.studentName">
               <template #body="{ data }">
                 <div class="student-name-cell">
-                  <span>{{ data.firstName }} {{ data.lastName }}</span>
+                  <span>{{ displayRow(data).firstName }} {{ displayRow(data).lastName }}</span>
                   <small v-if="data.status === 'changed' && data.previous" class="previous-hint">
                     {{
                       labels.studentListImport.previousValue(
@@ -191,7 +196,9 @@
                 </div>
               </template>
             </Column>
-            <Column field="branch" :header="labels.studentListImport.branch" />
+            <Column :header="labels.studentListImport.branch">
+              <template #body="{ data }">{{ displayRow(data).branch }}</template>
+            </Column>
             <Column :header="labels.studentListImport.status">
               <template #body="{ data }">
                 <Tag :value="studentRowStatusLabel(data.status)" :severity="studentRowStatusSeverity(data.status)" />
@@ -199,6 +206,17 @@
             </Column>
           </DataTable>
         </div>
+
+        <!-- Silme yıkıcı bir işlemdir: onaylamadan önce kaç öğrencinin
+             etkileneceği açıkça görünür. -->
+        <Message
+          v-if="totalRemovedCount > 0"
+          severity="warn"
+          :closable="false"
+          data-testid="student-list-removal-warning"
+        >
+          {{ labels.studentListImport.removalWarning(totalRemovedCount) }}
+        </Message>
 
         <Message
           v-if="studentListPreview.warnings.length > 0"
@@ -215,7 +233,8 @@
         <Message v-if="studentListSummary" severity="success" :closable="false">
           {{ studentListSummary.created }} {{ labels.importCsv.resultCreated }},
           {{ studentListSummary.updated }} {{ labels.importCsv.resultUpdated }},
-          {{ studentListSummary.skipped }} {{ labels.importCsv.resultSkipped }}
+          {{ studentListSummary.skipped }} {{ labels.importCsv.resultSkipped }},
+          {{ studentListSummary.removed }} {{ labels.studentListImport.resultRemoved }}
         </Message>
         <Message
           v-if="studentListSummary && studentListSummary.warnings.length > 0"
@@ -345,6 +364,7 @@ import {
   studentListImportApi,
   type StudentListFile,
   type StudentListPreview,
+  type StudentListRowPreview,
   type StudentListRowStatus,
   type StudentListSummary,
 } from '../api/studentListImport'
@@ -517,14 +537,46 @@ const studentListChangeTerm = computed<TermWithDates>(
 function studentRowStatusLabel(status: StudentListRowStatus): string {
   if (status === 'new') return labels.studentListImport.statusNew
   if (status === 'changed') return labels.studentListImport.statusChanged
+  if (status === 'removed') return labels.studentListImport.statusRemoved
   return labels.studentListImport.statusUnchanged
 }
 
-function studentRowStatusSeverity(status: StudentListRowStatus): 'success' | 'warn' | 'secondary' {
+function studentRowStatusSeverity(status: StudentListRowStatus): 'success' | 'warn' | 'secondary' | 'danger' {
   if (status === 'new') return 'success'
   if (status === 'changed') return 'warn'
+  if (status === 'removed') return 'danger'
   return 'secondary'
 }
+
+/** Görüntülenecek ad/soyad/dal/no. `removed` satırlarda dosyada karşılık
+ * olmadığı için TEK bilgi kaynağı `previous`'tur; diğer durumlarda üst
+ * seviye alanlar (dosyadan gelen) kullanılır. */
+function displayRow(row: StudentListRowPreview): {
+  studentNo: string
+  firstName: string
+  lastName: string
+  branch: string
+} {
+  if (row.status === 'removed' && row.previous) {
+    return {
+      studentNo: '—',
+      firstName: row.previous.firstName,
+      lastName: row.previous.lastName,
+      branch: row.previous.branch,
+    }
+  }
+  return {
+    studentNo: row.studentNo ?? '—',
+    firstName: row.firstName,
+    lastName: row.lastName,
+    branch: row.branch,
+  }
+}
+
+/** Önizlemedeki TÜM sınıflarda silinecek toplam öğrenci sayısı. */
+const totalRemovedCount = computed<number>(() =>
+  (studentListPreview.value?.classes ?? []).reduce((sum, cls) => sum + cls.removedCount, 0),
+)
 
 /** Yeni dosya seçimi/kaldırma önceki önizleme ve sonucu geçersizleştirir. */
 function invalidateStudentListPreview(): void {

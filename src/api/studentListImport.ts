@@ -6,8 +6,12 @@ export interface StudentListFile {
   content: number[]
 }
 
-/** Bir satırın önizlemedeki durumu. */
-export type StudentListRowStatus = 'new' | 'unchanged' | 'changed'
+/**
+ * Bir satırın önizlemedeki durumu. `removed`: aktif dönemde bu sınıfa
+ * kayıtlıydı ama içe aktarılan dosyada karşılığı yok; uygulanınca tarihçeye
+ * kaydedilerek silinir.
+ */
+export type StudentListRowStatus = 'new' | 'unchanged' | 'changed' | 'removed'
 
 /** `changed` durumundaki bir öğrencinin içe aktarımdan önceki değerleri. */
 export interface StudentListPreviousValue {
@@ -17,6 +21,12 @@ export interface StudentListPreviousValue {
   branch: string
 }
 
+/**
+ * `status === 'removed'` satırlarda dosyada karşılık YOKTUR: üst seviye
+ * alanlar (`studentNo`, `firstName`, `lastName`, `branch`) boş/`null` gelir.
+ * Öğrencinin gerçek kimliği YALNIZ `previous` içindedir — bu satırları
+ * render ederken üst alanları DEĞİL `previous`'u okuyun.
+ */
 export interface StudentListRowPreview {
   /** e-Okul dosyasında öğrenci no sütunu boş bırakılabildiği için `Option<String>` olarak gelir. */
   studentNo: string | null
@@ -36,6 +46,8 @@ export interface StudentListClassPreview {
   newCount: number
   unchangedCount: number
   changedCount: number
+  /** İçe aktarılan dosyada karşılığı bulunamadığı için silinecek öğrenci sayısı. */
+  removedCount: number
 }
 
 export interface StudentListPreview {
@@ -47,6 +59,8 @@ export interface StudentListSummary {
   created: number
   updated: number
   skipped: number
+  /** Aktif dönemde kayıtlıyken içe aktarılan listede karşılığı bulunamadığı için silinen öğrenci sayısı. */
+  removed: number
   warnings: string[]
 }
 

@@ -86,6 +86,7 @@
       v-model:visible="isDialogOpen"
       :teacher="selected"
       :known-branches="knownBranches"
+      :term="term"
       @save="handleSave"
     />
 
@@ -173,12 +174,15 @@ function openEdit(teacher: TeacherWithCapacity): void {
   isDialogOpen.value = true
 }
 
-async function handleSave(input: NewTeacher): Promise<void> {
+async function handleSave(
+  input: NewTeacher,
+  details: { effectiveDate: string | null; reason: string | null },
+): Promise<void> {
   try {
     if (selected.value) {
-      await teachersApi.update(selected.value.id, input)
+      await teachersApi.update(selected.value.id, input, details.effectiveDate, details.reason)
     } else {
-      await teachersApi.create(input)
+      await teachersApi.create(input, details.effectiveDate, details.reason)
     }
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
     await load()

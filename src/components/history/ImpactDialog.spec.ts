@@ -125,4 +125,26 @@ describe('ImpactDialog', () => {
 
     wrapper.unmount()
   })
+
+  it('renders the poolExceeded rejection code with its Turkish label', async () => {
+    previewChangeMock.mockResolvedValueOnce({
+      status: 'rejected',
+      code: 'poolExceeded',
+      reason: 'Takdir edilen saat, ders yükü havuzunu aşıyor.',
+      conflictingChangeSetIds: [],
+      suggestedDate: null,
+    })
+
+    const change = useChange()
+    await change.preview(baseRequest())
+    expect(change.status.value).toBe('rejected')
+
+    const wrapper = mountDialog(change)
+    await nextTick()
+    const text = document.body.textContent ?? ''
+
+    expect(text).toContain(labels.history.rejectionCode.poolExceeded)
+
+    wrapper.unmount()
+  })
 })

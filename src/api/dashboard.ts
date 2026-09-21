@@ -18,6 +18,13 @@ export interface DashboardStats {
   teachersAtCapacity: number
   teachersOverCapacity: number
 
+  /** Alan koordinatörlük ders yükü havuzu: Σ(haftalık ders saati × grup sayısı) + şeflerin planlama/bakım-onarım saatleri. */
+  poolHours: number
+  /** İşletmelere takdir edilen toplam saat. */
+  awardedHours: number
+  /** `poolHours - awardedHours`. Negatifse havuz aşılmış demektir; kırpılmaz. */
+  remainingPoolHours: number
+
   companiesWithoutLocation: number
   studentsWithoutCompany: number
   companiesWithoutStudents: number

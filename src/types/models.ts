@@ -159,6 +159,7 @@ export type RejectionCode =
   | 'planningOnly'
   | 'invalidRequest'
   | 'chiefAlreadyAssigned'
+  | 'poolExceeded'
 
 /** `ImpactWarning.code` değerleri. */
 export type WarningCode =
