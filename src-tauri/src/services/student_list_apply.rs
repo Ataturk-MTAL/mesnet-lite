@@ -40,10 +40,18 @@ pub enum RowStatus {
     New,
     Unchanged,
     Changed,
+    /// Aktif dönemde bu satırın sınıfına kayıtlıydı ama içe aktarılan
+    /// dosyada karşılığı bulunamadı; `apply` bu öğrenciyi tarihçe kapısından
+    /// (`ChangeCommand::DeleteStudent`) geçirip siler (kullanıcının isteği:
+    /// "e-Okul listesinde olmayan öğrenciyi silelim").
+    Removed,
 }
 
 /// `changed` satırlarda değişiklikten ÖNCEKİ değerler; kullanıcı neyin
-/// değiştiğini görebilsin diye.
+/// değiştiğini görebilsin diye. `removed` satırlarda TEK bilgi kaynağı
+/// budur (veritabanındaki hâli); dosyada karşılığı olmadığı için üst
+/// seviye alanlar (`firstName`/`lastName`/`branch`/`studentNo`) boş/None
+/// bırakılır — bkz. `RowPreview` yorumu.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviousStudentFields {
@@ -53,6 +61,11 @@ pub struct PreviousStudentFields {
     pub branch: String,
 }
 
+/// Üst seviye alanlar (`studentNo`, `firstName`, `lastName`, `branch`)
+/// DOSYADAN gelen değerlerdir. `status == Removed` satırlarda dosyada
+/// karşılık YOKTUR; bu yüzden bu alanlar sırasıyla `None`/boş metin kalır
+/// ve öğrencinin kimliği yalnızca `previous` içinde taşınır. Frontend
+/// `removed` satırları `previous` üzerinden okumalı.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RowPreview {
@@ -74,6 +87,7 @@ pub struct ClassPreview {
     pub new_count: usize,
     pub unchanged_count: usize,
     pub changed_count: usize,
+    pub removed_count: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -89,6 +103,7 @@ pub struct StudentListSummary {
     pub created: usize,
     pub updated: usize,
     pub skipped: usize,
+    pub removed: usize,
     pub warnings: Vec<String>,
 }
 
@@ -269,18 +284,22 @@ fn empty_class_preview(named: &NamedClass) -> ClassPreview {
         new_count: 0,
         unchanged_count: 0,
         changed_count: 0,
+        removed_count: 0,
     }
 }
 
 /// Bir satırı önizleme kaydına çevirir ve ait olduğu sınıfın sayaçlarını
 /// günceller; yinelenen bir numaraysa (`is_first_occurrence == false`) hiçbir
-/// şey yapmaz.
-fn push_row_preview(class: &mut ClassPreview, existing: &[Student], flat_row: &FlatRow, vacancy: &mut VacancyTracker) {
+/// şey yapmaz. Eşleşen bir kayıt bulunduysa kimliğini döner — çağıran bunu
+/// "dosyada karşılığı olan öğrenciler" kümesine ekler (silme adaylarını
+/// bulmak için: bkz. `removal_candidates`).
+fn push_row_preview(class: &mut ClassPreview, existing: &[Student], flat_row: &FlatRow, vacancy: &mut VacancyTracker) -> Option<i64> {
     if !flat_row.is_first_occurrence {
-        return;
+        return None;
     }
 
     let matched = find_match(existing, flat_row.row.student_no.as_deref(), &flat_row.row.first_name, &flat_row.row.last_name, flat_row.grade);
+    let matched_id = matched.map(|s| s.id);
     vacancy.record(matched, flat_row.grade, &flat_row.row.branch);
     let (status, previous) = classify_row(matched, flat_row.grade, flat_row.row);
 
@@ -288,6 +307,7 @@ fn push_row_preview(class: &mut ClassPreview, existing: &[Student], flat_row: &F
         RowStatus::New => class.new_count += 1,
         RowStatus::Unchanged => class.unchanged_count += 1,
         RowStatus::Changed => class.changed_count += 1,
+        RowStatus::Removed => unreachable!("classify_row dosyadaki bir satır için hiçbir zaman Removed döndürmez"),
     }
     class.rows.push(RowPreview {
         student_no: flat_row.row.student_no.clone(),
@@ -297,6 +317,22 @@ fn push_row_preview(class: &mut ClassPreview, existing: &[Student], flat_row: &F
         status,
         previous,
     });
+    matched_id
+}
+
+/// Aktif dönemde kayıtlı ama BU İÇE AKTARMANIN kapsadığı sınıflardan birine
+/// ait olup (`imported_grades`) dosyalarda karşılığı bulunamayan (`matched_ids`
+/// dışında kalan) öğrencileri verir. Kapsam kasıtlı olarak dar tutulur: bir
+/// öğrencinin sınıfı içe aktarılan dosyalardan HİÇBİRİNE ait değilse asla aday
+/// olmaz — tek bir sınıfın listesini içe aktarmak diğer sınıfların
+/// öğrencilerini silmemeli (brief'in en kritik kuralı).
+fn removal_candidates<'a>(existing: &'a [Student], imported_grades: &HashSet<&str>, matched_ids: &HashSet<i64>) -> Vec<&'a Student> {
+    existing
+        .iter()
+        .filter(|s| !s.grade.trim().is_empty())
+        .filter(|s| imported_grades.contains(s.grade.as_str()))
+        .filter(|s| !matched_ids.contains(&s.id))
+        .collect()
 }
 
 /// Dosyaları ayrıştırıp veritabanıyla karşılaştırır. HİÇBİR ŞEY YAZMAZ.
@@ -309,13 +345,43 @@ pub async fn preview(pool: &SqlitePool, files: &[StudentListFile]) -> AppResult<
 
     let mut classes: Vec<ClassPreview> = named.iter().map(empty_class_preview).collect();
     let mut vacancy = VacancyTracker::new(&existing);
+    let mut matched_ids: HashSet<i64> = HashSet::new();
 
     let mut flat_iter = flat.iter();
     for (class_index, named_class) in named.iter().enumerate() {
         for _ in 0..named_class.class.rows.len() {
             let flat_row = flat_iter.next().expect("akış sınıf satır sayısıyla birebir eşleşir");
-            push_row_preview(&mut classes[class_index], &existing, flat_row, &mut vacancy);
+            if let Some(id) = push_row_preview(&mut classes[class_index], &existing, flat_row, &mut vacancy) {
+                matched_ids.insert(id);
+            }
         }
+    }
+
+    // Silme adayları: her sınıfın önizlemesine, o sınıfı KAPSAYAN İLK dosyanın
+    // altında eklenir (aynı sınıfın iki dosyada geçmesi beklenmez ama olursa
+    // yinelenmeyi önler).
+    let imported_grades: HashSet<&str> = named.iter().map(|n| n.class.grade.as_str()).collect();
+    let mut grade_to_class_index: HashMap<&str, usize> = HashMap::new();
+    for (index, named_class) in named.iter().enumerate() {
+        grade_to_class_index.entry(named_class.class.grade.as_str()).or_insert(index);
+    }
+    for candidate in removal_candidates(&existing, &imported_grades, &matched_ids) {
+        let class_index = grade_to_class_index[candidate.grade.as_str()];
+        let class = &mut classes[class_index];
+        class.removed_count += 1;
+        class.rows.push(RowPreview {
+            student_no: None,
+            first_name: String::new(),
+            last_name: String::new(),
+            branch: String::new(),
+            status: RowStatus::Removed,
+            previous: Some(PreviousStudentFields {
+                first_name: candidate.first_name.clone(),
+                last_name: candidate.last_name.clone(),
+                grade: candidate.grade.clone(),
+                branch: candidate.branch.clone(),
+            }),
+        });
     }
 
     warnings.extend(vacancy.finish());
@@ -380,6 +446,36 @@ async fn create_student_in(
         .ok_or_else(|| AppError::Database("Yeni oluşturulan öğrenci geri okunamadı".into()))
 }
 
+/// Dosyalarda karşılığı bulunmayan bir öğrenciyi `change_service::execute_in`
+/// ÜZERİNDEN (tarihçe kapısı) aynı transaction'da siler. Kapı reddederse
+/// (ör. `HasHistory`: öğrencinin açılış dışında geçmişi var) `Ok(Err(mesaj))`
+/// döner; bu durumda çağıran TÜM içe aktarmayı ÇÖKERTMEZ, yalnız o öğrenciyi
+/// atlayıp uyarı ekler (kullanıcının isteği: silme geçmişi ezmesin). Yalnız
+/// gerçek bir hata (`Err`) — ör. bağlantı sorunu — işlemi durdurur.
+async fn delete_student_in(
+    conn: &mut sqlx::SqliteConnection,
+    term: &str,
+    student_id: i64,
+    effective_date: Option<NaiveDate>,
+    reason: &str,
+    today: NaiveDate,
+) -> AppResult<Result<(), String>> {
+    let req = ChangeRequest {
+        term: term.to_string(),
+        effective_date,
+        document_date: None,
+        reason: reason.to_string(),
+        command: ChangeCommand::DeleteStudent { student_id },
+    };
+
+    match change_service::execute_in(conn, req, ChangeMode::Commit { expected_high_water: None }, today).await? {
+        ChangeOutcome::Committed { .. } => Ok(Ok(())),
+        ChangeOutcome::Rejected { reason, .. } => Ok(Err(reason)),
+        ChangeOutcome::Stale { message } => Ok(Err(message)),
+        ChangeOutcome::Preview { .. } => unreachable!("ChangeMode::Commit ile çağrıldığında Preview dönmez"),
+    }
+}
+
 /// Önizlemede onaylanan içe aktarmayı TEK bir transaction'da uygular.
 /// Hata olursa (ör. dönem başladıktan sonra tarih/eşik reddi) hiçbir satır
 /// yazılmaz — transaction commit edilmeden düşer, sqlx otomatik geri alır.
@@ -397,8 +493,12 @@ pub async fn apply(
 
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let mut known = students::list_by_term_in(&mut tx, &term).await?;
+    // Silme adaylarını, bu transaction'da OLUŞTURULAN öğrencilerden ayırmak
+    // için işlem başlamadan ÖNCEki veritabanı görüntüsü ayrıca saklanır.
+    let existing_at_start = known.clone();
     let mut vacancy = VacancyTracker::new(&known);
     let mut summary = StudentListSummary::default();
+    let mut matched_ids: HashSet<i64> = HashSet::new();
 
     for flat_row in &flat {
         if !flat_row.is_first_occurrence {
@@ -416,6 +516,7 @@ pub async fn apply(
                 summary.created += 1;
             }
             Some(existing) => {
+                matched_ids.insert(existing.id);
                 let (status, _) = classify_row(Some(&existing), flat_row.grade, flat_row.row);
                 if status == RowStatus::Changed {
                     students::update_identity_fields_in(
@@ -435,6 +536,17 @@ pub async fn apply(
         }
     }
 
+    let imported_grades: HashSet<&str> = named.iter().map(|n| n.class.grade.as_str()).collect();
+    for candidate in removal_candidates(&existing_at_start, &imported_grades, &matched_ids) {
+        match delete_student_in(&mut tx, &term, candidate.id, effective_date, reason, today).await? {
+            Ok(()) => summary.removed += 1,
+            Err(rejection_reason) => warnings.push(format!(
+                "{} {} ({}) e-Okul listesinde artık yok ama silinemedi: {}",
+                candidate.first_name, candidate.last_name, candidate.grade, rejection_reason
+            )),
+        }
+    }
+
     tx.commit().await?;
     warnings.extend(vacancy.finish());
     summary.warnings = warnings;
@@ -444,7 +556,8 @@ pub async fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::init_pool;
+    use crate::db::{companies, init_pool};
+    use crate::domain::models::NewCompany;
 
     async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
@@ -638,5 +751,214 @@ mod tests {
         };
         assert!(message.contains("Dal boş olamaz"), "mesaj: {message}");
         assert_eq!(students::list(&pool).await.unwrap().len(), 0, "reddedilen işlem hiçbir şey yazmamalı");
+    }
+
+    /// Bir öğrenci elle eklenip dosyada karşılığı olmayan bir kayıt olarak
+    /// bırakılır: önizlemede `removed` görünmeli (yalnız `previous` dolu, üst
+    /// alanlar boş/None — `RowPreview` yorumu), uygulanınca silinmeli ve
+    /// `change_sets`'te bir `delete_student` kaydı oluşmalı. Kullanıcının
+    /// isteği: "e-Okul listesinde olmayan öğrenciyi silelim, geçmişe kaydedelim".
+    #[tokio::test]
+    async fn preview_and_apply_remove_a_student_missing_from_the_imported_class() {
+        let (_dir, pool) = test_pool().await;
+        let files = r076_files();
+        apply(&pool, &files, None, "ilk aktarım", before_term_start()).await.unwrap();
+
+        let term = settings::get_active_term(&pool).await.unwrap();
+        students::create(
+            &pool,
+            &crate::domain::models::NewStudent {
+                first_name: "FAZLA".into(),
+                last_name: "ÖĞRENCİ".into(),
+                student_no: Some("9999".into()),
+                grade: "12/C".into(),
+                branch: "Elektronik ve Haberleşme".into(),
+                company_id: None,
+                submitted_at: None,
+                term,
+            },
+        )
+        .await
+        .unwrap();
+
+        let preview_result = preview(&pool, &files).await.unwrap();
+        let class_c = preview_result.classes.iter().find(|c| c.grade == "12/C").unwrap();
+        assert_eq!(class_c.removed_count, 1);
+        let removed_row = class_c.rows.iter().find(|r| r.status == RowStatus::Removed).unwrap();
+        assert_eq!(removed_row.student_no, None, "removed satırda dosyadan gelen alan yok");
+        assert_eq!(removed_row.first_name, "", "removed satırda üst alan boş bırakılır");
+        let previous = removed_row.previous.as_ref().expect("removed satırda previous dolu olmalı");
+        assert_eq!(previous.first_name, "FAZLA");
+        assert_eq!(previous.last_name, "ÖĞRENCİ");
+        assert_eq!(previous.grade, "12/C");
+
+        let summary = apply(&pool, &files, None, "temizlik", before_term_start()).await.unwrap();
+        assert_eq!(summary.removed, 1);
+        assert_eq!(students::list(&pool).await.unwrap().len(), 34, "fazlalık öğrenci silindi, 34 kaldı");
+
+        let deleted_kind_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM change_sets WHERE kind = 'delete_student'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(deleted_kind_count, 1);
+
+        // İkinci uygulama artık silecek bir şey bulamaz (idempotentlik).
+        let second = apply(&pool, &files, None, "tekrar", before_term_start()).await.unwrap();
+        assert_eq!(second.removed, 0, "zaten silinmiş öğrenci ikinci kez silinmez");
+    }
+
+    /// KAPSAM KORUMASI (brief'in en kritik kuralı): yalnız 12/C dosyası
+    /// içe aktarılınca 12/D öğrencileri SİLİNMEZ; silme yalnızca içe
+    /// aktarılan dosyaların kapsadığı sınıflarla sınırlıdır.
+    #[tokio::test]
+    async fn importing_only_one_class_file_does_not_delete_the_other_class() {
+        let (_dir, pool) = test_pool().await;
+        let files = r076_files(); // 12/C (17) + 12/D (17)
+        apply(&pool, &files, None, "ilk aktarım", before_term_start()).await.unwrap();
+        assert_eq!(students::list(&pool).await.unwrap().len(), 34);
+
+        // Yalnız 12/C dosyası TEKRAR uygulanır; 12/D bu içe aktarmanın
+        // kapsamında değildir ve dokunulmamalıdır.
+        let only_c = vec![read_fixture("R076_920 (1).XLS")];
+        let summary = apply(&pool, &only_c, None, "yalnız 12/C", before_term_start()).await.unwrap();
+
+        assert_eq!(summary.removed, 0, "12/C dosyasındaki tüm öğrenciler zaten kayıtlı");
+        let all = students::list(&pool).await.unwrap();
+        assert_eq!(all.len(), 34, "12/D öğrencilerine dokunulmamalı");
+        assert_eq!(all.iter().filter(|s| s.grade == "12/D").count(), 17, "12/D sınıfı tam kalmalı");
+    }
+
+    /// Sınıfı boş olan ya da dosyaların kapsadığı sınıflardan hiçbirine
+    /// eşleşmeyen bir öğrenci, dosyada karşılığı olmasa bile SİLİNMEZ.
+    #[tokio::test]
+    async fn students_outside_the_imported_grades_are_never_removal_candidates() {
+        let (_dir, pool) = test_pool().await;
+        let files = r076_files();
+        let term = settings::get_active_term(&pool).await.unwrap();
+
+        students::create(
+            &pool,
+            &crate::domain::models::NewStudent {
+                first_name: "BOŞ".into(),
+                last_name: "SINIF".into(),
+                student_no: Some("1001".into()),
+                grade: "".into(),
+                branch: "".into(),
+                company_id: None,
+                submitted_at: None,
+                term: term.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        students::create(
+            &pool,
+            &crate::domain::models::NewStudent {
+                first_name: "BAŞKA".into(),
+                last_name: "SINIF".into(),
+                student_no: Some("1002".into()),
+                grade: "11/A".into(),
+                branch: "Elektronik ve Haberleşme".into(),
+                company_id: None,
+                submitted_at: None,
+                term,
+            },
+        )
+        .await
+        .unwrap();
+
+        let summary = apply(&pool, &files, None, "test", before_term_start()).await.unwrap();
+        assert_eq!(summary.removed, 0, "sınıfı kapsam dışı olan öğrenciler silinmez");
+        assert_eq!(students::list(&pool).await.unwrap().len(), 34 + 2);
+    }
+
+    /// Kapı (`HasHistory`) silmeyi reddederse TÜM içe aktarma çökmez: o
+    /// öğrenci atlanır, `warnings`'e ad + red gerekçesiyle açık bir satır
+    /// eklenir, aynı taramadaki DİĞER silinebilir öğrenci yine de silinir.
+    #[tokio::test]
+    async fn a_student_the_gate_refuses_to_delete_does_not_abort_the_import() {
+        let (_dir, pool) = test_pool().await;
+        let only_c = vec![read_fixture("R076_920 (1).XLS")];
+        apply(&pool, &only_c, None, "ilk aktarım", before_term_start()).await.unwrap();
+
+        let term = settings::get_active_term(&pool).await.unwrap();
+        let company = companies::create(
+            &pool,
+            &NewCompany {
+                name: "Tarihi İşletme".into(),
+                contact_first_name: String::new(),
+                contact_last_name: String::new(),
+                phone: String::new(),
+                email: String::new(),
+                address_text: "Örnek Mah.".into(),
+                latitude: None,
+                longitude: None,
+                one_way_distance_km: Some(3.0),
+                notes: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Geçmişi olan öğrenci: oluşturulurken bir işletmeye yerleştirilir —
+        // bu, `create_student` kümesiyle canlı (açılış olmayan) bir yerleşim
+        // olayı yaratır ve `delete_student`'ın `HasHistory` reddine yol açar
+        // (bkz. `domain::history::decide::student::delete_student`).
+        let outcome = change_service::execute_change(
+            &pool,
+            ChangeRequest {
+                term: term.clone(),
+                effective_date: None,
+                document_date: None,
+                reason: "test".into(),
+                command: ChangeCommand::CreateStudent {
+                    student: NewStudentInput {
+                        first_name: "GEÇMİŞLİ".into(),
+                        last_name: "ÖĞRENCİ".into(),
+                        student_no: Some("9997".into()),
+                        grade: "12/C".into(),
+                        branch: "Elektronik ve Haberleşme".into(),
+                        submitted_at: None,
+                    },
+                    company_id: Some(company.id),
+                },
+            },
+            ChangeMode::Commit { expected_high_water: None },
+            before_term_start(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, ChangeOutcome::Committed { .. }), "sahne kurulamadı: {outcome:?}");
+
+        // Aynı sınıfta, geçmişi olmayan, silinmesi gereken bir öğrenci daha.
+        students::create(
+            &pool,
+            &crate::domain::models::NewStudent {
+                first_name: "SİLİNECEK".into(),
+                last_name: "ÖĞRENCİ".into(),
+                student_no: Some("9996".into()),
+                grade: "12/C".into(),
+                branch: "Elektronik ve Haberleşme".into(),
+                company_id: None,
+                submitted_at: None,
+                term,
+            },
+        )
+        .await
+        .unwrap();
+
+        let summary = apply(&pool, &only_c, None, "temizlik", before_term_start()).await.unwrap();
+
+        assert_eq!(summary.removed, 1, "yalnız geçmişsiz öğrenci silinmeli");
+        assert!(
+            summary.warnings.iter().any(|w| w.contains("GEÇMİŞLİ") && w.contains("geçmişi var")),
+            "uyarı bulunamadı: {:?}",
+            summary.warnings
+        );
+
+        let all = students::list(&pool).await.unwrap();
+        assert!(all.iter().any(|s| s.first_name == "GEÇMİŞLİ"), "geçmişi olan öğrenci silinmemeli");
+        assert!(!all.iter().any(|s| s.first_name == "SİLİNECEK"), "geçmişsiz öğrenci silinmeli");
+        assert_eq!(all.len(), 17 + 1, "17 dosya öğrencisi + geçmişi olan öğrenci kalmalı");
     }
 }
