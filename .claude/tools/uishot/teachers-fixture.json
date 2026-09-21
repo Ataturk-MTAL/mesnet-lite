@@ -1,0 +1,70 @@
+{
+  "list_teachers_with_capacity": [
+    {
+      "id": 1,
+      "firstName": "Ahmet",
+      "lastName": "Yılmaz",
+      "registryNo": "12345",
+      "field": "Elektrik-Elektronik Teknolojisi",
+      "branches": "[\"Elektronik Haberleşme\"]",
+      "employmentType": "tenured",
+      "baseHours": 18,
+      "maxExtraHours": 6,
+      "otherExtraHours": 0,
+      "chiefType": "none",
+      "isActive": 1,
+      "chiefHours": 0,
+      "statutoryCap": 24,
+      "capacity": 12
+    },
+    {
+      "id": 2,
+      "firstName": "Ayşe Zehra Uzunkonaklı",
+      "lastName": "Demirtaş-Öztürk",
+      "registryNo": "67890",
+      "field": "Elektrik-Elektronik Teknolojisi",
+      "branches": "[\"Elektrik Tesisatları ve Pano Montörlüğü\",\"Endüstriyel Bakım Onarım\"]",
+      "employmentType": "contracted",
+      "baseHours": 20,
+      "maxExtraHours": 10,
+      "otherExtraHours": 2,
+      "chiefType": "workshop_lab",
+      "isActive": 1,
+      "chiefHours": 6,
+      "statutoryCap": 30,
+      "capacity": 22
+    },
+    {
+      "id": 3,
+      "firstName": "Mehmet",
+      "lastName": "Kaya",
+      "registryNo": "11223",
+      "field": "Elektrik-Elektronik Teknolojisi",
+      "branches": "[]",
+      "employmentType": "tenured",
+      "baseHours": 15,
+      "maxExtraHours": 8,
+      "otherExtraHours": 0,
+      "chiefType": "department",
+      "isActive": 0,
+      "chiefHours": 4,
+      "statutoryCap": 23,
+      "capacity": 5
+    }
+  ],
+  "list_students": [],
+  "list_terms_with_dates": [
+    {
+      "term": "2026-2027/1",
+      "startDate": "2026-09-14",
+      "endDate": "2027-01-23",
+      "datesConfirmed": true,
+      "isPlanning": false,
+      "defaultAsOf": "2026-09-21",
+      "earliestAllowedDate": "2026-09-14"
+    }
+  ],
+  "get_settings": { "active_term": "2026-2027/1", "school_name": "Atatürk MTAL" },
+  "known_terms": ["2026-2027/1"],
+  "get_known_terms": ["2026-2027/1"]
+}

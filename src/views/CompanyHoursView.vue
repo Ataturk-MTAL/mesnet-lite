@@ -97,17 +97,28 @@
       stripedRows
       v-model:filters="filters"
       :globalFilterFields="['companyName', 'addressText']"
+      tableStyle="min-width: 56rem"
     >
       <template #header>
         <InputText v-model="filters.global.value" :placeholder="labels.company.searchPlaceholder" />
       </template>
       <template #empty>{{ labels.hours.empty }}</template>
 
-      <Column field="companyName" :header="labels.hours.company" sortable />
+      <Column
+        field="companyName"
+        :header="labels.hours.company"
+        sortable
+        headerStyle="min-width: 14rem; width: 30%"
+      />
 
-      <Column :header="labels.hours.distance" sortable field="roundTripDistanceKm">
+      <Column
+        :header="labels.hours.distance"
+        sortable
+        field="roundTripDistanceKm"
+        headerStyle="min-width: 11rem"
+      >
         <template #body="{ data }">
-          <span v-if="data.roundTripDistanceKm !== null">
+          <span v-if="data.roundTripDistanceKm !== null" class="distance-cell">
             {{ data.roundTripDistanceKm.toFixed(1) }}
             <small class="muted">({{ data.oneWayDistanceKm?.toFixed(1) }} tek yön)</small>
           </span>
@@ -115,43 +126,55 @@
         </template>
       </Column>
 
-      <Column field="studentCount" :header="labels.hours.students" sortable />
+      <Column
+        field="studentCount"
+        :header="labels.hours.students"
+        sortable
+        headerStyle="min-width: 5.5rem"
+      />
 
-      <Column :header="labels.hours.maxHours" sortable field="maxHours">
+      <Column
+        :header="labels.hours.maxHours"
+        sortable
+        field="maxHours"
+        headerStyle="min-width: 7.5rem"
+      >
         <template #body="{ data }">
           <strong v-if="data.maxHours !== null">{{ data.maxHours }}</strong>
           <Tag v-else :value="labels.hours.noRule" severity="warn" />
         </template>
       </Column>
 
-      <Column :header="labels.hours.honorary">
+      <Column :header="labels.hours.honorary" headerStyle="min-width: 6rem">
         <template #body="{ data }">
           <ToggleSwitch
             :model-value="data.isHonorary"
+            :aria-label="labels.hours.honorary"
             v-tooltip.top="labels.hours.honoraryTooltip"
             @update:model-value="(value: boolean) => setHonorary(data, value)"
           />
         </template>
       </Column>
 
-      <Column :header="labels.hours.awarded">
+      <Column :header="labels.hours.awarded" headerStyle="min-width: 8rem">
         <template #body="{ data }">
           <Tag v-if="data.isHonorary" :value="labels.hours.honoraryBadge" severity="info" />
-          <InputNumber
-            v-else
-            :model-value="data.awardedHours"
-            :min="0"
-            :max="data.maxHours ?? 0"
-            :disabled="data.maxHours === null"
-            showButtons
-            buttonLayout="horizontal"
-            class="hours-input"
-            @update:model-value="(value: number | null) => setAwarded(data, value)"
-          />
+          <div v-else class="hours-input">
+            <InputNumber
+              fluid
+              :model-value="data.awardedHours"
+              :min="0"
+              :max="data.maxHours ?? 0"
+              :disabled="data.maxHours === null"
+              showButtons
+              :aria-label="labels.hours.awarded"
+              @update:model-value="(value: number | null) => setAwarded(data, value)"
+            />
+          </div>
         </template>
       </Column>
 
-      <Column :header="labels.hours.locked">
+      <Column :header="labels.hours.locked" headerStyle="min-width: 5rem">
         <template #body="{ data }">
           <Button
             :icon="data.isLocked ? 'pi pi-lock' : 'pi pi-lock-open'"
@@ -371,7 +394,12 @@ onMounted(load)
 .summary-value--over { color: var(--p-red-500); }
 .summary-label { font-size: 0.8125rem; color: var(--p-text-muted-color); margin-top: 0.125rem; }
 
-.hours-input { width: 9rem; }
+/* Takdir sütunundaki InputNumber sarmalayıcısı — yığılı (varsayılan) düğme
+   düzeniyle birlikte Kilit sütunuyla çakışmayacak sabit bir genişlik verir. */
+.hours-input { width: 7rem; }
+/* Mesafe hücresi tek satırda kalsın diye sarmıyor; uzun değerlerde satır
+   yükseklikleri diğer satırlarla eşit kalır. */
+.distance-cell { display: inline-flex; align-items: baseline; gap: 0.25rem; white-space: nowrap; }
 .pool-warning-action { display: flex; }
 .muted { color: var(--p-text-muted-color); font-size: 0.8125rem; }
 .footer-actions {

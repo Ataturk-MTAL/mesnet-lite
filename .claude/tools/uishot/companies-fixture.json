@@ -1,0 +1,29 @@
+{
+  "get_settings": {
+    "active_term": "2026-2027/1",
+    "school_name": "Atatürk MTAL"
+  },
+  "get_known_terms": [
+    "2026-2027/1"
+  ],
+  "list_terms_with_dates": [],
+  "list_companies": [
+    {
+      "id": 1,
+      "name": "Akdeniz Elektronik San. Tic. Ltd. Şti.",
+      "contactFirstName": "Ali",
+      "contactLastName": "Veli",
+      "phone": "0532 000 00 00",
+      "email": "ali@example.com",
+      "addressText": "Karaduvar Mah. Serbest Bölge 14. Cadde No:13 Akdeniz/Mersin",
+      "district": "Akdeniz",
+      "latitude": null,
+      "longitude": null,
+      "geocodeStatus": "pending",
+      "oneWayDistanceKm": 12.4,
+      "notes": "",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01"
+    }
+  ]
+}

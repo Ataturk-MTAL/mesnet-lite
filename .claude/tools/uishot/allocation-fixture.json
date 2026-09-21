@@ -1,0 +1,454 @@
+{
+  "get_settings": {
+    "active_term": "2026-2027/1",
+    "school_name": "Atatürk MTAL"
+  },
+  "get_assignment_board": {
+    "term": "2026-2027/1",
+    "teachers": [
+      {
+        "teacherId": 1,
+        "teacherName": "Ahmet Yılmaz",
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "capacity": 40,
+        "assignedHours": 0,
+        "companyCount": 0,
+        "freeSlots": [
+          "1-8",
+          "1-9",
+          "2-8"
+        ],
+        "occupiedBy": {},
+        "hoursPerDay": {},
+        "daysOverCap": [],
+        "isOverCapacity": false
+      }
+    ],
+    "companies": [
+      {
+        "companyId": 1,
+        "companyName": "Akdeniz Elektronik San. Tic. Ltd. Şti.",
+        "addressText": "Akdeniz adres metni",
+        "district": "Akdeniz",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 2,
+        "companyName": "Örnek Enerji Sistemleri A.Ş.",
+        "addressText": "Akdeniz adres metni",
+        "district": "Akdeniz",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 3,
+        "companyName": "Toros Otomasyon ve Kontrol Sistemleri Mühendislik Sanayi Ticaret Limited Şirketi",
+        "addressText": "Akdeniz adres metni",
+        "district": "Akdeniz",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 4,
+        "companyName": "Yıldız Elektrik Taah. A.Ş.",
+        "addressText": "Akdeniz adres metni",
+        "district": "Akdeniz",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 5,
+        "companyName": "Deniz Pano Montaj Ltd. Şti.",
+        "addressText": "Akdeniz adres metni",
+        "district": "Akdeniz",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 6,
+        "companyName": "Güneş Aydınlatma San. Tic. A.Ş.",
+        "addressText": "Akdeniz adres metni",
+        "district": "Akdeniz",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 7,
+        "companyName": "Toroslar Elektrik Ltd. Şti.",
+        "addressText": "Toroslar adres metni",
+        "district": "Toroslar",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 8,
+        "companyName": "Zirve Otomasyon A.Ş.",
+        "addressText": "Toroslar adres metni",
+        "district": "Toroslar",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 9,
+        "companyName": "Çamlıbel Enerji San.",
+        "addressText": "Toroslar adres metni",
+        "district": "Toroslar",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 10,
+        "companyName": "Yenişehir Pano Sanayi",
+        "addressText": "Yenişehir adres metni",
+        "district": "Yenişehir",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 11,
+        "companyName": "Modern Elektronik Ltd.",
+        "addressText": "Yenişehir adres metni",
+        "district": "Yenişehir",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 12,
+        "companyName": "Mezitli Elektrik Tesisat",
+        "addressText": "Mezitli adres metni",
+        "district": "Mezitli",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 13,
+        "companyName": "Tarsus Elektronik San. Tic.",
+        "addressText": "Tarsus adres metni",
+        "district": "Tarsus",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      },
+      {
+        "companyId": 14,
+        "companyName": "Adres Belirsiz İşletme",
+        "addressText": " adres metni",
+        "district": "",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null
+      }
+    ],
+    "dayStartHour": 8,
+    "dayEndHour": 16,
+    "poolHours": 160,
+    "assignedHours": 0,
+    "remainingHours": 160,
+    "assignedCompanyCount": 0,
+    "totalCompanyCount": 14,
+    "honoraryCount": 0,
+    "warnings": []
+  },
+  "list_terms_with_dates": [],
+  "known_terms": [
+    "2026-2027/1"
+  ],
+  "get_known_terms": [
+    "2026-2027/1"
+  ]
+}
