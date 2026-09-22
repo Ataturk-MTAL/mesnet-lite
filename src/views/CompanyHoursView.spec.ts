@@ -192,8 +192,9 @@ describe('CompanyHoursView toplu kilit düğmesi', () => {
     wrapper.unmount()
   })
 
-  it('kilitliyken autoDistribute çağrısına giden payloadda tüm satırlar isLocked: true taşır', async () => {
-    // Arrange
+  it('bir satır kilitliyken autoDistribute çağrısına giden payloadda o satır isLocked: true taşır', async () => {
+    // Arrange — YALNIZCA bir satır kilitli; hepsini kilitlemiyoruz çünkü o
+    // durumda düğme artık pasif olur (bkz. "hepsi kilitliyken" testi altta).
     getBoardMock.mockResolvedValue(
       boardFixture([hoursRow({ companyId: 1 }), hoursRow({ companyId: 2 })]),
     )
@@ -206,7 +207,7 @@ describe('CompanyHoursView toplu kilit düğmesi', () => {
       warnings: [],
     })
     const wrapper = await mountView()
-    await lockAllButton(wrapper).trigger('click')
+    await rowLockButtons(wrapper)[0].trigger('click')
 
     // Act
     const autoDistributeButton = wrapper.findAll('button').find((b) => b.text() === labels.hours.autoDistribute)
@@ -217,7 +218,81 @@ describe('CompanyHoursView toplu kilit düğmesi', () => {
     expect(autoDistributeMock).toHaveBeenCalledTimes(1)
     const payload = autoDistributeMock.mock.calls[0][0]
     expect(payload).toHaveLength(2)
-    expect(payload.every((row) => row.isLocked === true)).toBe(true)
+    expect(payload[0].isLocked).toBe(true)
+    expect(payload[1].isLocked).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('kilitli satıra arka uçtan farklı bir sonuç gelse bile ekranda o satır değişmez', async () => {
+    // Arrange — 1 numaralı işletme kilitli, mevcut değeri 4. Arka uç (varsayımsal
+    // olarak) kilitli satır için de farklı bir awardedHours döndürse bile ekran
+    // bunu UYGULAMAMALI — bu, kullanıcının bildirdiği "kilitli satır yine de
+    // değişiyor" kusuruna karşı ikinci emniyet katı.
+    getBoardMock.mockResolvedValue(
+      boardFixture([
+        hoursRow({ companyId: 1, isLocked: true, awardedHours: 4 }),
+        hoursRow({ companyId: 2, isLocked: false, awardedHours: 2 }),
+      ]),
+    )
+    autoDistributeMock.mockResolvedValue({
+      results: [
+        { companyId: 1, awardedHours: 9, isHonorary: false, wasLocked: true },
+        { companyId: 2, awardedHours: 6, isHonorary: false, wasLocked: false },
+      ],
+      lockedHours: 4,
+      distributedHours: 6,
+      leftoverHours: 0,
+      honoraryCount: 0,
+      warnings: [],
+    })
+    const wrapper = await mountView()
+
+    // Act
+    const autoDistributeButton = wrapper.findAll('button').find((b) => b.text() === labels.hours.autoDistribute)
+    await autoDistributeButton!.trigger('click')
+    await flushPromises()
+
+    // Assert — kilitli satır (1) eski değerinde (4) kaldı, kilitsiz satır (2)
+    // arka ucun döndürdüğü değere (6) güncellendi. Sütun sırası satır sırasıyla
+    // aynı olduğundan indeksle eşleştirilir.
+    const numberInputs = wrapper.findAllComponents({ name: 'InputNumber' })
+    expect(numberInputs).toHaveLength(2)
+    expect(numberInputs[0].props('modelValue')).toBe(4)
+    expect(numberInputs[1].props('modelValue')).toBe(6)
+    wrapper.unmount()
+  })
+
+  it('hepsi kilitliyken "Otomatik Dağıt" düğmesi pasif olur', async () => {
+    // Arrange
+    getBoardMock.mockResolvedValue(
+      boardFixture([hoursRow({ companyId: 1 }), hoursRow({ companyId: 2 })]),
+    )
+    const wrapper = await mountView()
+
+    // Act
+    await lockAllButton(wrapper).trigger('click')
+
+    // Assert — OpenVue Button `disabled`i düz DOM özniteliği olarak fallthrough
+    // eder (bileşen prop'u olarak değil), bu yüzden `attributes()` kullanılır.
+    const autoDistributeButton = wrapper.findAll('button').find((b) => b.text() === labels.hours.autoDistribute)
+    expect(autoDistributeButton?.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('kilitler açılınca "Otomatik Dağıt" düğmesi yeniden etkinleşir', async () => {
+    // Arrange
+    getBoardMock.mockResolvedValue(
+      boardFixture([hoursRow({ companyId: 1 }), hoursRow({ companyId: 2 })]),
+    )
+    const wrapper = await mountView()
+    await lockAllButton(wrapper).trigger('click')
+
+    // Act — "Kilitleri Aç"a basınca hepsi açılır.
+    await lockAllButton(wrapper).trigger('click')
+
+    // Assert
+    const autoDistributeButton = wrapper.findAll('button').find((b) => b.text() === labels.hours.autoDistribute)
+    expect(autoDistributeButton?.attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 })

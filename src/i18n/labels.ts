@@ -139,6 +139,7 @@ export const labels = {
     autoDistribute: 'Otomatik Dağıt',
     autoDistributeTooltip:
       'Havuzu ağırlığa (verilebilir maks. saat × öğrenci sayısı) göre dağıtır. Kilitli satırlara dokunmaz. Öneri tabloya doldurulur, kaydedilmez.',
+    autoDistributeAllLocked: 'Tüm satırlar kilitli — dağıtılacak satır kalmadı.',
     undo: 'Geri Al',
     lockedNote: 'satır kilitli — yeniden dağıtımda korunur',
     savedHint: 'Saatler kaydedildikten sonra işletmeleri öğretmenlere dağıtabilirsiniz.',

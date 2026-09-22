@@ -20,8 +20,8 @@
           icon="pi pi-sparkles"
           severity="secondary"
           outlined
-          :disabled="rows.length === 0"
-          v-tooltip.bottom="labels.hours.autoDistributeTooltip"
+          :disabled="rows.length === 0 || allRowsLocked"
+          v-tooltip.bottom="autoDistributeTooltipText"
           @click="runAutoDistribute"
         />
         <Button
@@ -301,6 +301,11 @@ function toggleLock(row: HoursRow): void {
 /** Tüm satırlar zaten kilitliyse toplu düğme "Kilitleri Aç" olur. */
 const allRowsLocked = computed(() => rows.value.length > 0 && rows.value.every((row) => row.isLocked))
 
+/** Hepsi kilitliyken "Otomatik Dağıt" pasif olur; tooltip nedeni açıklar. */
+const autoDistributeTooltipText = computed(() =>
+  allRowsLocked.value ? labels.hours.autoDistributeAllLocked : labels.hours.autoDistributeTooltip,
+)
+
 /** Toplu kilit/aç — satır sayısı kadar YENİ nesne üretir, mevcutları yerinde değiştirmez. */
 function toggleAllLocks(): void {
   const nextLocked = !allRowsLocked.value
@@ -345,6 +350,11 @@ async function runAutoDistribute(): Promise<void> {
     for (const result of outcome.results) {
       const row = rows.value.find((r) => r.companyId === result.companyId)
       if (!row) continue
+      // Kilitli satıra ASLA dokunulmaz. Arka uç zaten kilitliyi koruyor; bu,
+      // oranın bir gün bozulması hâlinde ekranın kullanıcıyı yine de koruması
+      // için ikinci kat. Kullanıcı kilitli satırın değiştiğini bildirdi ve
+      // sebebi kodda bulunamadı.
+      if (row.isLocked) continue
       row.awardedHours = result.awardedHours
       row.isHonorary = result.isHonorary
     }
