@@ -105,6 +105,9 @@ pub async fn geocode_address(
 /// işaretlenip sıradaki işletmeye geçilir.
 pub async fn geocode_pending(pool: &SqlitePool) -> AppResult<GeocodeSummary> {
     let client = reqwest::Client::new();
+    // `list` (süzülmüş) BİLEREK kullanılır: pasif bir işletme hiçbir yönetim
+    // ekranında (harita, atama havuzu) görünmez, onun için Nominatim'e istek
+    // atıp saniyede-bir sınırını harcamanın anlamı yok.
     let all_companies = companies::list(pool).await?;
 
     let mut summary = GeocodeSummary::default();

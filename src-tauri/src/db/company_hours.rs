@@ -327,15 +327,23 @@ mod tests {
         assert_eq!(upsert(&pool, TERM, &locked).await.unwrap().is_locked, 1);
     }
 
-    /// İşletme silinince takdir kaydı da silinir (ON DELETE CASCADE).
+    /// Takdir kaydı olan bir işletme SİLİNMEZ, pasife alınır (spec §5.4).
+    ///
+    /// Eski test burada `company_term_hours.company_id`nin `ON DELETE
+    /// CASCADE` ile sessizce silindiğini doğruluyordu — bu, teşhis edilen
+    /// asıl kusurdu: `companies::remove` geçmişi (burada: takdir edilmiş
+    /// saat) hiç denetlemeden sert siliyor, FK de takdir kaydını sessizce
+    /// yok ediyordu. `remove` artık ÖNCE geçmişi denetler; kayıt hem
+    /// veritabanında hem de `company_term_hours`te KALMALI.
     #[tokio::test]
-    async fn deleting_company_removes_its_hours() {
+    async fn deleting_a_company_with_hours_soft_deletes_it_instead_of_removing_the_hours() {
         let (_dir, pool) = test_pool().await;
         let company_id = a_company(&pool, "Test İşletme A").await;
         upsert(&pool, TERM, &input(company_id, 6, 8)).await.unwrap();
 
-        companies::remove(&pool, company_id).await.unwrap();
+        let result = companies::remove(&pool, company_id).await.unwrap();
 
-        assert!(list(&pool, TERM).await.unwrap().is_empty());
+        assert!(result.soft_deleted, "takdir geçmişi olan işletme pasife alınmalı");
+        assert_eq!(list(&pool, TERM).await.unwrap().len(), 1, "takdir kaydı silinmemeli");
     }
 }

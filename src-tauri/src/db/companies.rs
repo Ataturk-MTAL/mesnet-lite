@@ -1,6 +1,7 @@
 use crate::domain::address::parse_district;
 use crate::domain::models::{Company, NewCompany};
 use crate::error::{AppError, AppResult};
+use serde::Serialize;
 use sqlx::{SqliteConnection, SqlitePool};
 
 const SELECT_COLUMNS: &str = "id, name, contact_first_name, contact_last_name, phone, email, \
@@ -37,11 +38,29 @@ fn not_found(id: i64) -> AppError {
     AppError::NotFound(format!("İşletme bulunamadı: {id}"))
 }
 
+/// Yalnızca AKTİF işletmeler. Seçici/yönetim ekranları (İşletmeler listesi,
+/// birleştirme hedefi, saat/atama havuzu) bunu kullanır: pasif bir işletme
+/// "Sil" denip kaldırılmış GİBİ görünmeli, yeniden atanabilir bir seçenek
+/// olarak çıkmamalı (spec §5.4). Dönem ortasında pasifleşen bir işletmeyi
+/// GİZLEMEMESİ gereken çağıranlar (rapor/dışa aktarım/tutanak/birleştirme
+/// mükerrer araması) bunun yerine `list_all`ı kullanır.
 pub async fn list(pool: &SqlitePool) -> AppResult<Vec<Company>> {
+    let sql =
+        format!("SELECT {SELECT_COLUMNS} FROM companies WHERE is_active = 1 ORDER BY name COLLATE NOCASE");
+    Ok(sqlx::query_as::<_, Company>(&sql).fetch_all(pool).await?)
+}
+
+/// `list`in süzülmemiş hâli: pasif işletmeler DE döner. Bir rapor/dışa
+/// aktarım dönem ortasında pasifleşen bir işletmeyi göstermezse tutanak
+/// bozulur; bu yüzden geçmişe bakan her çağıran bunu kullanmalı.
+pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<Company>> {
     let sql = format!("SELECT {SELECT_COLUMNS} FROM companies ORDER BY name COLLATE NOCASE");
     Ok(sqlx::query_as::<_, Company>(&sql).fetch_all(pool).await?)
 }
 
+/// `get` ASLA süzmez: geçmişteki bir kaydın adını çözmek için pasif bir
+/// işletmeye de erişilebilmesi gerekir (ör. tarihçe ekranı, birleştirme
+/// sonrası kaynak kaydın adı).
 pub async fn get(pool: &SqlitePool, id: i64) -> AppResult<Company> {
     let sql = format!("SELECT {SELECT_COLUMNS} FROM companies WHERE id = ?1");
     Ok(sqlx::query_as::<_, Company>(&sql)
@@ -218,17 +237,86 @@ pub async fn update_in(conn: &mut SqliteConnection, id: i64, input: &NewCompany)
         .ok_or_else(|| not_found(id))
 }
 
-pub async fn remove(pool: &SqlitePool, id: i64) -> AppResult<()> {
-    let affected = sqlx::query("DELETE FROM companies WHERE id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await?
-        .rows_affected();
+/// Silmenin ne yaptığını arayüze söyler: geçmişi olan bir işletme silinmez,
+/// pasife alınır (spec §5.4). Kullanıcı "sildim" sanıp veriyi kaybettiğini
+/// düşünmesin diye ikisi ayırt edilir.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyRemoval {
+    pub soft_deleted: bool,
+}
 
-    if affected == 0 {
+/// İşletmenin veritabanında iz bırakıp bırakmadığını denetler (spec §5.4):
+/// iz varsa `remove` sert silme YAPAMAZ, pasife almalıdır. Şemadaki HER
+/// `company_id` taşıyan canlı tablo denetlenir:
+/// - `student_placements`, `company_hour_periods`, `coordination_periods`
+///   (tarihçe projeksiyonları, migration 0006 — BİLEREK FK'siz: bir satır
+///   sahibinden uzun yaşayabilmeli, spec §4.1) — sert silme bunlarda
+///   sarkan `company_id` bırakırdı, teşhis edilen asıl zarar buydu.
+/// - `company_term_hours`, `assignments` (migration 0004'ün event-sourced
+///   OLMAYAN, hâlâ canlı okunan/yazılan eski çifti — bkz. db/company_hours.rs,
+///   db/assignments.rs). FK'leri `ON DELETE CASCADE` olsa da sert silme bu
+///   satırları SESSİZCE yok ederdi; kullanıcı veriyi kaybettiğini fark etmezdi.
+/// - `change_events` (yalnız işletmenin özne olduğu `company_hours`/
+///   `coordination` akışları; `subject_id` migration 0006'da BİLEREK FK'siz).
+///
+/// `students.company_id` BİLEREK DIŞARIDA bırakılır: migration 0006'dan beri
+/// donmuş, hiçbir yol onu okumaz/yazmaz (bkz. db/students.rs SELECT_COLUMNS
+/// yorumu, "artık okunmuyor"). Denetime dahil edilseydi, birleştirmeyle
+/// zaten pasifleşmiş HER işletme (`company_merge` kaynak kaydı gibi) bu
+/// donuk sütun yüzünden anlamsızca "geçmişi var" sayılırdı.
+async fn has_history(conn: &mut SqliteConnection, id: i64) -> AppResult<bool> {
+    let found: i64 = sqlx::query_scalar(
+        "SELECT
+             EXISTS(SELECT 1 FROM student_placements WHERE company_id = ?1)
+          OR EXISTS(SELECT 1 FROM company_hour_periods WHERE company_id = ?2)
+          OR EXISTS(SELECT 1 FROM coordination_periods WHERE company_id = ?3)
+          OR EXISTS(SELECT 1 FROM company_term_hours WHERE company_id = ?4)
+          OR EXISTS(SELECT 1 FROM assignments WHERE company_id = ?5)
+          OR EXISTS(
+                 SELECT 1 FROM change_events
+                 WHERE subject_id = ?6 AND stream IN ('company_hours', 'coordination')
+             )",
+    )
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(found != 0)
+}
+
+/// Geçmişi olan bir işletme yumuşak silinir (`is_active = 0`), olmayan
+/// gerçekten silinir (spec §5.4). Var olma + geçmiş denetimi + yazma TEK
+/// transaction'da yapılır: aradaki bir yarışta (ör. tam bu sırada bir
+/// yerleştirme yazılırsa) sert silmenin denetimi atlayıp iz bırakmadan
+/// geçmesini önler.
+pub async fn remove(pool: &SqlitePool, id: i64) -> AppResult<CompanyRemoval> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM companies WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if exists.is_none() {
         return Err(not_found(id));
     }
-    Ok(())
+
+    if has_history(&mut tx, id).await? {
+        set_active_in(&mut tx, id, false).await?;
+        tx.commit().await?;
+        return Ok(CompanyRemoval { soft_deleted: true });
+    }
+
+    sqlx::query("DELETE FROM companies WHERE id = ?1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(CompanyRemoval { soft_deleted: false })
 }
 
 /// Konumu yazar ve durumu günceller. `status` coğrafi kodlamadan geliyorsa
@@ -270,11 +358,15 @@ pub async fn mark_geocode_failed(pool: &SqlitePool, id: i64) -> AppResult<()> {
 }
 
 /// Normalize edilmiş ada göre mevcut kaydı arar (CSV içe aktarmada mükerrer tespiti).
+/// `list_all` kullanır, `list` DEĞİL: pasif bir işletmeyle aynı adı taşıyan
+/// bir kayıt yeniden içe aktarılırsa kullanıcı mevcut (pasif) kaydı görüp
+/// birleştirme/güncelleme kararı verebilmeli — süzülmüş liste bu eşleşmeyi
+/// gizleyip mükerrer bir aktif kayıt açılmasına yol açardı.
 /// Karşılaştırma bellekte yapılır: kayıt sayısı birkaç yüzü geçmez ve SQL tarafında
 /// Unicode-doğru küçük harf dönüşümü yoktur.
 pub async fn find_by_normalized_name(pool: &SqlitePool, name: &str) -> AppResult<Option<Company>> {
     let target = normalize_name(name);
-    let rows = list(pool).await?;
+    let rows = list_all(pool).await?;
     Ok(rows.into_iter().find(|c| normalize_name(&c.name) == target))
 }
 
@@ -291,12 +383,69 @@ pub async fn find_by_normalized_name_in(conn: &mut SqliteConnection, name: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::init_pool;
+    use crate::db::company_hours::{self, HoursInput};
+    use crate::db::{init_pool, teachers};
+    use crate::domain::models::NewTeacher;
+
+    /// Tüm geçmiş-tablosu testlerinin paylaştığı dönem; `terms` ve o dönem
+    /// için bir `opening` `change_sets` satırı migration 0006'nın göç
+    /// tohumunda bu değer için zaten açılır (bkz. 0001'in
+    /// `settings.active_term` varsayılanı).
+    const TERM: &str = "2026-2027/1";
 
     async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
         let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
         (dir, pool)
+    }
+
+    /// `student_placements`/`company_hour_periods`/`coordination_periods`nin
+    /// `source_event_id` FK'sini tatmin etmek için TEK bir `change_events`
+    /// satırı açar. Olayın içeriği `has_history` denetiminde önemli değildir
+    /// — yalnız satırın VAR OLMASI önemlidir.
+    async fn seed_change_event(conn: &mut SqliteConnection, stream: &str, subject_id: i64) -> i64 {
+        let change_set_id: i64 = sqlx::query_scalar(
+            "INSERT INTO change_sets (term, kind, effective_date, reason, actor, recorded_at, impact_json)
+             VALUES (?1, 'test', '2026-09-01', '', '', '2026-09-01T00:00:00Z', '{}') RETURNING id",
+        )
+        .bind(TERM)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+
+        sqlx::query_scalar(
+            "INSERT INTO change_events (change_set_id, stream, subject_id, term, kind, kind_version, effective_date, payload)
+             VALUES (?1, ?2, ?3, ?4, 'test_kind', 1, '2026-09-01', '{}') RETURNING id",
+        )
+        .bind(change_set_id)
+        .bind(stream)
+        .bind(subject_id)
+        .bind(TERM)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap()
+    }
+
+    async fn a_teacher(pool: &SqlitePool) -> i64 {
+        teachers::create(
+            pool,
+            &NewTeacher {
+                first_name: "Test".into(),
+                last_name: "Öğretmen".into(),
+                registry_no: String::new(),
+                field: "Elektrik-Elektronik Teknolojisi".into(),
+                branches: vec![],
+                employment_type: "tenured".into(),
+                base_hours: 20,
+                max_extra_hours: 24,
+                other_extra_hours: 0,
+                chief_type: "none".into(),
+                is_active: true,
+            },
+        )
+        .await
+        .unwrap()
+        .id
     }
 
     fn sample_input(name: &str) -> NewCompany {
@@ -338,6 +487,29 @@ mod tests {
         assert_eq!(rows[0].name, "Alfa Elektronik");
     }
 
+    /// `list` pasif işletmeyi GİZLER (yönetim/seçici ekranlar için); `list_all`
+    /// ve `get` gizlemez — `get` geçmişteki bir kaydın adını çözmek için,
+    /// `list_all` rapor/dışa aktarım için pasifi de göstermek zorunda.
+    #[tokio::test]
+    async fn list_hides_inactive_companies_but_list_all_and_get_do_not() {
+        let (_dir, pool) = test_pool().await;
+        let active = create(&pool, &sample_input("Aktif A.Ş.")).await.unwrap();
+        let inactive = create(&pool, &sample_input("Pasif A.Ş.")).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        set_active_in(&mut conn, inactive.id, false).await.unwrap();
+        drop(conn);
+
+        let visible = list(&pool).await.unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, active.id);
+
+        let all = list_all(&pool).await.unwrap();
+        assert_eq!(all.len(), 2);
+
+        assert!(get(&pool, inactive.id).await.is_ok(), "get pasif kaydı da döndürmeli");
+    }
+
     #[tokio::test]
     async fn update_changes_fields_and_keeps_created_at() {
         let (_dir, pool) = test_pool().await;
@@ -353,14 +525,176 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_deletes_record() {
+    async fn remove_hard_deletes_a_company_with_no_history() {
         let (_dir, pool) = test_pool().await;
         let created = create(&pool, &sample_input("Test İşletme A")).await.unwrap();
 
-        remove(&pool, created.id).await.unwrap();
+        let result = remove(&pool, created.id).await.unwrap();
 
+        assert!(!result.soft_deleted, "geçmişi olmayan işletme gerçekten silinmeli");
         let err = get(&pool, created.id).await.unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn remove_missing_company_returns_not_found() {
+        let (_dir, pool) = test_pool().await;
+        let err = remove(&pool, 999).await.unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    /// Geçmişi olan bir işletme SİLİNMEZ, pasife alınır (spec §5.4). Her
+    /// history tablosu için ayrı senaryo: birini atlarsak sert silme o
+    /// tabloda sarkan `company_id` üretmeye devam eder.
+    #[tokio::test]
+    async fn remove_soft_deletes_a_company_with_an_open_student_placement() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Tarihçeli A.Ş.")).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let event_id = seed_change_event(&mut conn, "placement", created.id).await;
+        sqlx::query(
+            "INSERT INTO student_placements (student_id, term, company_id, valid_from, valid_to, source_event_id)
+             VALUES (999, ?1, ?2, '2026-09-01', NULL, ?3)",
+        )
+        .bind(TERM)
+        .bind(created.id)
+        .bind(event_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        drop(conn);
+
+        let result = remove(&pool, created.id).await.unwrap();
+
+        assert!(result.soft_deleted, "açık yerleştirmesi olan işletme silinmemeli");
+        assert!(get(&pool, created.id).await.is_ok(), "kayıt veritabanında kalmalı");
+        assert!(!is_active(&pool, created.id).await.unwrap());
+
+        // Asıl teşhis edilen zarar: sarkan bir company_id ÜRETİLMEMELİ.
+        let still_points_at_the_company: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM student_placements WHERE company_id = ?1",
+        )
+        .bind(created.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(still_points_at_the_company, 1, "yerleştirme satırı hâlâ var olan bir işletmeye işaret etmeli");
+    }
+
+    #[tokio::test]
+    async fn remove_soft_deletes_a_company_with_a_company_hour_period() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Saat Geçmişli A.Ş.")).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let event_id = seed_change_event(&mut conn, "company_hours", created.id).await;
+        sqlx::query(
+            "INSERT INTO company_hour_periods
+                (company_id, term, valid_from, valid_to, awarded_hours, max_hours_snapshot, source_event_id)
+             VALUES (?1, ?2, '2026-09-01', NULL, 6, 8, ?3)",
+        )
+        .bind(created.id)
+        .bind(TERM)
+        .bind(event_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        drop(conn);
+
+        let result = remove(&pool, created.id).await.unwrap();
+
+        assert!(result.soft_deleted, "saat takdiri geçmişi olan işletme silinmemeli");
+    }
+
+    #[tokio::test]
+    async fn remove_soft_deletes_a_company_with_a_coordination_period() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Koordinasyon Geçmişli A.Ş.")).await.unwrap();
+        let teacher_id = a_teacher(&pool).await;
+
+        let mut conn = pool.acquire().await.unwrap();
+        let event_id = seed_change_event(&mut conn, "coordination", created.id).await;
+        sqlx::query(
+            "INSERT INTO coordination_periods
+                (company_id, term, valid_from, valid_to, teacher_id, visit_day, visit_hour, source_event_id)
+             VALUES (?1, ?2, '2026-09-01', NULL, ?3, 1, 3, ?4)",
+        )
+        .bind(created.id)
+        .bind(TERM)
+        .bind(teacher_id)
+        .bind(event_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        drop(conn);
+
+        let result = remove(&pool, created.id).await.unwrap();
+
+        assert!(result.soft_deleted, "koordinasyon geçmişi olan işletme silinmemeli");
+    }
+
+    #[tokio::test]
+    async fn remove_soft_deletes_a_company_with_company_term_hours() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Takdir Geçmişli A.Ş.")).await.unwrap();
+        company_hours::upsert(
+            &pool,
+            TERM,
+            &HoursInput {
+                company_id: created.id,
+                max_hours_snapshot: 8,
+                awarded_hours: 6,
+                is_honorary: false,
+                is_locked: false,
+                notes: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = remove(&pool, created.id).await.unwrap();
+
+        assert!(result.soft_deleted, "company_term_hours satırı olan işletme silinmemeli");
+        // Sert silinseydi FK ON DELETE CASCADE bu satırı SESSİZCE yok ederdi.
+        assert!(company_hours::get(&pool, created.id, TERM).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn remove_soft_deletes_a_company_with_an_assignment() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Atama Geçmişli A.Ş.")).await.unwrap();
+        let teacher_id = a_teacher(&pool).await;
+        sqlx::query(
+            "INSERT INTO assignments (teacher_id, company_id, term, visit_day, visit_hour, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 1, 3, '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')",
+        )
+        .bind(teacher_id)
+        .bind(created.id)
+        .bind(TERM)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = remove(&pool, created.id).await.unwrap();
+
+        assert!(result.soft_deleted, "atama geçmişi olan işletme silinmemeli");
+    }
+
+    #[tokio::test]
+    async fn remove_soft_deletes_a_company_with_a_change_event_but_no_projection_row() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Yalnız Olay Geçmişli A.Ş.")).await.unwrap();
+
+        // Yalnızca change_events'te iz var; hiçbir projeksiyon satırı yok
+        // (ör. olay katlanıp `valid_to` kapanmış, açık satır kalmamış olabilir).
+        let mut conn = pool.acquire().await.unwrap();
+        seed_change_event(&mut conn, "company_hours", created.id).await;
+        drop(conn);
+
+        let result = remove(&pool, created.id).await.unwrap();
+
+        assert!(result.soft_deleted, "change_events'teki geçmiş de silmeyi engellemeli");
     }
 
     #[tokio::test]

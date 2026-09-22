@@ -66,6 +66,7 @@ async fn dashboard_stats(pool: &SqlitePool) -> AppResult<DashboardStats> {
         .unwrap_or(false);
     let cap = statutory_cap(institution_type, is_metropolitan);
 
+    // `list` (süzülmüş): pano bir yönetim ekranıdır, pasif işletme sayılara katılmaz.
     let all_companies = companies::list(pool).await?;
     let all_students = students::list_by_term(pool, &term).await?;
     // Kapasite `teacher_load_periods` PROJEKSİYONUNDAN okunur (spec R5c);

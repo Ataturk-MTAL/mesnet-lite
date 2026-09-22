@@ -63,6 +63,7 @@ async fn load_board(state: &AppState) -> AppResult<HoursBoard> {
     let as_of = teaching_load::current_as_of(pool, &term).await?;
     let pool_hours = teaching_load::total_pool_hours(pool, &term, as_of).await?;
 
+    // `list` (süzülmüş): saat takdiri havuzu bir yönetim ekranıdır, pasif işletmeye saat takdir edilmez.
     let all_companies = companies::list(pool).await?;
     let rules = hour_rules::list(pool).await?;
     let student_counts: BTreeMap<i64, i64> = students::count_by_company(pool, &term)

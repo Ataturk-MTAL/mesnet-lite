@@ -1,3 +1,4 @@
+use crate::db::companies::CompanyRemoval;
 use crate::db::{companies, AppState};
 use crate::domain::models::{Company, NewCompany};
 use crate::error::{AppError, AppResult};
@@ -33,7 +34,7 @@ pub async fn update_company(
 }
 
 #[tauri::command]
-pub async fn delete_company(state: State<'_, AppState>, id: i64) -> AppResult<()> {
+pub async fn delete_company(state: State<'_, AppState>, id: i64) -> AppResult<CompanyRemoval> {
     companies::remove(&state.pool, id).await
 }
 

@@ -102,7 +102,9 @@ async fn write_assignments_sheet(
     bold: &Format,
 ) -> AppResult<()> {
     let assignment_rows = assignments::list(pool, term).await?;
-    let companies_by_id: BTreeMap<i64, _> = companies::list(pool)
+    // `list_all`: dönem ortasında pasifleşen bir işletmenin atama satırı
+    // dışa aktarımdan KAYBOLMAMALI (spec §5.4, dışa aktarım geçmişe bakar).
+    let companies_by_id: BTreeMap<i64, _> = companies::list_all(pool)
         .await?
         .into_iter()
         .map(|company| (company.id, company))
@@ -179,7 +181,9 @@ async fn write_companies_sheet(
     term: &str,
     bold: &Format,
 ) -> AppResult<()> {
-    let all_companies = companies::list(pool).await?;
+    // `list_all`: bu sayfa "dönemden bağımsız kalıcı işletme kaydı"nı dışa
+    // aktarır; pasif bir işletme bu kayıttan silinmiş gibi görünmemeli.
+    let all_companies = companies::list_all(pool).await?;
     let student_counts: BTreeMap<i64, i64> = students::count_by_company(pool, term)
         .await?
         .into_iter()
@@ -239,7 +243,9 @@ async fn write_students_sheet(
     bold: &Format,
 ) -> AppResult<()> {
     let term_students = students::list_by_term(pool, term).await?;
-    let companies_by_id: BTreeMap<i64, _> = companies::list(pool)
+    // `list_all`: öğrenci, artık pasif bir işletmeye yerleştirilmiş olabilir
+    // (dönem ortasında birleştirme/pasifleşme); ad süzülmüş listede kaybolmamalı.
+    let companies_by_id: BTreeMap<i64, _> = companies::list_all(pool)
         .await?
         .into_iter()
         .map(|company| (company.id, company))

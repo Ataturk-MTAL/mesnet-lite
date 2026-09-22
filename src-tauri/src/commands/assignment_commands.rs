@@ -151,6 +151,7 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
     };
 
     // --- İşletmeler ---
+    // `list` (süzülmüş): dağıtım havuzu bir yönetim ekranıdır, pasif işletme yeniden atanamaz.
     let all_companies = companies::list(pool).await?;
     let all_students = students::list_by_term(pool, &term).await?;
     let class_day_map = class_days::map_by_grade(pool, &term).await?;

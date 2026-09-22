@@ -50,6 +50,14 @@ export function roundTripDistanceKm(company: Company): number | null {
   return company.oneWayDistanceKm === null ? null : company.oneWayDistanceKm * 2
 }
 
+/**
+ * `delete_company` yanıtı. Geçmişi olan işletme gerçekten silinmez, pasife
+ * alınır ve listeden düşer; `softDeleted` bu iki durumu ayırt eder.
+ */
+export interface CompanyRemoval {
+  softDeleted: boolean
+}
+
 export interface Teacher {
   id: number
   firstName: string

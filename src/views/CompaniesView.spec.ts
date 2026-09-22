@@ -9,12 +9,13 @@ import Tooltip from 'openvue/tooltip'
 import Aura from '@openvue/themes/aura'
 import CompaniesView from './CompaniesView.vue'
 import { labels } from '../i18n/labels'
-import type { Company, TermWithDates } from '../types/models'
+import type { Company, CompanyRemoval, TermWithDates } from '../types/models'
 import type { SettingsMap } from '../api/settings'
 import type { GeocodeSummary } from '../api/files'
 import type { CompanyMergeSummary } from '../api/companies'
 
 const listMock = vi.fn<() => Promise<Company[]>>()
+const removeMock = vi.fn<(id: number) => Promise<CompanyRemoval>>()
 const previewMergeMock = vi.fn<(fromCompanyId: number, intoCompanyId: number) => Promise<unknown>>()
 const applyMergeMock = vi.fn<(input: unknown) => Promise<CompanyMergeSummary>>()
 vi.mock('../api/companies', () => ({
@@ -23,7 +24,7 @@ vi.mock('../api/companies', () => ({
     get: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
-    remove: vi.fn(),
+    remove: (id: number) => removeMock(id),
     setLocation: vi.fn(),
     previewMerge: (fromCompanyId: number, intoCompanyId: number) => previewMergeMock(fromCompanyId, intoCompanyId),
     applyMerge: (input: unknown) => applyMergeMock(input),
@@ -59,6 +60,13 @@ vi.mock('../composables/useTerm', () => ({
 const toastAddMock = vi.fn<(message: { severity: string; detail?: string }) => void>()
 vi.mock('openvue/usetoast', () => ({
   useToast: () => ({ add: toastAddMock }),
+}))
+
+// `<ConfirmDialog />` da App.vue'da yaşar; gerçek diyaloğu çizmek yerine
+// `require`e verilen `accept` geri çağrısını yakalayıp elle tetikleriz.
+const confirmRequireMock = vi.fn<(options: { accept?: () => void }) => void>()
+vi.mock('openvue/useconfirm', () => ({
+  useConfirm: () => ({ require: confirmRequireMock, close: vi.fn() }),
 }))
 
 // Harita Leaflet çizer; bu testin konusu değildir.
@@ -117,11 +125,13 @@ async function mountView(companies: Company[]): Promise<VueWrapper> {
 
 beforeEach(() => {
   listMock.mockReset()
+  removeMock.mockReset()
   settingsGetMock.mockReset()
   listTermsWithDatesMock.mockReset()
   previewMergeMock.mockReset()
   applyMergeMock.mockReset()
   toastAddMock.mockReset()
+  confirmRequireMock.mockReset()
   document.body.replaceChildren()
 })
 
@@ -325,6 +335,73 @@ describe('CompaniesView — işletme birleştirme', () => {
         severity: 'error',
         detail: 'apply_company_merge: Kaynağın devam eden bir ataması var',
       }),
+    )
+    expect(listMock).toHaveBeenCalledTimes(1) // yalnız ilk yükleme; hata sonrası yenilenmedi
+    wrapper.unmount()
+  })
+})
+
+describe('CompaniesView — işletme silme', () => {
+  async function clickDeleteAndAccept(): Promise<void> {
+    document.body
+      .querySelector<HTMLButtonElement>(`button[aria-label="${labels.common.delete}"]`)!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    // `<ConfirmDialog />` App.vue'da yaşadığı için burada çizilmez; onay
+    // penceresinin "Evet" düğmesine basılmışçasına `accept` geri çağrısını tetikleriz.
+    const calls = confirmRequireMock.mock.calls
+    const options = calls[calls.length - 1]?.[0]
+    options?.accept?.()
+    await flushPromises()
+  }
+
+  it('softDeleted false dönünce mevcut "silindi" mesajını gösterir', async () => {
+    // Arrange
+    removeMock.mockResolvedValue({ softDeleted: false })
+    const wrapper = await mountView([companyFixture()])
+
+    // Act
+    await clickDeleteAndAccept()
+
+    // Assert
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', summary: labels.common.deleted }),
+    )
+    expect(listMock).toHaveBeenCalledTimes(2) // ilk yükleme + silme sonrası yenileme
+    wrapper.unmount()
+  })
+
+  it('softDeleted true dönünce pasife alma mesajını gösterir, hata değildir', async () => {
+    // Arrange
+    removeMock.mockResolvedValue({ softDeleted: true })
+    const wrapper = await mountView([companyFixture()])
+
+    // Act
+    await clickDeleteAndAccept()
+
+    // Assert
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'info',
+        summary: labels.company.deletedSoftSummary,
+        detail: labels.company.deletedSoftDetail,
+      }),
+    )
+    expect(listMock).toHaveBeenCalledTimes(2) // ilk yükleme + silme sonrası yenileme
+    wrapper.unmount()
+  })
+
+  it('Rust hatası döndürünce mesajı olduğu gibi gösterir, listeyi yenilemez', async () => {
+    // Arrange
+    removeMock.mockRejectedValue(new Error('delete_company: açık yerleştirmesi var'))
+    const wrapper = await mountView([companyFixture()])
+
+    // Act
+    await clickDeleteAndAccept()
+
+    // Assert
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'delete_company: açık yerleştirmesi var' }),
     )
     expect(listMock).toHaveBeenCalledTimes(1) // yalnız ilk yükleme; hata sonrası yenilenmedi
     wrapper.unmount()

@@ -423,7 +423,10 @@ mod tests {
         let result = apply(&pool, &content, &BTreeMap::new()).await;
 
         assert!(matches!(result, Err(AppError::Validation(_))), "beklenmeyen sonuç: {result:?}");
-        assert_eq!(companies::list(&pool).await.unwrap().len(), 1, "yalnız önceden var olan pasif işletme kalmalı");
+        // `list_all`: hayatta kalan tek kayıt PASİF (`list` artık onu süzerdi;
+        // burada sınanan geri alma davranışı, işletmenin aktiflik durumu
+        // DEĞİL — süzülmemiş sayım kullanılmalı).
+        assert_eq!(companies::list_all(&pool).await.unwrap().len(), 1, "yalnız önceden var olan pasif işletme kalmalı");
         assert_eq!(students::list(&pool).await.unwrap().len(), 0, "hiçbir öğrenci kalıcı olmamalı");
     }
 

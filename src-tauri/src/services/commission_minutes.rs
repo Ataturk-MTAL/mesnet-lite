@@ -265,7 +265,10 @@ struct Source {
 }
 
 async fn load_source(pool: &SqlitePool, term: &str) -> AppResult<Source> {
-    let mut companies = companies::list(pool).await?;
+    // `list_all`: tutanak resmî bir belgedir, dönem ortasında pasifleşen bir
+    // işletme (`ordered_companies` zaten yalnız o dönem öğrencisi/ataması
+    // olanları seçiyor) tutanaktan sessizce düşmemeli.
+    let mut companies = companies::list_all(pool).await?;
     companies.sort_by_cached_key(|c| (turkish_sort_key(&c.name), c.id));
 
     let teachers = teachers::list(pool)

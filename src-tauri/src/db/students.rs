@@ -679,6 +679,35 @@ mod tests {
         assert!(get(&pool, student_id).await.is_ok(), "öğrenci kaydı silinmemeli");
     }
 
+    /// Teşhis edilen asıl zarar: açık bir yerleştirmesi olan işletme
+    /// silinince (artık pasifleştirilince, spec §5.4) `student_placements`
+    /// satırı sarkan bir `company_id` bırakmamalı — hâlâ VAR OLAN bir
+    /// işletmeye işaret etmeli. `companies::get` bu id ile başarıyla dönerse
+    /// kanıtlanmış olur (sert silinseydi `NotFound` dönerdi).
+    #[tokio::test]
+    async fn deleting_a_company_with_a_placement_leaves_the_placement_pointing_at_a_real_company() {
+        let (_dir, pool) = test_pool().await;
+        let company_id = a_company(&pool, "Test İşletme A").await;
+        create_placed_student(&pool, "Ahmet", "Yılmaz", "12/C", Some(company_id)).await;
+
+        let result = companies::remove(&pool, company_id).await.unwrap();
+        assert!(result.soft_deleted, "açık yerleştirmesi olan işletme pasife alınmalı, silinmemeli");
+
+        let placement_company_id: i64 = sqlx::query_scalar(
+            "SELECT company_id FROM student_placements WHERE student_id = (
+                 SELECT id FROM students WHERE first_name = 'Ahmet' AND last_name = 'Yılmaz'
+             ) AND valid_to IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(placement_company_id, company_id);
+        assert!(
+            companies::get(&pool, placement_company_id).await.is_ok(),
+            "yerleştirmenin işaret ettiği işletme hâlâ var olmalı (sarkan kimlik değil)"
+        );
+    }
+
     #[tokio::test]
     async fn create_in_writes_through_the_given_connection() {
         let (_dir, pool) = test_pool().await;

@@ -138,7 +138,9 @@ async fn load_context(pool: &SqlitePool, term: &str) -> AppResult<ReportContext>
         .map(|t| (t.id, t))
         .collect();
 
-    let companies = companies::list(pool)
+    // `list_all`: rapor geçmişe bakar; dönem ortasında pasifleşen bir
+    // işletmenin ataması/koordinasyonu raporda görünmez olmamalı.
+    let companies = companies::list_all(pool)
         .await?
         .into_iter()
         .map(|c| (c.id, c))

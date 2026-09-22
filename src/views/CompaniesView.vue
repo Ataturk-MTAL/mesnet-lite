@@ -277,8 +277,17 @@ function confirmRemove(company: Company): void {
     acceptProps: { severity: 'danger' },
     accept: async () => {
       try {
-        await companiesApi.remove(company.id)
-        toast.add({ severity: 'success', summary: labels.common.deleted, life: 2500 })
+        const removal = await companiesApi.remove(company.id)
+        if (removal.softDeleted) {
+          toast.add({
+            severity: 'info',
+            summary: labels.company.deletedSoftSummary,
+            detail: labels.company.deletedSoftDetail,
+            life: 6000,
+          })
+        } else {
+          toast.add({ severity: 'success', summary: labels.common.deleted, life: 2500 })
+        }
         await load()
       } catch (error: unknown) {
         showError(error)

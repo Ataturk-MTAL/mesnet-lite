@@ -66,6 +66,8 @@ export const labels = {
     locationRequired: 'Önce haritadan bir konum seçin.',
     termNote: 'İşletmeler tüm eğitim-öğretim yıllarında ortaktır; dönem değişince silinmez.',
     merge: 'Birleştir',
+    deletedSoftSummary: 'Pasife Alındı',
+    deletedSoftDetail: 'İşletme kayıtlarda geçtiği için silinmedi; pasife alındı ve listeden kaldırıldı.',
   },
   geocodeStatus: {
     pending: 'Bekliyor',
