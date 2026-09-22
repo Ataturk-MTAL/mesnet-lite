@@ -426,6 +426,21 @@ export const labels = {
       newPinConfirm: 'Yeni PIN (Tekrar)',
       empty: 'Kayıtlı kullanıcı yok.',
     },
+    backup: {
+      title: 'Yedekleme',
+      description: 'Uygulama her açılışta günlük otomatik yedek alır; son 14 yedek saklanır.',
+      status: (date: string, count: number) => `Son otomatik yedek: ${date} — ${count} yedek`,
+      noBackupYet: 'Henüz otomatik yedek yok.',
+      createBackup: 'Yedek Al',
+      createBackupSaved: 'Yedek kaydedildi',
+      defaultFileName: (date: string) => `mesnet-yedek-${date}.db`,
+      fileFilterName: 'Veritabanı',
+      openFolder: 'Yedek Klasörünü Aç',
+      restore: 'Yedekten Geri Yükle',
+      restoreConfirmHeader: 'Yedekten Geri Yükle',
+      restoreConfirmMessage:
+        'Mevcut tüm veriler seçilen yedekle değiştirilecek. Değiştirmeden önce mevcut veri ayrıca yedeklenir. Uygulama yeniden başlayacak. Devam edilsin mi?',
+    },
   },
   termManagement: {
     title: 'Dönem Yönetimi',

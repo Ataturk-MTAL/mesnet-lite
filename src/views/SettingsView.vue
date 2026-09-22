@@ -153,6 +153,41 @@
       </template>
     </Card>
 
+    <Card>
+      <template #title>{{ labels.settings.backup.title }}</template>
+      <template #content>
+        <p class="backup-description">{{ labels.settings.backup.description }}</p>
+        <p class="backup-status">{{ backupStatusText }}</p>
+
+        <div class="backup-actions">
+          <Button
+            :label="labels.settings.backup.createBackup"
+            icon="pi pi-save"
+            :loading="isCreatingBackup"
+            :disabled="isCreatingBackup || isRestoringBackup"
+            @click="createBackup"
+          />
+          <Button
+            :label="labels.settings.backup.openFolder"
+            icon="pi pi-folder-open"
+            severity="secondary"
+            outlined
+            :disabled="isCreatingBackup || isRestoringBackup"
+            @click="openBackupFolder"
+          />
+          <Button
+            :label="labels.settings.backup.restore"
+            icon="pi pi-history"
+            severity="danger"
+            outlined
+            :loading="isRestoringBackup"
+            :disabled="isCreatingBackup || isRestoringBackup"
+            @click="restoreBackup"
+          />
+        </div>
+      </template>
+    </Card>
+
     <UserCreateDialog v-model:visible="isCreateOpen" :saving="isCreatingUser" @save="handleCreateUser" />
     <UserRenameDialog
       v-model:visible="isRenameOpen"
@@ -167,6 +202,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useToast } from 'openvue/usetoast'
+import { useConfirm } from 'openvue/useconfirm'
+import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog'
+import { openPath } from '@tauri-apps/plugin-opener'
 import LocationPickerMap from '../components/map/LocationPickerMap.vue'
 import UserCreateDialog from '../components/user/UserCreateDialog.vue'
 import UserRenameDialog from '../components/user/UserRenameDialog.vue'
@@ -174,11 +212,14 @@ import UserPinDialog from '../components/user/UserPinDialog.vue'
 import { settingsApi } from '../api/settings'
 import type { SettingsMap } from '../api/settings'
 import { usersApi } from '../api/users'
+import { backupApi } from '../api/backup'
 import { useAuth } from '../composables/useAuth'
 import { labels } from '../i18n/labels'
-import type { LatLng, User } from '../types/models'
+import { dateToIso, isoToDate } from '../utils/isoDate'
+import type { BackupStatus, LatLng, User } from '../types/models'
 
 const toast = useToast()
+const confirm = useConfirm()
 const { currentUser, refreshCurrentUser } = useAuth()
 
 /** Günlük ders saati sayısının alt sınırı. Izgara ders numarası artık her zaman 1'den başlar. */
@@ -423,9 +464,107 @@ async function save(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Yedekleme — uygulama her açılışta günlük otomatik yedek alır. Bu bölüm
+// yalnızca durumu gösterir ve elle yedek alma/geri yükleme akışlarını
+// tetikler; zamanlama ve dosya işlemleri Rust tarafındadır.
+// ---------------------------------------------------------------------------
+
+const backupStatus = ref<BackupStatus | null>(null)
+const isCreatingBackup = ref(false)
+const isRestoringBackup = ref(false)
+
+const backupStatusText = computed<string>(() => {
+  const status = backupStatus.value
+  if (!status || !status.lastBackupAt) return labels.settings.backup.noBackupYet
+  const parsed = isoToDate(status.lastBackupAt)
+  const formatted = parsed ? parsed.toLocaleDateString('tr-TR') : status.lastBackupAt
+  return labels.settings.backup.status(formatted, status.backupCount)
+})
+
+async function loadBackupStatus(): Promise<void> {
+  try {
+    backupStatus.value = await backupApi.status()
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
+async function createBackup(): Promise<void> {
+  const today = dateToIso(new Date()) ?? ''
+  let target: string | null
+  try {
+    target = await saveFileDialog({
+      defaultPath: labels.settings.backup.defaultFileName(today),
+      filters: [{ name: labels.settings.backup.fileFilterName, extensions: ['db'] }],
+    })
+  } catch (error: unknown) {
+    showError(error)
+    return
+  }
+  if (!target) return
+
+  isCreatingBackup.value = true
+  try {
+    await backupApi.create(target)
+    toast.add({ severity: 'success', summary: labels.settings.backup.createBackupSaved, life: 2500 })
+    await loadBackupStatus()
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isCreatingBackup.value = false
+  }
+}
+
+async function openBackupFolder(): Promise<void> {
+  if (!backupStatus.value) return
+  try {
+    await openPath(backupStatus.value.backupDir)
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
+/** Onaylanan geri yükleme isteğini yürütür; başarıda uygulama kendiliğinden yeniden başlar. */
+async function performRestore(path: string): Promise<void> {
+  isRestoringBackup.value = true
+  try {
+    await backupApi.restore(path)
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isRestoringBackup.value = false
+  }
+}
+
+async function restoreBackup(): Promise<void> {
+  let target: string | string[] | null
+  try {
+    target = await openFileDialog({
+      defaultPath: backupStatus.value?.backupDir,
+      filters: [{ name: labels.settings.backup.fileFilterName, extensions: ['db'] }],
+    })
+  } catch (error: unknown) {
+    showError(error)
+    return
+  }
+  if (!target || Array.isArray(target)) return
+
+  const path = target
+  confirm.require({
+    message: labels.settings.backup.restoreConfirmMessage,
+    header: labels.settings.backup.restoreConfirmHeader,
+    acceptLabel: labels.common.yes,
+    rejectLabel: labels.common.no,
+    acceptProps: { severity: 'danger' },
+    accept: () => performRestore(path),
+  })
+}
+
 onMounted(async () => {
   await load()
   await loadUsers()
+  await loadBackupStatus()
 })
 </script>
 
@@ -443,4 +582,7 @@ label { font-size: 0.875rem; font-weight: 500; }
 .actions { display: flex; justify-content: flex-end; }
 .users-header { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
 .row-actions { display: flex; gap: 0.25rem; }
+.backup-description { margin: 0 0 0.5rem; color: var(--p-text-muted-color); font-size: 0.875rem; }
+.backup-status { margin: 0 0 1rem; font-weight: 500; }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 </style>

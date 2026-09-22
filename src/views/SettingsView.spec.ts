@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
+import ConfirmationService from 'openvue/confirmationservice'
 import Aura from '@openvue/themes/aura'
 import InputNumber from 'openvue/inputnumber'
 import SettingsView from './SettingsView.vue'
@@ -9,7 +10,7 @@ import { labels } from '../i18n/labels'
 import { currentUser, signIn, signOut } from '../composables/useAuth'
 import { usersApi } from '../api/users'
 import type { SettingsMap } from '../api/settings'
-import type { User } from '../types/models'
+import type { BackupStatus, User } from '../types/models'
 
 const getMock = vi.fn<() => Promise<SettingsMap>>()
 const saveMock = vi.fn<(entries: SettingsMap) => Promise<SettingsMap>>()
@@ -18,6 +19,43 @@ vi.mock('../api/settings', () => ({
     get: () => getMock(),
     save: (entries: SettingsMap) => saveMock(entries),
   },
+}))
+
+// Yedekleme kartı — Tauri komutları ve dosya diyalogları ayrı ayrı casuslanır.
+const backupStatusMock = vi.fn<() => Promise<BackupStatus>>()
+const createBackupMock = vi.fn<(path: string) => Promise<void>>()
+const restoreBackupMock = vi.fn<(path: string) => Promise<void>>()
+vi.mock('../api/backup', () => ({
+  backupApi: {
+    status: () => backupStatusMock(),
+    create: (path: string) => createBackupMock(path),
+    restore: (path: string) => restoreBackupMock(path),
+  },
+}))
+
+const saveDialogMock = vi.fn<(options?: unknown) => Promise<string | null>>()
+const openDialogMock = vi.fn<(options?: unknown) => Promise<string | string[] | null>>()
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  save: (options?: unknown) => saveDialogMock(options),
+  open: (options?: unknown) => openDialogMock(options),
+}))
+
+const openPathMock = vi.fn<(path: string) => Promise<void>>()
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openPath: (path: string) => openPathMock(path),
+}))
+
+// `<Toast />` ve `<ConfirmDialog />` App.vue'da yaşar; bu ekran yalnız
+// `useToast`/`useConfirm` çağırır. Gerçek diyaloğu çizmek yerine `require`e
+// verilen `accept` geri çağrısını yakalayıp elle tetikleriz (bkz. CompaniesView.spec.ts).
+const toastAddMock = vi.fn<(message: { severity: string; summary?: string; detail?: string }) => void>()
+vi.mock('openvue/usetoast', () => ({
+  useToast: () => ({ add: toastAddMock }),
+}))
+
+const confirmRequireMock = vi.fn<(options: { accept?: () => void }) => void>()
+vi.mock('openvue/useconfirm', () => ({
+  useConfirm: () => ({ require: confirmRequireMock, close: vi.fn() }),
 }))
 
 // PIN'li kullanıcılar; Ayarlar ekranındaki "Kullanıcılar" bölümü bunları listeler.
@@ -44,11 +82,21 @@ const LocationPickerMapStub = { template: '<div />' }
 function mountView() {
   return mount(SettingsView, {
     global: {
-      plugins: [[OpenVue, { theme: { preset: Aura, options: { darkModeSelector: '.app-dark' } } }], ToastService],
+      plugins: [
+        [OpenVue, { theme: { preset: Aura, options: { darkModeSelector: '.app-dark' } } }],
+        ToastService,
+        ConfirmationService,
+      ],
       stubs: { LocationPickerMap: LocationPickerMapStub },
     },
     attachTo: document.body,
   })
+}
+
+const defaultBackupStatus: BackupStatus = {
+  backupDir: '/tmp/mesnet-backups',
+  lastBackupAt: null,
+  backupCount: 0,
 }
 
 const baseSettings: SettingsMap = {
@@ -74,7 +122,16 @@ beforeEach(() => {
   renameUserMock.mockReset()
   setUserPinMock.mockReset()
   setUserActiveMock.mockReset()
+  backupStatusMock.mockReset()
+  createBackupMock.mockReset()
+  restoreBackupMock.mockReset()
+  saveDialogMock.mockReset()
+  openDialogMock.mockReset()
+  openPathMock.mockReset()
+  toastAddMock.mockReset()
+  confirmRequireMock.mockReset()
   listUsersMock.mockResolvedValue([])
+  backupStatusMock.mockResolvedValue(defaultBackupStatus)
   document.body.innerHTML = ''
   // `useAuth` modül düzeyinde tekil durum taşır; testler arasında oturum sızmasın.
   signOut()
@@ -492,6 +549,173 @@ describe('SettingsView — oturumdaki kullanıcı kendini yeniden adlandırınca
     expect(currentUser.value?.name).toBe('Yeni Ad')
     expect(wrapper.text()).toContain('Yeni Ad')
 
+    wrapper.unmount()
+  })
+})
+
+function backupButton(wrapper: ReturnType<typeof mountView>, label: string) {
+  return wrapper.findAll('button').find((button) => button.text() === label)!
+}
+
+describe('SettingsView — yedekleme kartı', () => {
+  const statusWithBackups: BackupStatus = {
+    backupDir: '/Users/test/MESNET/backups',
+    lastBackupAt: '2026-09-20',
+    backupCount: 5,
+  }
+
+  it('shows the last automatic backup date and count', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    backupStatusMock.mockResolvedValue(statusWithBackups)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    // `isoToDate` yerel tarihten kurulur; 'tr-TR' biçimi GG.AA.YYYY döner.
+    expect(wrapper.text()).toContain('20.09.2026')
+    expect(wrapper.text()).toContain('5')
+
+    wrapper.unmount()
+  })
+
+  it('shows the empty-state message when there is no automatic backup yet', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    backupStatusMock.mockResolvedValue({ ...defaultBackupStatus, lastBackupAt: null })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(labels.settings.backup.noBackupYet)
+
+    wrapper.unmount()
+  })
+
+  it('creates a backup at the path returned by the save dialog', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    backupStatusMock.mockResolvedValue(statusWithBackups)
+    saveDialogMock.mockResolvedValue('/Users/test/chosen.db')
+    createBackupMock.mockResolvedValue(undefined)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await backupButton(wrapper, labels.settings.backup.createBackup).trigger('click')
+    await flushPromises()
+
+    expect(createBackupMock).toHaveBeenCalledWith('/Users/test/chosen.db')
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', summary: labels.settings.backup.createBackupSaved }),
+    )
+    wrapper.unmount()
+  })
+
+  it('does nothing when the save dialog is cancelled', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    backupStatusMock.mockResolvedValue(statusWithBackups)
+    saveDialogMock.mockResolvedValue(null)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await backupButton(wrapper, labels.settings.backup.createBackup).trigger('click')
+    await flushPromises()
+
+    expect(createBackupMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('shows the real backend error when create_backup fails', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    backupStatusMock.mockResolvedValue(statusWithBackups)
+    saveDialogMock.mockResolvedValue('/Users/test/chosen.db')
+    createBackupMock.mockRejectedValue(new Error('create_backup: disk dolu'))
+
+    const wrapper = mountView()
+    await flushPromises()
+    await backupButton(wrapper, labels.settings.backup.createBackup).trigger('click')
+    await flushPromises()
+
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'create_backup: disk dolu' }),
+    )
+    wrapper.unmount()
+  })
+
+  it('opens the backup folder through the opener plugin', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    backupStatusMock.mockResolvedValue(statusWithBackups)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await backupButton(wrapper, labels.settings.backup.openFolder).trigger('click')
+    await flushPromises()
+
+    expect(openPathMock).toHaveBeenCalledWith(statusWithBackups.backupDir)
+    wrapper.unmount()
+  })
+
+  it('restores from the selected file once the confirmation is accepted', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    backupStatusMock.mockResolvedValue(statusWithBackups)
+    openDialogMock.mockResolvedValue('/Users/test/chosen-backup.db')
+    restoreBackupMock.mockResolvedValue(undefined)
+    confirmRequireMock.mockImplementation((options) => options.accept?.())
+
+    const wrapper = mountView()
+    await flushPromises()
+    await backupButton(wrapper, labels.settings.backup.restore).trigger('click')
+    await flushPromises()
+
+    expect(confirmRequireMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: labels.settings.backup.restoreConfirmMessage }),
+    )
+    expect(restoreBackupMock).toHaveBeenCalledWith('/Users/test/chosen-backup.db')
+    wrapper.unmount()
+  })
+
+  it('does not restore when the confirmation is rejected', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    backupStatusMock.mockResolvedValue(statusWithBackups)
+    openDialogMock.mockResolvedValue('/Users/test/chosen-backup.db')
+    confirmRequireMock.mockImplementation(() => {})
+
+    const wrapper = mountView()
+    await flushPromises()
+    await backupButton(wrapper, labels.settings.backup.restore).trigger('click')
+    await flushPromises()
+
+    expect(restoreBackupMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('does not even open the confirmation when the open dialog is cancelled', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    backupStatusMock.mockResolvedValue(statusWithBackups)
+    openDialogMock.mockResolvedValue(null)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await backupButton(wrapper, labels.settings.backup.restore).trigger('click')
+    await flushPromises()
+
+    expect(confirmRequireMock).not.toHaveBeenCalled()
+    expect(restoreBackupMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('shows the real backend error when restore_backup fails', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    backupStatusMock.mockResolvedValue(statusWithBackups)
+    openDialogMock.mockResolvedValue('/Users/test/chosen-backup.db')
+    restoreBackupMock.mockRejectedValue(new Error('restore_backup: dosya bozuk'))
+    confirmRequireMock.mockImplementation((options) => options.accept?.())
+
+    const wrapper = mountView()
+    await flushPromises()
+    await backupButton(wrapper, labels.settings.backup.restore).trigger('click')
+    await flushPromises()
+
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'restore_backup: dosya bozuk' }),
+    )
     wrapper.unmount()
   })
 })

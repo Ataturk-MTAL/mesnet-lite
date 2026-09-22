@@ -109,6 +109,19 @@ export interface User {
   isActive: boolean
 }
 
+// ---------------------------------------------------------------------------
+// Yedekleme — uygulama her açılışta günlük otomatik yedek alır; Ayarlar
+// ekranındaki "Yedekleme" kartı bu durumu gösterir ve elle yedek/geri yükleme
+// akışlarını tetikler.
+// ---------------------------------------------------------------------------
+
+/** `backup_status` komutunun döndürdüğü durum; `lastBackupAt` 'YYYY-MM-DD' biçiminde. */
+export interface BackupStatus {
+  backupDir: string
+  lastBackupAt: string | null
+  backupCount: number
+}
+
 export interface NewStudent {
   firstName: string
   lastName: string

@@ -1,0 +1,23 @@
+{
+  "has_any_user": true,
+  "list_users": [
+    { "id": 1, "name": "Hakan GÜLEN", "isActive": true }
+  ],
+  "get_settings": {
+    "school_name": "Atatürk Mesleki ve Teknik Anadolu Lisesi",
+    "principal_name": "Ali Veli",
+    "field_name": "Elektrik-Elektronik Teknolojisi",
+    "active_term": "2026-2027/1",
+    "institution_type": "other",
+    "is_metropolitan_district": "true",
+    "max_daily_lessons": "9",
+    "school_latitude": "",
+    "school_longitude": ""
+  },
+  "backup_status": {
+    "backupDir": "/Users/ogretmen/Library/Application Support/MESNET.Lite/backups",
+    "lastBackupAt": "2026-09-20",
+    "backupCount": 5
+  },
+  "plugin:dialog|open": "/Users/ogretmen/Downloads/mesnet-yedek-2026-09-15.db"
+}
