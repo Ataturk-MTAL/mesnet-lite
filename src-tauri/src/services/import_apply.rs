@@ -1,10 +1,11 @@
-use crate::db::{companies, settings, students};
+use crate::db::{companies, settings, students, terms};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewStudentInput};
 use crate::domain::models::{NewCompany, NewStudent};
 use crate::domain::terms::today_local;
 use crate::error::{AppError, AppResult};
 use crate::services::change_service::{self, ChangeMode, ChangeOutcome};
 use crate::services::csv_import::{parse_jotform_csv, ImportRow};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::BTreeMap;
@@ -157,7 +158,19 @@ pub async fn apply(
     content: &str,
     policies: &BTreeMap<String, DuplicatePolicy>,
 ) -> AppResult<ImportSummary> {
-    let today = today_local();
+    apply_with_today(pool, content, policies, today_local()).await
+}
+
+/// `apply`in `today`yi dışarıdan alan hâli. Takvime bağımlı olan tek şey
+/// `today_local()` çağrısıdır; onu dışarıya çıkarmak testleri (planlama
+/// evresi, dönem içi) sabit tarihlerle deterministik kılar — `apply`in
+/// kendisi hâlâ gerçek günü kullanır.
+async fn apply_with_today(
+    pool: &SqlitePool,
+    content: &str,
+    policies: &BTreeMap<String, DuplicatePolicy>,
+    today: NaiveDate,
+) -> AppResult<ImportSummary> {
     // İçe aktarılan öğrenciler aktif eğitim-öğretim yılına damgalanır.
     let term = settings::get_active_term(pool).await?;
     let parsed = parse_jotform_csv(content)?;
@@ -170,6 +183,16 @@ pub async fn apply(
 
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
+    // Yürürlük tarihi MADDE 5/1-ç'ye göre çözülür: dönem henüz başlamadıysa
+    // (`is_planning`) tarih zorunlu değildir, `None` bırakılır ve kapı
+    // (`TermDates::resolve_effective_date`) dönem başlangıcını seçer. Sabit
+    // `Some(today)` vermek hazırlık evresinde (bugün dönem başından önceyse)
+    // kapının `require_within_term`ini her öğrenci için OutOfTerm ile
+    // düşürüp TÜM içe aktarmayı geri alıyordu — bu iş bölümü teşhisin
+    // kanıtladığı asıl hata.
+    let term_dates = terms::get_in(&mut tx, &term).await?;
+    let effective_date = if term_dates.is_planning(today) { None } else { Some(today) };
+
     for (key, (company, group_students)) in grouped {
         let existing = companies::find_by_normalized_name_in(&mut tx, &company.name).await?;
         let policy = policies.get(&key).copied().unwrap_or_default();
@@ -181,11 +204,13 @@ pub async fn apply(
                 continue;
             }
             (Some(found), DuplicatePolicy::Update) => {
+                reactivate_if_inactive(&mut tx, found.id).await?;
                 companies::update_in(&mut tx, found.id, &company).await?;
                 summary.companies_updated += 1;
                 found.id
             }
             (Some(found), DuplicatePolicy::Merge) => {
+                reactivate_if_inactive(&mut tx, found.id).await?;
                 summary.companies_matched += 1;
                 found.id
             }
@@ -207,15 +232,9 @@ pub async fn apply(
                 continue;
             }
 
-            // Yürürlük tarihi BUGÜNdür: içe aktarma "şimdi" olan bir eylemdir.
-            // `None` bırakılırsa dönem başladıktan sonra (MADDE 5/1-ç) kapı
-            // her öğrenciyi EffectiveDateRequired ile reddeder — CSV içe
-            // aktarımının kendi bir tarih alanı yoktur, o yüzden `today`
-            // burada açıkça verilir (`resolve_effective_date` `today`nin
-            // dönem içinde olduğunu zaten doğrular).
             let req = ChangeRequest {
                 term: term.clone(),
-                effective_date: Some(today),
+                effective_date,
                 document_date: None,
                 reason: IMPORT_REASON.to_string(),
                 command: ChangeCommand::CreateStudent {
@@ -239,6 +258,18 @@ pub async fn apply(
 
     tx.commit().await?;
     Ok(summary)
+}
+
+/// Eşleşen işletme pasifse (daha önce `companies::remove` ile yumuşak
+/// silinmiş) Merge/Update politikasıyla yeniden aktifleştirilir: aksi hâlde
+/// `require_active_company` (spec §5.4) yeni öğrenci atamasını reddedip TÜM
+/// içe aktarmayı geri alırdı (teşhis edilen üçüncü hata). Skip politikası
+/// bu fonksiyona hiç uğramaz — pasif kayıt öylece kalır.
+async fn reactivate_if_inactive(conn: &mut sqlx::SqliteConnection, company_id: i64) -> AppResult<()> {
+    if !companies::is_active_in(conn, company_id).await? {
+        companies::set_active_in(conn, company_id, true).await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -268,6 +299,10 @@ mod tests {
             "\"Sep 11, 2026\",{student_first},{student_last},\"{company}\",Yetkili,Soyad,\
              \"(500) 000-0000\",\"{LOCATOR}\",,\"Elektronik Haberleşme\",,{grade}\n"
         )
+    }
+
+    fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
     }
 
     /// Aynı işletmeye giden iki öğrenci tek işletme kaydına inmeli.
@@ -350,13 +385,18 @@ mod tests {
     /// Teşhis'in kanıtı: içe aktarılan öğrenci kapıdan (`CreateStudent{ companyId }`)
     /// geçer, bu yüzden hem `student_placements`te açık bir satırı hem de
     /// `change_events`te bir `student_placed` olayı vardır — ham `students::create`
-    /// bunların HİÇBİRİNİ üretmezdi.
+    /// bunların HİÇBİRİNİ üretmezdi. Sabit bir `today` kullanılır
+    /// (`apply_with_today`): `apply`in `today_local()`'e bağlı hâli, çalışma
+    /// günü dönem dışına düşerse (ör. dönem bitince) bu testi takvime bağımlı
+    /// kılıp kırardı — burada sınanan kapı kablolaması, hangi günün "bugün"
+    /// olduğundan bağımsızdır.
     #[tokio::test]
     async fn apply_places_the_imported_student_through_the_gate() {
         let (_dir, pool) = test_pool().await;
         let content = csv(&row("Ahmet", "Yilmaz", "TEST A", "12/C"));
+        let today = ymd(2026, 10, 15); // dönem içinde (2026-09-01–2027-01-31) sabit bir gün
 
-        apply(&pool, &content, &BTreeMap::new()).await.unwrap();
+        apply_with_today(&pool, &content, &BTreeMap::new(), today).await.unwrap();
 
         let term = settings::get_active_term(&pool).await.unwrap();
         let student = students::list_by_term(&pool, &term).await.unwrap().into_iter().next().unwrap();
@@ -385,13 +425,87 @@ mod tests {
     }
 
     /// Bir öğrenci kapıdan reddedilirse (`Rejected`) TÜM içe aktarma geri
-    /// alınır: önceki gruplarda zaten oluşturulmuş ya da eşleşmiş kayıtlar
-    /// dahil hiçbir şey kalıcı olmaz (brief madde 3).
+    /// alınır: önceki gruplarda zaten oluşturulmuş kayıtlar dahil hiçbir şey
+    /// kalıcı olmaz (brief madde 3). Reddi tetiklemek için pasif işletme ARTIK
+    /// kullanılmaz — üçüncü hatanın düzeltmesi (`reactivate_if_inactive`)
+    /// Merge/Update politikasıyla eşleşen pasif işletmeyi yazmadan önce
+    /// yeniden aktifleştirir. Onun yerine dönem BİTTİKTEN ÇOK SONRAKİ bir
+    /// `today` verilir: kapı ilk öğrenciyi `OutOfTerm` ile reddeder.
     #[tokio::test]
     async fn apply_rolls_back_everything_when_the_gate_rejects_a_student() {
         let (_dir, pool) = test_pool().await;
-        // "TEST A" pasif olarak önceden var: o gruptaki öğrenci reddedilecek
-        // (pasif işletme yeni atama hedefi olamaz).
+        // İçe aktarımla ilgisiz, önceden var olan bir kayıt: geri alma yalnız
+        // BU çağrının yazdıklarını silmeli, öncekini DEĞİL.
+        companies::create(
+            &pool,
+            &NewCompany {
+                name: "Değişmeyen A.Ş.".into(),
+                contact_first_name: String::new(),
+                contact_last_name: String::new(),
+                phone: String::new(),
+                email: String::new(),
+                address_text: "Eski adres".into(),
+                latitude: None,
+                longitude: None,
+                one_way_distance_km: Some(1.0),
+                district: String::new(),
+                notes: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let content = csv(&format!(
+            "{}{}",
+            row("Ahmet", "Yilmaz", "TEST A", "12/C"),
+            row("Ayse", "Demir", "TEST B", "12/D"),
+        ));
+        // Dönem ("2026-2027/1") 2027-01-31'de bitiyor; bu tarih dönem
+        // bittikten çok sonra: kapı ilk öğrenciyi OutOfTerm ile reddeder.
+        let today = ymd(2027, 6, 15);
+
+        let result = apply_with_today(&pool, &content, &BTreeMap::new(), today).await;
+
+        assert!(matches!(result, Err(AppError::Validation(_))), "beklenmeyen sonuç: {result:?}");
+        assert_eq!(companies::list_all(&pool).await.unwrap().len(), 1, "yalnız önceden var olan işletme kalmalı");
+        assert_eq!(students::list(&pool).await.unwrap().len(), 0, "hiçbir öğrenci kalıcı olmamalı");
+    }
+
+    /// MADDE 5/1-ç: dönem henüz başlamadıysa (`is_planning`) yürürlük tarihi
+    /// zorunlu değildir. İçe aktarma bunu ARTIK doğru kullanır: `today`
+    /// planlama evresindeyse `effective_date: None` verilir, kapı dönem
+    /// başlangıcını seçer. Önceden sabit `Some(today)` veriliyordu; bu
+    /// planlama evresinde (`today < term.start`) her öğrenciyi `OutOfTerm`
+    /// ile reddedip TÜM içe aktarmayı geri alıyordu (teşhis edilen birinci
+    /// hata).
+    #[tokio::test]
+    async fn apply_during_planning_places_student_at_term_start() {
+        let (_dir, pool) = test_pool().await;
+        let content = csv(&row("Ahmet", "Yilmaz", "TEST A", "12/C"));
+        let today = ymd(2026, 8, 15); // dönem başlangıcından (2026-09-01) önce
+
+        let summary = apply_with_today(&pool, &content, &BTreeMap::new(), today).await.unwrap();
+
+        assert_eq!(summary.students_created, 1);
+
+        let term = settings::get_active_term(&pool).await.unwrap();
+        let valid_from: NaiveDate = sqlx::query_scalar(
+            "SELECT valid_from FROM student_placements WHERE term = ?1 AND valid_to IS NULL",
+        )
+        .bind(&term)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(valid_from, ymd(2026, 9, 1), "yerleştirme dönem başlangıcına damgalanmalı");
+    }
+
+    /// Üçüncü hata: eşleşen işletme pasifse (ör. `companies::remove` ile
+    /// yumuşak silinmişse) Merge politikası onu yazmadan önce yeniden
+    /// aktifleştirmeli — aksi hâlde kapı (`require_active_company`) yeni
+    /// atamayı reddedip TÜM içe aktarmayı geri alırdı.
+    #[tokio::test]
+    async fn apply_reactivates_an_inactive_matched_company_on_merge() {
+        let (_dir, pool) = test_pool().await;
         let inactive = companies::create(
             &pool,
             &NewCompany {
@@ -414,20 +528,12 @@ mod tests {
         companies::set_active_in(&mut conn, inactive.id, false).await.unwrap();
         drop(conn);
 
-        let content = csv(&format!(
-            "{}{}",
-            row("Ahmet", "Yilmaz", "TEST A", "12/C"),
-            row("Ayse", "Demir", "TEST B", "12/D"),
-        ));
+        let content = csv(&row("Ahmet", "Yilmaz", "TEST A", "12/C"));
+        let summary = apply(&pool, &content, &BTreeMap::new()).await.unwrap();
 
-        let result = apply(&pool, &content, &BTreeMap::new()).await;
-
-        assert!(matches!(result, Err(AppError::Validation(_))), "beklenmeyen sonuç: {result:?}");
-        // `list_all`: hayatta kalan tek kayıt PASİF (`list` artık onu süzerdi;
-        // burada sınanan geri alma davranışı, işletmenin aktiflik durumu
-        // DEĞİL — süzülmemiş sayım kullanılmalı).
-        assert_eq!(companies::list_all(&pool).await.unwrap().len(), 1, "yalnız önceden var olan pasif işletme kalmalı");
-        assert_eq!(students::list(&pool).await.unwrap().len(), 0, "hiçbir öğrenci kalıcı olmamalı");
+        assert_eq!(summary.companies_matched, 1);
+        assert_eq!(summary.students_created, 1, "öğrenci başarıyla yerleşmeli");
+        assert!(companies::is_active(&pool, inactive.id).await.unwrap(), "eşleşen işletme yeniden aktifleşmeli");
     }
 
     /// Varsayılan politika Merge: mevcut işletme kullanılır, yenisi açılmaz.

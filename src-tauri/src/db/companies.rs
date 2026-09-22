@@ -1,6 +1,9 @@
+use crate::db::settings;
 use crate::domain::address::parse_district;
 use crate::domain::models::{Company, NewCompany};
+use crate::domain::terms::today_local;
 use crate::error::{AppError, AppResult};
+use chrono::NaiveDate;
 use serde::Serialize;
 use sqlx::{SqliteConnection, SqlitePool};
 
@@ -54,8 +57,16 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<Company>> {
 /// aktarım dönem ortasında pasifleşen bir işletmeyi göstermezse tutanak
 /// bozulur; bu yüzden geçmişe bakan her çağıran bunu kullanmalı.
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<Company>> {
+    let mut conn = pool.acquire().await?;
+    list_all_in(&mut conn).await
+}
+
+/// `list_all`in aynı transaction'daki bağlantı üzerinden çalışan hâli.
+/// `find_by_normalized_name_in` de AYNI SQL'i kullanır — iki yerde ayrı ayrı
+/// yazılan bir SORGU, biri güncellenip diğeri unutulunca sessizce ayrışırdı.
+pub async fn list_all_in(conn: &mut SqliteConnection) -> AppResult<Vec<Company>> {
     let sql = format!("SELECT {SELECT_COLUMNS} FROM companies ORDER BY name COLLATE NOCASE");
-    Ok(sqlx::query_as::<_, Company>(&sql).fetch_all(pool).await?)
+    Ok(sqlx::query_as::<_, Company>(&sql).fetch_all(&mut *conn).await?)
 }
 
 /// `get` ASLA süzmez: geçmişteki bir kaydın adını çözmek için pasif bir
@@ -73,9 +84,19 @@ pub async fn get(pool: &SqlitePool, id: i64) -> AppResult<Company> {
 /// aktif işletmeleri gösterir); işletme birleştirme gibi pasiflik denetimi
 /// GEREKEN az sayıdaki çağıran bunu ayrı okur (`services::company_merge`).
 pub async fn is_active(pool: &SqlitePool, id: i64) -> AppResult<bool> {
+    let mut conn = pool.acquire().await?;
+    is_active_in(&mut conn, id).await
+}
+
+/// `is_active`in aynı transaction'daki bağlantı üzerinden çalışan hâli.
+/// `services::import_apply` (CSV içe aktarımı) bunu, eşleşen bir işletme
+/// pasifse Merge/Update politikasıyla yeniden aktifleştirip
+/// aktifleştirmeyeceğine karar vermek için kullanır — havuzdan okumak
+/// transaction açıkken yasaktır (bkz. `create_in` üstündeki yorum).
+pub async fn is_active_in(conn: &mut SqliteConnection, id: i64) -> AppResult<bool> {
     let value: Option<i64> = sqlx::query_scalar("SELECT is_active FROM companies WHERE id = ?1")
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?;
     value.map(|v| v != 0).ok_or_else(|| not_found(id))
 }
@@ -289,12 +310,37 @@ async fn has_history(conn: &mut SqliteConnection, id: i64) -> AppResult<bool> {
     Ok(found != 0)
 }
 
+/// Açık yerleştirmesi olan bir işletme silinemez: öğrenciler görünmez bir
+/// şirkete bağlı kalırdı (teşhis: atama panosunda ziyaret hücreleri boş
+/// görünür, ama `awarded_hours_by_teacher` saatleri öğretmen yüküne hâlâ
+/// sayılırdı — çift atama). İkisi de geçerliyse bu mesaj önceliklidir.
+const OPEN_PLACEMENT_MESSAGE: &str =
+    "Bu işletmede yerleştirilmiş öğrenci var; silmeden önce öğrencileri başka işletmeye taşıyın.";
+
+/// Aktif dönemde öğretmen ataması olan bir işletme silinemez; başka bir
+/// dönemin (kapanmış) ataması engel değildir.
+const ACTIVE_TERM_ASSIGNMENT_MESSAGE: &str =
+    "Bu işletmeye bu dönem öğretmen ataması yapılmış; silmeden önce atamayı kaldırın.";
+
 /// Geçmişi olan bir işletme yumuşak silinir (`is_active = 0`), olmayan
 /// gerçekten silinir (spec §5.4). Var olma + geçmiş denetimi + yazma TEK
 /// transaction'da yapılır: aradaki bir yarışta (ör. tam bu sırada bir
 /// yerleştirme yazılırsa) sert silmenin denetimi atlayıp iz bırakmadan
 /// geçmesini önler.
 pub async fn remove(pool: &SqlitePool, id: i64) -> AppResult<CompanyRemoval> {
+    remove_with_today(pool, id, today_local()).await
+}
+
+/// `remove`in `today`yi dışarıdan alan hâli: "açık yerleştirme" tanımı
+/// (`valid_to IS NULL OR valid_to > today`) takvime bağlıdır, testler sabit
+/// bir gün vermeli (`services::import_apply::apply_with_today` ile aynı desen).
+async fn remove_with_today(pool: &SqlitePool, id: i64, today: NaiveDate) -> AppResult<CompanyRemoval> {
+    // Aktif dönem transaction AÇILMADAN ÖNCE okunur: `settings::get_active_term`
+    // havuzdan okur, transaction içindeyken havuzdan okumak sessizce eski
+    // veri döndürür (bkz. `create_in` üstündeki yorum) — `import_apply::apply`
+    // AYNI desenle aktif dönemi tx'ten önce okur.
+    let active_term = settings::get_active_term(pool).await?;
+
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM companies WHERE id = ?1")
@@ -304,6 +350,8 @@ pub async fn remove(pool: &SqlitePool, id: i64) -> AppResult<CompanyRemoval> {
     if exists.is_none() {
         return Err(not_found(id));
     }
+
+    reject_if_bound(&mut tx, id, &active_term, today).await?;
 
     if has_history(&mut tx, id).await? {
         set_active_in(&mut tx, id, false).await?;
@@ -317,6 +365,49 @@ pub async fn remove(pool: &SqlitePool, id: i64) -> AppResult<CompanyRemoval> {
         .await?;
     tx.commit().await?;
     Ok(CompanyRemoval { soft_deleted: false })
+}
+
+/// Açık bir bağı olan işletme silinmeden/pasifleştirilmeden ÖNCE reddedilir
+/// (spec teşhisi: pasifleşmiş ama hâlâ bağlı bir işletme, öğrencinin
+/// göründüğü panoda saatleri öğretmen yüküne çift saydırırdı). Denetim
+/// `has_history`ten ÖNCE çalışır: geçmişi olan bir işletme bile açık bir
+/// bağ taşıyorsa pasifleştirilemez.
+async fn reject_if_bound(conn: &mut SqliteConnection, id: i64, active_term: &str, today: NaiveDate) -> AppResult<()> {
+    if has_open_placement(conn, id, today).await? {
+        return Err(AppError::Validation(OPEN_PLACEMENT_MESSAGE.to_string()));
+    }
+    if has_active_term_assignment(conn, id, active_term).await? {
+        return Err(AppError::Validation(ACTIVE_TERM_ASSIGNMENT_MESSAGE.to_string()));
+    }
+    Ok(())
+}
+
+/// Herhangi bir dönemde açık (kapanmamış) bir yerleştirme var mı?
+/// `valid_to IS NULL` hâlâ açık olanı, `valid_to > today` ise gelecekte
+/// kapanacak (bugün itibarıyla henüz kapanmamış) olanı yakalar.
+async fn has_open_placement(conn: &mut SqliteConnection, id: i64, today: NaiveDate) -> AppResult<bool> {
+    let found: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM student_placements
+             WHERE company_id = ?1 AND (valid_to IS NULL OR valid_to > ?2)
+         )",
+    )
+    .bind(id)
+    .bind(today)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(found != 0)
+}
+
+/// Aktif dönemde bu işletmeye yapılmış bir öğretmen ataması var mı?
+async fn has_active_term_assignment(conn: &mut SqliteConnection, id: i64, active_term: &str) -> AppResult<bool> {
+    let found: i64 =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM assignments WHERE company_id = ?1 AND term = ?2)")
+            .bind(id)
+            .bind(active_term)
+            .fetch_one(&mut *conn)
+            .await?;
+    Ok(found != 0)
 }
 
 /// Konumu yazar ve durumu günceller. `status` coğrafi kodlamadan geliyorsa
@@ -375,8 +466,7 @@ pub async fn find_by_normalized_name(pool: &SqlitePool, name: &str) -> AppResult
 /// üstündeki yorumla aynı gerekçe).
 pub async fn find_by_normalized_name_in(conn: &mut SqliteConnection, name: &str) -> AppResult<Option<Company>> {
     let target = normalize_name(name);
-    let sql = format!("SELECT {SELECT_COLUMNS} FROM companies ORDER BY name COLLATE NOCASE");
-    let rows: Vec<Company> = sqlx::query_as(&sql).fetch_all(&mut *conn).await?;
+    let rows = list_all_in(conn).await?;
     Ok(rows.into_iter().find(|c| normalize_name(&c.name) == target))
 }
 
@@ -543,11 +633,13 @@ mod tests {
         assert!(matches!(err, AppError::NotFound(_)));
     }
 
-    /// Geçmişi olan bir işletme SİLİNMEZ, pasife alınır (spec §5.4). Her
-    /// history tablosu için ayrı senaryo: birini atlarsak sert silme o
-    /// tabloda sarkan `company_id` üretmeye devam eder.
+    /// Açık (kapanmamış) bir yerleştirmesi olan işletme artık ne silinir ne
+    /// de pasifleştirilir: öğrenciler görünmez bir şirkette kalırdı (teşhis
+    /// edilen ikinci hata — atama panosunda ziyaret hücreleri boş görünürken
+    /// öğretmen yükü hâlâ o işletmenin saatlerini sayıyordu). Kullanıcı önce
+    /// öğrencileri başka işletmeye taşımalı.
     #[tokio::test]
-    async fn remove_soft_deletes_a_company_with_an_open_student_placement() {
+    async fn remove_rejects_a_company_with_an_open_student_placement() {
         let (_dir, pool) = test_pool().await;
         let created = create(&pool, &sample_input("Tarihçeli A.Ş.")).await.unwrap();
 
@@ -565,13 +657,42 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let result = remove(&pool, created.id).await.unwrap();
+        let err = remove(&pool, created.id).await.unwrap_err();
 
-        assert!(result.soft_deleted, "açık yerleştirmesi olan işletme silinmemeli");
-        assert!(get(&pool, created.id).await.is_ok(), "kayıt veritabanında kalmalı");
+        assert!(matches!(err, AppError::Validation(_)), "açık yerleştirmesi olan işletme reddedilmeli: {err:?}");
+        assert!(is_active(&pool, created.id).await.unwrap(), "reddedilen işletme aktif kalmalı");
+    }
+
+    /// Yerleştirme KAPANMIŞSA (`valid_to` bugünden önce) artık açık bir bağ
+    /// yoktur; işletme geçmişi olan kayıtlar gibi pasifleşir (spec §5.4),
+    /// reddedilmez.
+    #[tokio::test]
+    async fn remove_soft_deletes_a_company_with_a_closed_student_placement() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Tarihçeli A.Ş.")).await.unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 10, 15).unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let event_id = seed_change_event(&mut conn, "placement", created.id).await;
+        sqlx::query(
+            "INSERT INTO student_placements (student_id, term, company_id, valid_from, valid_to, source_event_id)
+             VALUES (999, ?1, ?2, '2026-09-01', '2026-10-01', ?3)",
+        )
+        .bind(TERM)
+        .bind(created.id)
+        .bind(event_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        drop(conn);
+
+        let result = remove_with_today(&pool, created.id, today).await.unwrap();
+
+        assert!(result.soft_deleted, "kapanmış yerleştirmesi olan işletme pasifleşmeli");
         assert!(!is_active(&pool, created.id).await.unwrap());
 
-        // Asıl teşhis edilen zarar: sarkan bir company_id ÜRETİLMEMELİ.
+        // Asıl teşhis edilen zarar (madde 2 öncesi): sarkan bir company_id
+        // ÜRETİLMEMELİ — kayıt hâlâ var olan (pasif) bir işletmeye işaret etmeli.
         let still_points_at_the_company: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM student_placements WHERE company_id = ?1",
         )
@@ -660,8 +781,12 @@ mod tests {
         assert!(company_hours::get(&pool, created.id, TERM).await.unwrap().is_some());
     }
 
+    /// Aktif dönemde bu işletmeye yapılmış bir öğretmen ataması varsa silme
+    /// reddedilir (teşhis edilen ikinci hata): atama panosu şirketi boş
+    /// gösterirken öğretmen yükü hâlâ bu işletmenin saatlerini sayardı.
+    /// `TERM` (`"2026-2027/1"`) migration 0001'in `active_term` varsayılanıdır.
     #[tokio::test]
-    async fn remove_soft_deletes_a_company_with_an_assignment() {
+    async fn remove_rejects_a_company_with_an_active_term_assignment() {
         let (_dir, pool) = test_pool().await;
         let created = create(&pool, &sample_input("Atama Geçmişli A.Ş.")).await.unwrap();
         let teacher_id = a_teacher(&pool).await;
@@ -676,9 +801,33 @@ mod tests {
         .await
         .unwrap();
 
+        let err = remove(&pool, created.id).await.unwrap_err();
+
+        assert!(matches!(err, AppError::Validation(_)), "aktif dönem ataması olan işletme reddedilmeli: {err:?}");
+        assert!(is_active(&pool, created.id).await.unwrap(), "reddedilen işletme aktif kalmalı");
+    }
+
+    /// BAŞKA bir dönemin (aktif olmayan) ataması silmeyi engellemez — yalnız
+    /// AKTİF dönemdeki bir atama engel olmalı. Geçmişi (`has_history`) hâlâ
+    /// vardır, bu yüzden sonuç yine de pasifleştirmedir (hard-delete değil).
+    #[tokio::test]
+    async fn remove_ignores_an_assignment_from_a_different_term() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Eski Dönem Atamalı A.Ş.")).await.unwrap();
+        let teacher_id = a_teacher(&pool).await;
+        sqlx::query(
+            "INSERT INTO assignments (teacher_id, company_id, term, visit_day, visit_hour, created_at, updated_at)
+             VALUES (?1, ?2, '2024-2025/1', 1, 3, '2024-09-01T00:00:00Z', '2024-09-01T00:00:00Z')",
+        )
+        .bind(teacher_id)
+        .bind(created.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
         let result = remove(&pool, created.id).await.unwrap();
 
-        assert!(result.soft_deleted, "atama geçmişi olan işletme silinmemeli");
+        assert!(result.soft_deleted, "başka dönemin ataması geçmiş sayılır, silme reddedilmemeli ama pasifleşmeli");
     }
 
     #[tokio::test]

@@ -674,24 +674,28 @@ mod tests {
         let company_id = a_company(&pool, "Test İşletme A").await;
         let student_id = create_placed_student(&pool, "Ahmet", "Yılmaz", "12/C", Some(company_id)).await;
 
-        companies::remove(&pool, company_id).await.unwrap();
+        // Açık yerleştirmesi olan işletme artık silme REDDEDİLİR (spec
+        // teşhisi madde 2: öğrenciler görünmez bir şirkete bağlı kalmasın).
+        companies::remove(&pool, company_id).await.unwrap_err();
 
         assert!(get(&pool, student_id).await.is_ok(), "öğrenci kaydı silinmemeli");
     }
 
-    /// Teşhis edilen asıl zarar: açık bir yerleştirmesi olan işletme
-    /// silinince (artık pasifleştirilince, spec §5.4) `student_placements`
-    /// satırı sarkan bir `company_id` bırakmamalı — hâlâ VAR OLAN bir
-    /// işletmeye işaret etmeli. `companies::get` bu id ile başarıyla dönerse
-    /// kanıtlanmış olur (sert silinseydi `NotFound` dönerdi).
+    /// Teşhis edilen asıl zarar (madde 2): açık bir yerleştirmesi olan
+    /// işletme artık PASİFLEŞTİRİLMEZ, doğrudan REDDEDİLİR — önceden
+    /// pasifleştirilip `student_placements`in sarkan olmayan ama görünmez
+    /// bir işletmeye bağlı kalmasına izin veriliyordu; bu, öğrencinin
+    /// atama panosunda "işletmesiz" görünürken öğretmen yükünün hâlâ o
+    /// işletmenin saatlerini saymasına yol açıyordu. Ret sonrası hem
+    /// yerleştirme hem işletme AYNEN (aktif) kalmalı.
     #[tokio::test]
-    async fn deleting_a_company_with_a_placement_leaves_the_placement_pointing_at_a_real_company() {
+    async fn deleting_a_company_with_a_placement_is_rejected_and_leaves_everything_intact() {
         let (_dir, pool) = test_pool().await;
         let company_id = a_company(&pool, "Test İşletme A").await;
         create_placed_student(&pool, "Ahmet", "Yılmaz", "12/C", Some(company_id)).await;
 
-        let result = companies::remove(&pool, company_id).await.unwrap();
-        assert!(result.soft_deleted, "açık yerleştirmesi olan işletme pasife alınmalı, silinmemeli");
+        let err = companies::remove(&pool, company_id).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)), "açık yerleştirmesi olan işletme reddedilmeli: {err:?}");
 
         let placement_company_id: i64 = sqlx::query_scalar(
             "SELECT company_id FROM student_placements WHERE student_id = (
@@ -703,8 +707,8 @@ mod tests {
         .unwrap();
         assert_eq!(placement_company_id, company_id);
         assert!(
-            companies::get(&pool, placement_company_id).await.is_ok(),
-            "yerleştirmenin işaret ettiği işletme hâlâ var olmalı (sarkan kimlik değil)"
+            companies::is_active(&pool, company_id).await.unwrap(),
+            "reddedilen işletme aktif kalmalı, pasifleşmemeli"
         );
     }
 
