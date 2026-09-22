@@ -149,22 +149,70 @@ pub async fn create(pool: &SqlitePool, name: &str, pin: &str) -> AppResult<UserS
     get_summary(pool, id).await
 }
 
+/// Kullanıcıyı yeniden adlandırır ve — yalnızca eski ad oturumdaki kullanıcıya
+/// aitse — `settings.operator_name`i tazeler. Bu ikinci adım olmadan, oturum
+/// açmış kullanıcı kendi adını değiştirdiğinde `change_set.actor` çıkış
+/// yapılana kadar artık hiçbir kullanıcıyla eşleşmeyen ESKİ adla yazılmaya
+/// devam ederdi (teşhis edilen kusur).
 pub async fn rename(pool: &SqlitePool, id: i64, name: &str) -> AppResult<()> {
     let name = validate_name(name)?;
+    // Çakışma denetimi havuzdan okur; transaction içindeyken havuzdan okumak
+    // yasaktır (bkz. `companies::create_in` üstündeki yorum — açık bir
+    // `BEGIN IMMEDIATE` sırasında havuz sessizce eski veri döndürebilir), bu
+    // yüzden transaction başlamadan ÖNCE, burada yapılır.
     if name_conflicts(pool, &name, Some(id)).await? {
         return Err(name_conflict_error());
     }
 
+    // Eski adı okuma, kullanıcıyı güncelleme ve `operator_name`i tazeleme
+    // TEK `BEGIN IMMEDIATE` transaction'ında: aradaki okumalar başka bir
+    // yazıcıyla yarışmasın diye (spec genelindeki `BEGIN IMMEDIATE` kuralıyla
+    // aynı gerekçe, bkz. `services/change_service.rs` başlığı).
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    let old_name: Option<String> = sqlx::query_scalar("SELECT name FROM users WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(old_name) = old_name else {
+        return Err(not_found(id));
+    };
+
     let affected = sqlx::query("UPDATE users SET name = ?1 WHERE id = ?2")
         .bind(&name)
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
-
     if affected == 0 {
         return Err(not_found(id));
     }
+
+    // `operator_name` YALNIZ eski ad bu kullanıcıya aitse tazelenir; başka
+    // bir kullanıcıya aitse (o kullanıcı oturumda demektir) dokunulmaz —
+    // brief sözleşmesi. Karşılaştırma `name_conflicts`teki AYNI normalize
+    // mantığını (küçük harf + boşluk sıkıştırma) kullanır: adlar benzersiz
+    // olduğu için bu, `operator_name`in tam olarak BU kullanıcıya ait olup
+    // olmadığını güvenilir biçimde söyler.
+    let operator_name: Option<String> =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key = 'operator_name'")
+            .fetch_optional(&mut *tx)
+            .await?;
+    let operator_is_this_user = operator_name
+        .as_deref()
+        .map(|current| normalize_name(current) == normalize_name(&old_name))
+        .unwrap_or(false);
+    if operator_is_this_user {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES ('operator_name', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(&name)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
     Ok(())
 }
 
@@ -384,6 +432,60 @@ mod tests {
 
         let listed = list(&pool).await.unwrap();
         assert_eq!(listed[0].name, "Ayşe Demir");
+    }
+
+    /// Teşhis edilen kusur: oturum açmış kullanıcı kendi adını değiştirince
+    /// `operator_name` (tarihçedeki `change_set.actor`ın kaynağı) da yeni
+    /// adı yansıtmalı — yoksa çıkış yapana kadar hiçbir kullanıcıyla
+    /// eşleşmeyen eski adla yazılmaya devam eder.
+    #[tokio::test]
+    async fn rename_updates_operator_name_when_the_logged_in_user_renames_itself() {
+        let (_dir, pool) = test_pool().await;
+        let user = create(&pool, "Ayşe Yılmaz", "4321").await.unwrap();
+        assert!(login(&pool, user.id, "4321").await.unwrap());
+
+        rename(&pool, user.id, "Ayşe Demir").await.unwrap();
+
+        assert_eq!(
+            settings::get(&pool, "operator_name").await.unwrap().as_deref(),
+            Some("Ayşe Demir")
+        );
+    }
+
+    /// Oturumdaki kullanıcı BAŞKA biri iken bir kullanıcı yeniden
+    /// adlandırılırsa `operator_name` dokunulmadan kalmalı — brief
+    /// sözleşmesi: yalnız eski ad `operator_name`e eşitse güncellenir.
+    #[tokio::test]
+    async fn rename_leaves_operator_name_untouched_when_a_different_user_renames() {
+        let (_dir, pool) = test_pool().await;
+        let logged_in = create(&pool, "Ayşe Yılmaz", "4321").await.unwrap();
+        let other = create(&pool, "Fatma Kaya", "1111").await.unwrap();
+        assert!(login(&pool, logged_in.id, "4321").await.unwrap());
+
+        rename(&pool, other.id, "Fatma Demir").await.unwrap();
+
+        assert_eq!(
+            settings::get(&pool, "operator_name").await.unwrap().as_deref(),
+            Some("Ayşe Yılmaz")
+        );
+    }
+
+    /// Çakışan adla rename reddedilir; reddedilen bir işlem `operator_name`e
+    /// dokunmamalı — yarı tamamlanmış bir yazma olmadığını doğrular.
+    #[tokio::test]
+    async fn rename_with_a_conflicting_name_is_rejected_and_leaves_operator_name_untouched() {
+        let (_dir, pool) = test_pool().await;
+        let user = create(&pool, "Ayşe Yılmaz", "4321").await.unwrap();
+        create(&pool, "Fatma Kaya", "1111").await.unwrap();
+        assert!(login(&pool, user.id, "4321").await.unwrap());
+
+        let err = rename(&pool, user.id, "fatma  kaya").await.unwrap_err();
+
+        assert!(matches!(err, AppError::Validation(_)));
+        assert_eq!(
+            settings::get(&pool, "operator_name").await.unwrap().as_deref(),
+            Some("Ayşe Yılmaz")
+        );
     }
 
     /// İkinci bir kullanıcı gerekli: tek kullanıcı varken pasifleştirme artık
