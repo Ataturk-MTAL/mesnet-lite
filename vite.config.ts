@@ -15,6 +15,57 @@ export default defineConfig(() => ({
     Components({ resolvers: [PrimeVueResolver()] }),
   ],
 
+  // Rotalar tembel yüklendiği (`() => import('../views/...')`) ve OpenVue
+  // bileşenleri `unplugin-vue-components` ile şablondan çözüldüğü için, henüz
+  // ziyaret edilmemiş bir ekranın bileşeni Vite'ın açılıştaki tarayıcısında
+  // GÖRÜNMEZ: kaynakta `import` satırı yoktur, dönüşüm anında eklenir. O ekrana
+  // ilk tıklandığında Vite yeni bağımlılığı keşfeder, yeniden paketler ve TAM
+  // SAYFA YENİLEMESİ yapar ("optimized dependencies changed. reloading").
+  // Yenileme bellekteki oturumu siler ve kullanıcıdan PIN yeniden istenir.
+  // Hepsini baştan bildirmek keşfi ve dolayısıyla yenilemeyi ortadan kaldırır.
+  //
+  // Listeyi yenilemek için (yeni bir OpenVue bileşeni kullanıldığında) şu iki
+  // taramanın birleşimini al:
+  //   rg -o "typeof import\('(openvue/[a-z]+)'\)" -r '$1' components.d.ts | sort -u
+  //   rg -o --no-filename "from '(openvue/[a-z]+)'" -r '$1' src/ | sort -u
+  optimizeDeps: {
+    include: [
+      "openvue/accordion",
+      "openvue/accordioncontent",
+      "openvue/accordionheader",
+      "openvue/accordionpanel",
+      "openvue/autocomplete",
+      "openvue/button",
+      "openvue/card",
+      "openvue/checkbox",
+      "openvue/chip",
+      "openvue/column",
+      "openvue/config",
+      "openvue/confirmationservice",
+      "openvue/confirmdialog",
+      "openvue/datatable",
+      "openvue/datepicker",
+      "openvue/dialog",
+      "openvue/drawer",
+      "openvue/inputnumber",
+      "openvue/inputtext",
+      "openvue/message",
+      "openvue/panel",
+      "openvue/password",
+      "openvue/progressbar",
+      "openvue/select",
+      "openvue/selectbutton",
+      "openvue/tag",
+      "openvue/textarea",
+      "openvue/toast",
+      "openvue/toastservice",
+      "openvue/toggleswitch",
+      "openvue/tooltip",
+      "openvue/useconfirm",
+      "openvue/usetoast",
+    ],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
