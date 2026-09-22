@@ -7,6 +7,18 @@ import { readFileSync } from 'node:fs'
 const [route = '/', out = 'shot.png', width = '1400', height = '900', fixturePath] = process.argv.slice(2)
 const fixtures = fixturePath ? JSON.parse(readFileSync(fixturePath, 'utf8')) : {}
 
+// Giriş ekranı ('36bdaad') App.vue'de kabuğun ÖNÜNDE çizilir; fixture bu üç
+// komutu tanımlamazsa varsayılan olarak "tek etkin kullanıcı ile zaten giriş
+// yapılabilir" durumunu taklit ederiz. Fixture bunlardan birini tanımlarsa
+// (örn. has_any_user: false ile ilk-kurulum ekranını göstermek isteyen bir
+// fixture) o değer kazanır — burada ELLE ezilmez.
+const authDefaults = {
+  has_any_user: true,
+  list_users: [{ id: 1, name: 'Hakan GÜLEN', isActive: true }],
+  login: true,
+}
+const effectiveFixtures = { ...authDefaults, ...fixtures }
+
 const browser = await chromium.launch({ channel: 'chrome', headless: true })
 const page = await browser.newPage({ viewport: { width: Number(width), height: Number(height) } })
 
@@ -17,7 +29,7 @@ page.on('console', (message) => {
 page.on('pageerror', (error) => console.log('[pageerror]', String(error).slice(0, 200)))
 
 await page.exposeFunction('__mock', (command, args) => {
-  if (command in fixtures) return fixtures[command]
+  if (command in effectiveFixtures) return effectiveFixtures[command]
   unknown.add(command)
   return null
 })
@@ -40,6 +52,23 @@ if (process.env.THEME === 'dark') {
 
 await page.goto(`http://localhost:1420${route}`, { waitUntil: 'networkidle' })
 await page.waitForTimeout(1500)
+
+// NO_AUTH=1 giriş ekranının kendisini çekmek isteyenler için bu adımı atlar.
+// Kabuk zaten çizilmişse (login formu yoksa) da atlanır — LoginView.vue'deki
+// gerçek alan kimlikleri kullanılır (Select#login-user, Password input-id="login-pin").
+if (!process.env.NO_AUTH) {
+  const loginUserSelect = page.locator('#login-user')
+  if (await loginUserSelect.count() > 0) {
+    await loginUserSelect.click()
+    await page.getByRole('option').first().click()
+    await page.locator('#login-pin').fill('1234')
+    // Buton metni labels.ts'teki auth.signIn ile birebir aynı ('Giriş').
+    await page.getByRole('button', { name: 'Giriş', exact: true }).click()
+    await page.locator('.shell').waitFor({ state: 'visible', timeout: 10000 })
+    await page.waitForTimeout(500)
+  }
+}
+
 if (process.env.CLICK) {
   // Birden çok tıklama için metinleri `|` ile ayırın: CLICK="Tümünü Dolu Yap|Boş Saatleri Kaydet"
   for (const text of process.env.CLICK.split('|')) {
