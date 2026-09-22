@@ -296,3 +296,110 @@ describe('CompanyHoursView toplu kilit düğmesi', () => {
     wrapper.unmount()
   })
 })
+
+async function clickAutoDistribute(wrapper: VueWrapper): Promise<void> {
+  const button = wrapper.findAll('button').find((b) => b.text() === labels.hours.autoDistribute)
+  await button!.trigger('click')
+  await flushPromises()
+}
+
+async function clickUndo(wrapper: VueWrapper): Promise<void> {
+  const button = wrapper.findAll('button').find((b) => b.text() === labels.hours.undo)
+  expect(button).toBeDefined()
+  await button!.trigger('click')
+}
+
+describe('CompanyHoursView Geri Al ve kilitli satır donması', () => {
+  beforeEach(() => {
+    getBoardMock.mockResolvedValue(
+      boardFixture([
+        hoursRow({ companyId: 1, awardedHours: 4, isLocked: false }),
+        hoursRow({ companyId: 2, awardedHours: 2, isLocked: false }),
+      ]),
+    )
+    autoDistributeMock.mockResolvedValue({
+      results: [
+        { companyId: 1, awardedHours: 6, isHonorary: false, wasLocked: false },
+        { companyId: 2, awardedHours: 3, isHonorary: false, wasLocked: false },
+      ],
+      lockedHours: 0,
+      distributedHours: 9,
+      leftoverHours: 0,
+      honoraryCount: 0,
+      warnings: [],
+    })
+  })
+
+  it('dağıt, satırı kilitle, geri al: saat öneri değerinde kalır, kilit açık değil', async () => {
+    // Arrange
+    const wrapper = await mountView()
+    await clickAutoDistribute(wrapper)
+    await rowLockButtons(wrapper)[0].trigger('click')
+    expect(isRowLockButtonLocked(rowLockButtons(wrapper)[0])).toBe(true)
+
+    // Act
+    await clickUndo(wrapper)
+
+    // Assert — kilitli satır (1) öneri değerinde (6) kaldı ve kilidi açık DEĞİL.
+    const numberInputs = wrapper.findAllComponents({ name: 'InputNumber' })
+    expect(numberInputs[0].props('modelValue')).toBe(6)
+    expect(isRowLockButtonLocked(rowLockButtons(wrapper)[0])).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('dağıt, toplu kilit, geri al: tüm satırlar kilitli kalır, saatler değişmez', async () => {
+    // Arrange
+    const wrapper = await mountView()
+    await clickAutoDistribute(wrapper)
+    await lockAllButton(wrapper).trigger('click')
+
+    // Act
+    await clickUndo(wrapper)
+
+    // Assert — tüm satırlar hâlâ kilitli, saatler öneri değerlerinde (6, 3) kaldı.
+    expect(rowLockButtons(wrapper).every((b) => isRowLockButtonLocked(b))).toBe(true)
+    const numberInputs = wrapper.findAllComponents({ name: 'InputNumber' })
+    expect(numberInputs[0].props('modelValue')).toBe(6)
+    expect(numberInputs[1].props('modelValue')).toBe(3)
+    wrapper.unmount()
+  })
+
+  it('dağıt, geri al (kilit yok): saat ve fahri eski hâline döner', async () => {
+    // Arrange
+    const wrapper = await mountView()
+    await clickAutoDistribute(wrapper)
+
+    // Act
+    await clickUndo(wrapper)
+
+    // Assert — dağıtım öncesi değerlere (4, 2) döner.
+    const numberInputs = wrapper.findAllComponents({ name: 'InputNumber' })
+    expect(numberInputs[0].props('modelValue')).toBe(4)
+    expect(numberInputs[1].props('modelValue')).toBe(2)
+    wrapper.unmount()
+  })
+
+  it('kilitli satırın saat girişi ve fahri anahtarı devre dışıdır, kilit açılınca yeniden etkinleşir', async () => {
+    // Arrange
+    const wrapper = await mountView()
+
+    // Act — ilk satırı kilitle.
+    await rowLockButtons(wrapper)[0].trigger('click')
+
+    // Assert — kilitliyken InputNumber ve ToggleSwitch devre dışı.
+    const numberInput = wrapper.findAllComponents({ name: 'InputNumber' })[0]
+    const toggle = wrapper.findAllComponents({ name: 'ToggleSwitch' })[0]
+    expect(numberInput.find('input').attributes('disabled')).toBeDefined()
+    expect(toggle.find('input').attributes('disabled')).toBeDefined()
+
+    // Act — kilidi aç.
+    await rowLockButtons(wrapper)[0].trigger('click')
+
+    // Assert — yeniden etkin.
+    const numberInputAfter = wrapper.findAllComponents({ name: 'InputNumber' })[0]
+    const toggleAfter = wrapper.findAllComponents({ name: 'ToggleSwitch' })[0]
+    expect(numberInputAfter.find('input').attributes('disabled')).toBeUndefined()
+    expect(toggleAfter.find('input').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+})

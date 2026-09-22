@@ -158,6 +158,7 @@
         <template #body="{ data }">
           <ToggleSwitch
             :model-value="data.isHonorary"
+            :disabled="data.isLocked"
             :aria-label="labels.hours.honorary"
             v-tooltip.top="labels.hours.honoraryTooltip"
             @update:model-value="(value: boolean) => setHonorary(data, value)"
@@ -174,7 +175,7 @@
               :model-value="data.awardedHours"
               :min="0"
               :max="data.maxHours ?? 0"
-              :disabled="data.maxHours === null"
+              :disabled="data.maxHours === null || data.isLocked"
               showButtons
               :aria-label="labels.hours.awarded"
               @update:model-value="(value: number | null) => setAwarded(data, value)"
@@ -279,11 +280,17 @@ function showError(error: unknown): void {
 
 /** Fahri açılınca saat 0'a düşer; kapanınca kullanıcı yeniden girer. */
 function setHonorary(row: HoursRow, value: boolean): void {
+  // Kilitli satır donmuş kabul edilir; girişler devre dışı olsa da ikinci kat
+  // koruma olarak burada da erken dönülür.
+  if (row.isLocked) return
   row.isHonorary = value
   if (value) row.awardedHours = 0
 }
 
 function setAwarded(row: HoursRow, value: number | null): void {
+  // Kilitli satır donmuş kabul edilir; girişler devre dışı olsa da ikinci kat
+  // koruma olarak burada da erken dönülür.
+  if (row.isLocked) return
   const requested = value ?? 0
   const cap = row.maxHours ?? 0
   if (requested > cap) {
@@ -352,8 +359,9 @@ async function runAutoDistribute(): Promise<void> {
       if (!row) continue
       // Kilitli satıra ASLA dokunulmaz. Arka uç zaten kilitliyi koruyor; bu,
       // oranın bir gün bozulması hâlinde ekranın kullanıcıyı yine de koruması
-      // için ikinci kat. Kullanıcı kilitli satırın değiştiğini bildirdi ve
-      // sebebi kodda bulunamadı.
+      // için ikinci kat. Bilinen yol `undoSuggestion` idi: Geri Al, satır
+      // kilitlendikten SONRA bile dağıtım öncesi anlık görüntüyü olduğu gibi
+      // geri yazıyor, kilidi de açıyordu — aşağıda düzeltildi.
       if (row.isLocked) continue
       row.awardedHours = result.awardedHours
       row.isHonorary = result.isHonorary
@@ -371,9 +379,22 @@ async function runAutoDistribute(): Promise<void> {
   }
 }
 
+/**
+ * Geri Al: satır ŞU AN kilitliyse hiçbir alanına dokunulmaz (kilitlenişten
+ * sonra elle veya dağıtımla değişmiş olabilir, o hâli korunur). Kilitsiz
+ * satırlarda yalnız `awardedHours` ve `isHonorary` anlık görüntüden geri
+ * gelir; `isLocked` hiçbir satırda geri alınmaz. Anlık görüntüde olmayan
+ * (sonradan eklenmiş) satır olduğu gibi kalır.
+ */
 function undoSuggestion(): void {
-  if (!snapshot.value) return
-  rows.value = snapshot.value.map((row) => ({ ...row }))
+  const snapshotRows = snapshot.value
+  if (!snapshotRows) return
+  rows.value = rows.value.map((row) => {
+    if (row.isLocked) return row
+    const before = snapshotRows.find((r) => r.companyId === row.companyId)
+    if (!before) return row
+    return { ...row, awardedHours: before.awardedHours, isHonorary: before.isHonorary }
+  })
   snapshot.value = null
   suggestionWarnings.value = []
 }
