@@ -11,6 +11,10 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    Accordion: typeof import('openvue/accordion')['default']
+    AccordionContent: typeof import('openvue/accordioncontent')['default']
+    AccordionHeader: typeof import('openvue/accordionheader')['default']
+    AccordionPanel: typeof import('openvue/accordionpanel')['default']
     AppSidebar: typeof import('./src/components/layout/AppSidebar.vue')['default']
     AsOfDatePicker: typeof import('./src/components/history/AsOfDatePicker.vue')['default']
     AutoComplete: typeof import('openvue/autocomplete')['default']

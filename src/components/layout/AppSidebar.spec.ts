@@ -53,4 +53,16 @@ describe('AppSidebar', () => {
     expect(targets).toContain('/teachers')
     expect(targets).toContain('/import-export')
   })
+
+  it('yardım ve hakkında menü öğelerini gösterir', () => {
+    const wrapper = mountSidebar()
+    const text = wrapper.text()
+    expect(text).toContain(labels.nav.groupHelp)
+    expect(text).toContain(labels.nav.help)
+    expect(text).toContain(labels.nav.about)
+
+    const targets = wrapper.findAll('a').map((a) => a.attributes('data-to'))
+    expect(targets).toContain('/help')
+    expect(targets).toContain('/about')
+  })
 })

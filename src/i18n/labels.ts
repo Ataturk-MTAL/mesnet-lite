@@ -6,6 +6,7 @@ export const labels = {
     groupPlanning: 'Planlama',
     groupReports: 'Raporlar',
     groupAdmin: 'Yönetim',
+    groupHelp: 'Yardım',
     dashboard: 'Genel Bakış',
     companies: 'İşletmeler',
     students: 'Öğrenciler',
@@ -21,6 +22,8 @@ export const labels = {
     importExport: 'İçe/Dışa Aktarım',
     history: 'Tarihçe',
     toggleMenu: 'Menüyü aç/kapat',
+    help: 'Kullanım Kılavuzu',
+    about: 'Hakkında',
   },
   common: {
     add: 'Ekle',
@@ -669,5 +672,91 @@ export const labels = {
     summary: (movedStudents: number, clearedHours: number) =>
       `${movedStudents} öğrenci taşındı, ${clearedHours} saat sıfırlandı.`,
     coordinationEndedNote: 'Kaynağın koordinatörlüğü sona erdi.',
+  },
+  about: {
+    appName: 'MESNET.Lite',
+    school: 'Atatürk Mesleki ve Teknik Anadolu Lisesi',
+    field: 'Elektrik Elektronik Teknolojileri Alanı',
+    purpose:
+      'İşletmelerde mesleki eğitim koordinatörlüğü görevlendirmelerini ve ek ders saati hesabını yürütür.',
+  },
+  help: {
+    title: 'Kullanım Kılavuzu',
+    sections: [
+      {
+        title: 'Başlarken',
+        paragraphs: [
+          'Üst çubuktaki takvim seçicisi aktif dönemi belirler; tüm ekranlar o dönemin verisini gösterir.',
+          'İşletmeler kalıcıdır, yıllar arasında yeniden kullanılır. Öğrenciler, müsaitlikler, sınıf günleri, saat takdirleri ve atamalar döneme bağlıdır.',
+          'Sol üstteki "Tarihteki Durum" tarihi, ekranların hangi güne göre çizileceğini belirler; "Bugün" düğmesi geri alır.',
+        ],
+      },
+      {
+        title: 'İşletmeler',
+        paragraphs: [
+          'İşletme eklenirken adres girilir; koordinat adresten çözülür.',
+          'Tek yön yol mesafesi elle girilir, koordinatlardan hesaplanmaz; kuş uçuşu mesafe yol mesafesi değildir. Saat kurallarında bu değerin iki katı kullanılır.',
+          'Aynı işletme iki kez kaydedilmişse birleştirme ile tek kayda indirilir.',
+        ],
+      },
+      {
+        title: 'Öğrenciler',
+        paragraphs: [
+          'Hiç işletmesi olmayan öğrencide çanta düğmesi "Yeni Sözleşme" açar.',
+          'İşletmesi olan öğrencide aynı yerdeki düğme nakil/ayrılış içindir.',
+          'Açılır listede her işletmenin altında ilçesi ve mesafesi görünür; üzerine gelince tam adres açılır.',
+          'Öğrenci düzenleme formunda işletme alanı yoktur; yerleştirme her zaman tarih ve gerekçeyle yapılır.',
+        ],
+      },
+      {
+        title: 'Öğretmen/Sınıf Programı',
+        paragraphs: [
+          'Öğretmenin haftalık müsait saatleri ve sınıfların işletmede bulunduğu günler burada girilir.',
+          'Bir işletme yalnızca öğrencilerinin sınıfının işletmede olduğu güne atanabilir.',
+        ],
+      },
+      {
+        title: 'Ders Yükü ve İşletme Saat Ayarları',
+        paragraphs: [
+          'Ders yükü, koordinatörlük dağıtımında kullanılacak saat havuzunu belirler.',
+          'Her işletme için takdir edilen haftalık saat İşletme Saat Ayarları ekranında girilir.',
+          'Fahri ziyarette öğretmen gider ama ek ders ücreti doğmaz.',
+        ],
+      },
+      {
+        title: 'İşletme Dağıtımı',
+        paragraphs: [
+          'Soldaki işletme kartı, sağdaki öğretmenin haftalık programındaki boş saate sürüklenir.',
+          'Kartlar ilçeye göre gruplanır; arama kutusu işletme adında ve adreste arar.',
+          '"Öneri Üret" otomatik bir dağıtım önerir; öneri uygulanmadan önce ekranda gösterilir.',
+          'Kurala aykırı bir bırakma zorla atama diyaloğu açar ve gerekçe ister; gerekçe tarihçeye yazılır.',
+        ],
+      },
+      {
+        title: 'Tarihçe',
+        paragraphs: [
+          'Yapılan her değişiklik olay olarak kaydedilir; kayıtlar silinmez, düzenlenmez.',
+          'Bir değişiklik geri alınabilir; geri alma da bir kayıt olarak eklenir.',
+        ],
+      },
+      {
+        title: 'Tarih Kuralları',
+        paragraphs: [
+          'Dönem henüz başlamadıysa yürürlük tarihi boş bırakılabilir; dönem başlangıcı kullanılır.',
+          'Dönem başladıysa her değişiklik için yürürlük tarihi zorunludur.',
+          "Geçmiş bir aya tarih girilemez: o ayın ek ders puantajı mutemede verilip ilçeye gönderilmiştir. Uygulama bu ayın 1'ini önerir.",
+          'Bu yüzden biten bir dönem uygulamada görüntülenebilir ama artık değiştirilemez. Ayrıca bir "dönemi kapatma" işlemi yoktur, kilit tarihten gelir.',
+        ],
+      },
+      {
+        title: 'İçe/Dışa Aktarım',
+        paragraphs: [
+          'JotForm CSV dosyası içe aktarılarak işletmeler ve öğrenciler birlikte oluşturulur; mevcut işletmeyle çakışan satırlar için mevcuda bağlama, mevcudu güncelleme veya atlama seçilir.',
+          'e-Okul sınıf listesi (.xls) dosyaları içe aktarılabilir; her dosya bir sınıfı temsil eder ve birden çok dosya birlikte seçilebilir. Önizlemede yeni, değişecek, aynı kalacak ve silinecek öğrenciler ayrı ayrı gösterilir; uygulamadan önce yürürlük tarihi ve gerekçe istenir.',
+          'Atama tablosu, işletme listesi ve öğrenci listesi tek bir Excel çalışma kitabı olarak dışa aktarılabilir.',
+          'İşletme Belirleme Komisyon Tutanağı (PDF/Excel), Koordinatör Görevlendirme Çizelgesi (PDF) ve Öğretmen Ziyaret Listeleri (PDF) buradan yazdırılabilir.',
+        ],
+      },
+    ],
   },
 } as const

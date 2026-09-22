@@ -199,6 +199,14 @@ const navGroups: readonly NavGroup[] = [
       { to: '/history', label: labels.nav.history, icon: 'pi pi-history' },
     ],
   },
+  {
+    key: 'help',
+    label: labels.nav.groupHelp,
+    items: [
+      { to: '/help', label: labels.nav.help, icon: 'pi pi-question-circle' },
+      { to: '/about', label: labels.nav.about, icon: 'pi pi-info-circle' },
+    ],
+  },
 ]
 </script>
 

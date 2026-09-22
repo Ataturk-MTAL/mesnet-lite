@@ -35,6 +35,8 @@ const router = createRouter({
     },
     { path: '/import-export', name: 'importExport', component: () => import('../views/ImportExportView.vue') },
     { path: '/history', name: 'history', component: () => import('../views/HistoryView.vue') },
+    { path: '/help', name: 'help', component: () => import('../views/HelpView.vue') },
+    { path: '/about', name: 'about', component: () => import('../views/AboutView.vue') },
   ],
 })
 
