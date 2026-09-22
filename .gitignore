@@ -11,3 +11,7 @@
 /dist/
 /src-tauri/gen/
 /data
+
+# Impeccable: config.json paylasilan bir karardir ve izlenir; hook.cache.json
+# ise oturum kimligiyle anahtarlanmis, mutlak yol iceren yerel bir onbellektir.
+/.impeccable/hook.cache.json

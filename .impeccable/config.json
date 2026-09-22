@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "layout-transition",
+        "value": "*",
+        "files": [
+          "src/components/layout/AppSidebar.vue"
+        ],
+        "createdAt": "2026-09-19T10:47:30.751Z",
+        "reason": "Orkestrator karari: icerigi yeniden akitan kenar cubugu kapanmasinin transform karsiligi yok (translateX boslugu birakir, scaleX icerigi ezer, grid-template-columns de layout ozelligi). Kullanicinin tek tiklamasiyla 200 ms surer, surekli tetiklenmez."
+      }
+    ]
+  }
+}
