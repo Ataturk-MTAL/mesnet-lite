@@ -708,6 +708,7 @@ export const labels = {
     signIn: 'Giriş',
     signOut: 'Çıkış',
     wrongPin: 'PIN hatalı.',
+    cannotDeactivateSelf: 'Oturumu açık olan kullanıcı kendini pasife alamaz.',
   },
   about: {
     appName: 'MESNET.Lite',

@@ -8,7 +8,14 @@
   >
     <div class="field">
       <label for="user-rename-name">{{ labels.auth.name }}</label>
-      <InputText id="user-rename-name" v-model="name" autofocus fluid :aria-label="labels.auth.name" />
+      <InputText
+        id="user-rename-name"
+        v-model="name"
+        autofocus
+        fluid
+        :disabled="saving"
+        :aria-label="labels.auth.name"
+      />
     </div>
 
     <template #footer>
@@ -19,9 +26,13 @@
         data-testid="user-rename-cancel-button"
         @click="close"
       />
+      <!-- `disabled` `saving`'i de kapsar: OpenVue Button, açık bir `disabled`
+           değeri geldiğinde `loading`'in otomatik devre dışı bırakmasını
+           geçersiz kılıyor. UserCreateDialog.vue'daki not ile aynı sebep. -->
       <Button
         :label="labels.common.save"
-        :disabled="name.trim().length === 0"
+        :disabled="name.trim().length === 0 || saving"
+        :loading="saving"
         data-testid="user-rename-save-button"
         @click="save"
       />
@@ -34,7 +45,7 @@ import { ref, watch } from 'vue'
 import { labels } from '../../i18n/labels'
 import type { User } from '../../types/models'
 
-const props = defineProps<{ visible: boolean; user: User | null }>()
+const props = defineProps<{ visible: boolean; user: User | null; saving: boolean }>()
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   save: [name: string]
@@ -54,10 +65,10 @@ function close(): void {
   emit('update:visible', false)
 }
 
+/** Diyalog KENDİNİ KAPATMAZ — kapanışı `SettingsView` üstlenir. */
 function save(): void {
   if (name.value.trim().length === 0) return
   emit('save', name.value.trim())
-  close()
 }
 </script>
 

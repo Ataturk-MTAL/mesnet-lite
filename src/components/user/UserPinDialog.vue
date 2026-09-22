@@ -17,6 +17,7 @@
           :feedback="false"
           fluid
           autofocus
+          :disabled="saving"
           :aria-label="labels.settings.users.newPin"
           :input-props="pinInputProps"
         />
@@ -28,6 +29,7 @@
           v-model="pinConfirmProxy"
           :feedback="false"
           fluid
+          :disabled="saving"
           :aria-label="labels.settings.users.newPinConfirm"
           :input-props="pinInputProps"
         />
@@ -42,9 +44,13 @@
         data-testid="user-pin-cancel-button"
         @click="close"
       />
+      <!-- `disabled` `saving`'i de kapsar: OpenVue Button, açık bir `disabled`
+           değeri geldiğinde `loading`'in otomatik devre dışı bırakmasını
+           geçersiz kılıyor. UserCreateDialog.vue'daki not ile aynı sebep. -->
       <Button
         :label="labels.common.save"
-        :disabled="pin.length === 0"
+        :disabled="pin.length === 0 || saving"
+        :loading="saving"
         data-testid="user-pin-save-button"
         @click="save"
       />
@@ -58,7 +64,7 @@ import { useToast } from 'openvue/usetoast'
 import { labels } from '../../i18n/labels'
 import { sanitizePinInput } from '../../utils/pin'
 
-const props = defineProps<{ visible: boolean }>()
+const props = defineProps<{ visible: boolean; saving: boolean }>()
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   save: [pin: string]
@@ -100,14 +106,16 @@ function close(): void {
   emit('update:visible', false)
 }
 
-/** PIN tekrarının eşleşmediği tek kural arayüze aittir; geri kalanı arka uç doğrular. */
+/**
+ * PIN tekrarının eşleşmediği tek kural arayüze aittir; geri kalanı arka uç
+ * doğrular. Diyalog KENDİNİ KAPATMAZ — kapanışı `SettingsView` üstlenir.
+ */
 function save(): void {
   if (pin.value !== pinConfirm.value) {
     toast.add({ severity: 'warn', summary: labels.common.error, detail: labels.auth.pinMismatch, life: 5000 })
     return
   }
   emit('save', pin.value)
-  close()
 }
 </script>
 

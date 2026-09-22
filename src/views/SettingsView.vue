@@ -141,8 +141,9 @@
                   :severity="data.isActive ? 'danger' : 'success'"
                   outlined
                   size="small"
-                  :aria-label="data.isActive ? labels.settings.users.deactivate : labels.settings.users.activate"
-                  v-tooltip.top="data.isActive ? labels.settings.users.deactivate : labels.settings.users.activate"
+                  :disabled="isSelf(data)"
+                  :aria-label="toggleActiveLabel(data)"
+                  v-tooltip.top="toggleActiveLabel(data)"
                   @click="toggleActive(data)"
                 />
               </div>
@@ -152,9 +153,14 @@
       </template>
     </Card>
 
-    <UserCreateDialog v-model:visible="isCreateOpen" @save="handleCreateUser" />
-    <UserRenameDialog v-model:visible="isRenameOpen" :user="selectedUser" @save="handleRenameUser" />
-    <UserPinDialog v-model:visible="isPinOpen" @save="handlePinChange" />
+    <UserCreateDialog v-model:visible="isCreateOpen" :saving="isCreatingUser" @save="handleCreateUser" />
+    <UserRenameDialog
+      v-model:visible="isRenameOpen"
+      :user="selectedUser"
+      :saving="isRenamingUser"
+      @save="handleRenameUser"
+    />
+    <UserPinDialog v-model:visible="isPinOpen" :saving="isChangingPin" @save="handlePinChange" />
   </div>
 </template>
 
@@ -168,10 +174,12 @@ import UserPinDialog from '../components/user/UserPinDialog.vue'
 import { settingsApi } from '../api/settings'
 import type { SettingsMap } from '../api/settings'
 import { usersApi } from '../api/users'
+import { useAuth } from '../composables/useAuth'
 import { labels } from '../i18n/labels'
 import type { LatLng, User } from '../types/models'
 
 const toast = useToast()
+const { currentUser, refreshCurrentUser } = useAuth()
 
 /** Günlük ders saati sayısının alt sınırı. Izgara ders numarası artık her zaman 1'den başlar. */
 const MIN_DAILY_LESSONS = 1
@@ -281,11 +289,17 @@ const isCreateOpen = ref(false)
 const isRenameOpen = ref(false)
 const isPinOpen = ref(false)
 const selectedUser = ref<User | null>(null)
+const isCreatingUser = ref(false)
+const isRenamingUser = ref(false)
+const isChangingPin = ref(false)
 
 async function loadUsers(): Promise<void> {
   isLoadingUsers.value = true
   try {
     users.value = await usersApi.list()
+    // Oturumdaki kullanıcı listede yeniden adlandırılmış olabilir; ekran eski
+    // adı göstermesin diye bellekteki oturum burada tazelenir.
+    refreshCurrentUser(users.value)
   } catch (error: unknown) {
     showError(error)
   } finally {
@@ -293,13 +307,32 @@ async function loadUsers(): Promise<void> {
   }
 }
 
+function isSelf(user: User): boolean {
+  return currentUser.value?.id === user.id
+}
+
+function toggleActiveLabel(user: User): string {
+  if (isSelf(user)) return labels.auth.cannotDeactivateSelf
+  return user.isActive ? labels.settings.users.deactivate : labels.settings.users.activate
+}
+
+/**
+ * Diyalog `save` olayında KENDİNİ KAPATMAZ: arka uç reddederse (ör. aynı ad,
+ * PIN biçimi) girilen değerler kaybolmasın diye diyalog açık, form dolu
+ * kalır ve hata toast'u gösterilir. Yalnız başarıda ilgili `is*Open` false
+ * yapılır.
+ */
 async function handleCreateUser(name: string, pin: string): Promise<void> {
+  isCreatingUser.value = true
   try {
     await usersApi.create(name, pin)
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
+    isCreateOpen.value = false
     await loadUsers()
   } catch (error: unknown) {
     showError(error)
+  } finally {
+    isCreatingUser.value = false
   }
 }
 
@@ -310,12 +343,16 @@ function openRename(user: User): void {
 
 async function handleRenameUser(name: string): Promise<void> {
   if (!selectedUser.value) return
+  isRenamingUser.value = true
   try {
     await usersApi.rename(selectedUser.value.id, name)
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
+    isRenameOpen.value = false
     await loadUsers()
   } catch (error: unknown) {
     showError(error)
+  } finally {
+    isRenamingUser.value = false
   }
 }
 
@@ -326,16 +363,21 @@ function openPinChange(user: User): void {
 
 async function handlePinChange(pin: string): Promise<void> {
   if (!selectedUser.value) return
+  isChangingPin.value = true
   try {
     await usersApi.setPin(selectedUser.value.id, pin)
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
+    isPinOpen.value = false
     await loadUsers()
   } catch (error: unknown) {
     showError(error)
+  } finally {
+    isChangingPin.value = false
   }
 }
 
 async function toggleActive(user: User): Promise<void> {
+  if (isSelf(user)) return
   try {
     await usersApi.setActive(user.id, !user.isActive)
     await loadUsers()

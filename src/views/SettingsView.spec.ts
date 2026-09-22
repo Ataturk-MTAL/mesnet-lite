@@ -6,6 +6,8 @@ import Aura from '@openvue/themes/aura'
 import InputNumber from 'openvue/inputnumber'
 import SettingsView from './SettingsView.vue'
 import { labels } from '../i18n/labels'
+import { currentUser, signIn, signOut } from '../composables/useAuth'
+import { usersApi } from '../api/users'
 import type { SettingsMap } from '../api/settings'
 import type { User } from '../types/models'
 
@@ -74,6 +76,8 @@ beforeEach(() => {
   setUserActiveMock.mockReset()
   listUsersMock.mockResolvedValue([])
   document.body.innerHTML = ''
+  // `useAuth` modül düzeyinde tekil durum taşır; testler arasında oturum sızmasın.
+  signOut()
 })
 
 describe('SettingsView principal and field name', () => {
@@ -312,6 +316,182 @@ describe('SettingsView users section', () => {
 
     expect(setUserActiveMock).toHaveBeenCalledWith(1, false)
     expect(listUsersMock).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+})
+
+describe('SettingsView kullanıcı diyalogları — arka uç reddi form kaybettirmez', () => {
+  const sampleUsers: User[] = [
+    { id: 1, name: 'Hakan GÜLEN', isActive: true },
+    { id: 2, name: 'Ayşe Kaya', isActive: true },
+  ]
+
+  it('create reddedilince diyalog açık kalır, girilen değerler korunur', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listUsersMock.mockResolvedValue(sampleUsers)
+    createUserMock.mockRejectedValue(new Error('Bu isimde bir kullanıcı zaten var'))
+
+    const wrapper = mountView()
+    await flushPromises()
+    const addButton = wrapper.findAll('button').find((b) => b.text() === labels.settings.users.add)
+    await addButton!.trigger('click')
+    await flushPromises()
+
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-create-name')!, 'Ayşe Kaya')
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-create-pin')!, '1234')
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-create-pin-confirm')!, '1234')
+    await flushPromises()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="user-create-save-button"]')!.click()
+    await flushPromises()
+
+    // Diyalog hâlâ DOM'da ve girilen ad korunuyor — kaybolmadı.
+    expect(document.body.querySelector<HTMLInputElement>('#user-create-name')?.value).toBe('Ayşe Kaya')
+    wrapper.unmount()
+  })
+
+  it('create başarılı olunca diyalog kapanır', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listUsersMock.mockResolvedValue(sampleUsers)
+    createUserMock.mockResolvedValue({ id: 3, name: 'Yeni Kullanıcı', isActive: true })
+
+    const wrapper = mountView()
+    await flushPromises()
+    const addButton = wrapper.findAll('button').find((b) => b.text() === labels.settings.users.add)
+    await addButton!.trigger('click')
+    await flushPromises()
+
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-create-name')!, 'Yeni Kullanıcı')
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-create-pin')!, '1234')
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-create-pin-confirm')!, '1234')
+    await flushPromises()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="user-create-save-button"]')!.click()
+    await flushPromises()
+
+    expect(document.body.querySelector('#user-create-name')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('rename reddedilince diyalog açık kalır', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listUsersMock.mockResolvedValue(sampleUsers)
+    renameUserMock.mockRejectedValue(new Error('Bu isimde bir kullanıcı zaten var'))
+
+    const wrapper = mountView()
+    await flushPromises()
+    const renameButtons = wrapper.findAll(`button[aria-label="${labels.settings.users.rename}"]`)
+    await renameButtons[0].trigger('click')
+    await flushPromises()
+
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-rename-name')!, 'Ayşe Kaya')
+    await flushPromises()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="user-rename-save-button"]')!.click()
+    await flushPromises()
+
+    expect(document.body.querySelector<HTMLInputElement>('#user-rename-name')?.value).toBe('Ayşe Kaya')
+    wrapper.unmount()
+  })
+
+  it('rename başarılı olunca diyalog kapanır', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listUsersMock.mockResolvedValue(sampleUsers)
+    renameUserMock.mockResolvedValue(undefined)
+
+    const wrapper = mountView()
+    await flushPromises()
+    const renameButtons = wrapper.findAll(`button[aria-label="${labels.settings.users.rename}"]`)
+    await renameButtons[0].trigger('click')
+    await flushPromises()
+
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-rename-name')!, 'Yeni Ad')
+    await flushPromises()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="user-rename-save-button"]')!.click()
+    await flushPromises()
+
+    expect(document.body.querySelector('#user-rename-name')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('PIN değişikliği reddedilince diyalog açık kalır', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listUsersMock.mockResolvedValue(sampleUsers)
+    setUserPinMock.mockRejectedValue(new Error("PIN 4-6 haneli rakamlardan oluşmalı."))
+
+    const wrapper = mountView()
+    await flushPromises()
+    const pinButtons = wrapper.findAll(`button[aria-label="${labels.settings.users.changePin}"]`)
+    await pinButtons[0].trigger('click')
+    await flushPromises()
+
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-pin-new')!, '1234')
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-pin-new-confirm')!, '1234')
+    await flushPromises()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="user-pin-save-button"]')!.click()
+    await flushPromises()
+
+    expect(document.body.querySelector('#user-pin-new')).not.toBeNull()
+    wrapper.unmount()
+  })
+
+  it('PIN değişikliği başarılı olunca diyalog kapanır', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listUsersMock.mockResolvedValue(sampleUsers)
+    setUserPinMock.mockResolvedValue(undefined)
+
+    const wrapper = mountView()
+    await flushPromises()
+    const pinButtons = wrapper.findAll(`button[aria-label="${labels.settings.users.changePin}"]`)
+    await pinButtons[0].trigger('click')
+    await flushPromises()
+
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-pin-new')!, '1234')
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-pin-new-confirm')!, '1234')
+    await flushPromises()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="user-pin-save-button"]')!.click()
+    await flushPromises()
+
+    expect(document.body.querySelector('#user-pin-new')).toBeNull()
+    wrapper.unmount()
+  })
+})
+
+describe('SettingsView — oturumdaki kullanıcı kendini yeniden adlandırınca', () => {
+  it('ekran yeni adı gösterir; kendi satırında pasifleştirme kapalı, diğerlerinde açık kalır', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    let knownUsers: User[] = [
+      { id: 1, name: 'Eski Ad', isActive: true },
+      { id: 2, name: 'Diğer Kullanıcı', isActive: true },
+    ]
+    listUsersMock.mockImplementation(() => Promise.resolve(knownUsers))
+    vi.mocked(usersApi.login).mockResolvedValue(true)
+    renameUserMock.mockImplementation(async (id: number, name: string) => {
+      knownUsers = knownUsers.map((user) => (user.id === id ? { ...user, name } : user))
+    })
+
+    await signIn(1, '1234')
+    expect(currentUser.value?.name).toBe('Eski Ad')
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Kendi satırında pasifleştirme düğmesi devre dışı, diğer kullanıcıda açık.
+    const rows = wrapper.findAll('tbody tr')
+    const selfToggle = rows[0].findAll('button')[2]
+    const otherToggle = rows[1].findAll('button')[2]
+    expect(selfToggle.attributes('disabled')).toBeDefined()
+    expect(otherToggle.attributes('disabled')).toBeUndefined()
+
+    const renameButtons = wrapper.findAll(`button[aria-label="${labels.settings.users.rename}"]`)
+    await renameButtons[0].trigger('click')
+    await flushPromises()
+
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-rename-name')!, 'Yeni Ad')
+    await flushPromises()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="user-rename-save-button"]')!.click()
+    await flushPromises()
+
+    expect(currentUser.value?.name).toBe('Yeni Ad')
+    expect(wrapper.text()).toContain('Yeni Ad')
+
     wrapper.unmount()
   })
 })

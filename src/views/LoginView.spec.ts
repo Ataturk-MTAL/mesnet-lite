@@ -99,6 +99,74 @@ describe('LoginView — ilk kurulum', () => {
 
     wrapper.unmount()
   })
+
+  it('oluşturma başarılı ama giriş (login) başarısız olursa hata gösterir, giriş moduna geçer ve yeni kullanıcıyı seçili bırakır', async () => {
+    hasAnyMock.mockResolvedValue(false)
+    createMock.mockResolvedValue({ id: 9, name: 'Yeni Kullanıcı', isActive: true })
+    loginMock.mockResolvedValue(false)
+    listMock.mockResolvedValue([{ id: 9, name: 'Yeni Kullanıcı', isActive: true }])
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('#setup-name').setValue('Yeni Kullanıcı')
+    await wrapper.find('#setup-pin').setValue('1234')
+    await wrapper.find('#setup-pin-confirm').setValue('1234')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    // Ekran kilitlenmez: 'setup' değil giriş moduna geçer, yeniden aynı adı
+    // oluşturmaya çalışıp çakışma hatasına düşmez.
+    expect(wrapper.text()).not.toContain(labels.auth.firstSetupTitle)
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: labels.auth.wrongPin }),
+    )
+    expect(wrapper.findComponent(Select).props('modelValue')).toBe(9)
+
+    wrapper.unmount()
+  })
+
+  it('oluşturma başarılı ama giriş sırasındaki liste çağrısı hata verirse de giriş moduna geçer, gerçek hata mesajı gösterilir', async () => {
+    hasAnyMock.mockResolvedValue(false)
+    createMock.mockResolvedValue({ id: 9, name: 'Yeni Kullanıcı', isActive: true })
+    loginMock.mockResolvedValue(true)
+    listMock.mockRejectedValue(new Error('Veritabanına ulaşılamadı'))
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('#setup-name').setValue('Yeni Kullanıcı')
+    await wrapper.find('#setup-pin').setValue('1234')
+    await wrapper.find('#setup-pin-confirm').setValue('1234')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain(labels.auth.firstSetupTitle)
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'Veritabanına ulaşılamadı' }),
+    )
+
+    wrapper.unmount()
+  })
+
+  it('oluşturmanın kendisi başarısız olursa ekran setup modunda kalır', async () => {
+    hasAnyMock.mockResolvedValue(false)
+    createMock.mockRejectedValue(new Error('Bu isimde bir kullanıcı zaten var'))
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('#setup-name').setValue('Var Olan')
+    await wrapper.find('#setup-pin').setValue('1234')
+    await wrapper.find('#setup-pin-confirm').setValue('1234')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(labels.auth.firstSetupTitle)
+    expect(loginMock).not.toHaveBeenCalled()
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'Bu isimde bir kullanıcı zaten var' }),
+    )
+
+    wrapper.unmount()
+  })
 })
 
 describe('LoginView — giriş', () => {

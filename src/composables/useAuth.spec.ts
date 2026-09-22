@@ -55,3 +55,37 @@ describe('useAuth', () => {
     expect(isAuthenticated.value).toBe(false)
   })
 })
+
+describe('refreshCurrentUser', () => {
+  it('oturumdaki kullanıcı listede güncellenmişse yeni bir nesneyle değiştirir', async () => {
+    const { signIn, currentUser, refreshCurrentUser } = await loadAuth()
+    loginMock.mockResolvedValue(true)
+    listMock.mockResolvedValue([{ id: 1, name: 'Eski Ad', isActive: true }])
+    await signIn(1, '1234')
+    const before = currentUser.value
+
+    refreshCurrentUser([{ id: 1, name: 'Yeni Ad', isActive: true }])
+
+    expect(currentUser.value).toEqual({ id: 1, name: 'Yeni Ad', isActive: true })
+    expect(currentUser.value).not.toBe(before)
+  })
+
+  it('verilen listede aynı id yoksa oturuma dokunmaz', async () => {
+    const { signIn, currentUser, refreshCurrentUser } = await loadAuth()
+    loginMock.mockResolvedValue(true)
+    listMock.mockResolvedValue([{ id: 1, name: 'Hakan GÜLEN', isActive: true }])
+    await signIn(1, '1234')
+
+    refreshCurrentUser([{ id: 2, name: 'Başka Kullanıcı', isActive: true }])
+
+    expect(currentUser.value).toEqual({ id: 1, name: 'Hakan GÜLEN', isActive: true })
+  })
+
+  it('oturum yoksa dokunmaz', async () => {
+    const { currentUser, refreshCurrentUser } = await loadAuth()
+
+    refreshCurrentUser([{ id: 1, name: 'Hakan GÜLEN', isActive: true }])
+
+    expect(currentUser.value).toBeNull()
+  })
+})

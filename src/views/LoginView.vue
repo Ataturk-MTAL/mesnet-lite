@@ -187,6 +187,35 @@ async function submitLogin(): Promise<void> {
   }
 }
 
+/**
+ * Kullanıcı oluşturulduktan SONRA giriş herhangi bir şekilde başarısız
+ * olursa (yanlış sonuç ya da hata) `create` yine de başarılı sayılır: ekran
+ * kilitlenip 'setup' modunda kalmaz, kullanıcı listesi yeniden alınır ve
+ * yeni oluşturulan kullanıcı seçili, PIN alanı boş biçimde giriş moduna
+ * geçilir — aksi halde tekrar deneme aynı adı yeniden oluşturmaya çalışıp
+ * "Bu isimde bir kullanıcı zaten var" ile düşer.
+ */
+async function signInAfterSetup(created: User): Promise<void> {
+  try {
+    const ok = await signIn(created.id, setupForm.pin)
+    if (!ok) throw new Error(labels.auth.wrongPin)
+  } catch (error: unknown) {
+    showError(error)
+    await returnToLoginAfterFailedSetupSignIn(created.id)
+  }
+}
+
+async function returnToLoginAfterFailedSetupSignIn(createdUserId: number): Promise<void> {
+  mode.value = 'login'
+  try {
+    users.value = await usersApi.list()
+  } catch (error: unknown) {
+    showError(error)
+  }
+  loginForm.userId = createdUserId
+  loginForm.pin = ''
+}
+
 async function submitSetup(): Promise<void> {
   if (!canSubmitSetup.value) return
   if (setupForm.pin !== setupForm.pinConfirm) {
@@ -196,11 +225,9 @@ async function submitSetup(): Promise<void> {
   isSubmitting.value = true
   try {
     const created = await usersApi.create(setupForm.name.trim(), setupForm.pin)
-    const ok = await signIn(created.id, setupForm.pin)
-    // Az önce biz belirlediğimiz PIN ile giriş başarısız olmamalı; yine de
-    // sessizce yutulmaz, kullanıcı bilgilendirilir.
-    if (!ok) showError(new Error(labels.auth.wrongPin))
+    await signInAfterSetup(created)
   } catch (error: unknown) {
+    // `create` başarısızsa (ör. isim çakışması) ekran 'setup' modunda kalır.
     showError(error)
   } finally {
     isSubmitting.value = false

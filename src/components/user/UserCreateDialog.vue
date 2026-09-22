@@ -9,7 +9,14 @@
     <div class="form-grid">
       <div class="field">
         <label for="user-create-name">{{ labels.auth.name }}</label>
-        <InputText id="user-create-name" v-model="form.name" autofocus fluid :aria-label="labels.auth.name" />
+        <InputText
+          id="user-create-name"
+          v-model="form.name"
+          autofocus
+          fluid
+          :disabled="saving"
+          :aria-label="labels.auth.name"
+        />
       </div>
       <div class="field">
         <label for="user-create-pin">{{ labels.auth.pin }}</label>
@@ -18,6 +25,7 @@
           v-model="pinProxy"
           :feedback="false"
           fluid
+          :disabled="saving"
           :aria-label="labels.auth.pin"
           :input-props="pinInputProps"
         />
@@ -29,6 +37,7 @@
           v-model="pinConfirmProxy"
           :feedback="false"
           fluid
+          :disabled="saving"
           :aria-label="labels.auth.pinConfirm"
           :input-props="pinInputProps"
         />
@@ -43,9 +52,16 @@
         data-testid="user-create-cancel-button"
         @click="close"
       />
+      <!--
+        `disabled` burada `saving`'i de kapsar: OpenVue Button, açıkça geçilen
+        bir `disabled` değeri varsa (false dahi olsa) `loading`'in kendi
+        otomatik devre dışı bırakmasını GEÇERSİZ kılıyor — ikisini ayrı
+        bırakmak kaydederken düğmeyi tekrar tıklanabilir bırakırdı.
+      -->
       <Button
         :label="labels.common.save"
-        :disabled="!isValid"
+        :disabled="!isValid || saving"
+        :loading="saving"
         data-testid="user-create-save-button"
         @click="save"
       />
@@ -59,7 +75,7 @@ import { useToast } from 'openvue/usetoast'
 import { labels } from '../../i18n/labels'
 import { sanitizePinInput } from '../../utils/pin'
 
-const props = defineProps<{ visible: boolean }>()
+const props = defineProps<{ visible: boolean; saving: boolean }>()
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   save: [name: string, pin: string]
@@ -103,14 +119,17 @@ function close(): void {
   emit('update:visible', false)
 }
 
-/** PIN tekrarının eşleşmediği tek kural arayüze aittir; geri kalanı arka uç doğrular. */
+/**
+ * PIN tekrarının eşleşmediği tek kural arayüze aittir; geri kalanı arka uç
+ * doğrular. Diyalog KENDİNİ KAPATMAZ — arka uç reddederse form dolu kalsın
+ * diye kapanışı `SettingsView` üstlenir (`saving` sonucuna göre).
+ */
 function save(): void {
   if (form.pin !== form.pinConfirm) {
     toast.add({ severity: 'warn', summary: labels.common.error, detail: labels.auth.pinMismatch, life: 5000 })
     return
   }
   emit('save', form.name.trim(), form.pin)
-  close()
 }
 </script>
 

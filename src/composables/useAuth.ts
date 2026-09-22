@@ -34,6 +34,20 @@ export function signOut(): void {
   currentUserRef.value = null
 }
 
+/**
+ * Oturumdaki kullanıcı listede güncellenmiş bir kayıtla eşleşiyorsa (ör. adı
+ * değişti) bellekteki oturumu YENİ bir nesneyle değiştirir. Oturum yoksa veya
+ * verilen listede aynı `id` bulunamıyorsa dokunmaz — `rename_user` sonrası
+ * `SettingsView.loadUsers()` her çağrıda bunu tetikler.
+ */
+export function refreshCurrentUser(users: readonly User[]): void {
+  const current = currentUserRef.value
+  if (current === null) return
+  const matched = users.find((user) => user.id === current.id)
+  if (matched === undefined) return
+  currentUserRef.value = { ...matched }
+}
+
 export function useAuth() {
-  return { currentUser, isAuthenticated, signIn, signOut }
+  return { currentUser, isAuthenticated, signIn, signOut, refreshCurrentUser }
 }
