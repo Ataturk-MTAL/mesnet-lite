@@ -88,6 +88,19 @@ export interface NewTeacher {
   isActive: boolean
 }
 
+// ---------------------------------------------------------------------------
+// PIN'li kullanıcı girişi — kayıt tutma amaçlı, yetkilendirme YOK. 2-3 kişilik
+// ekibin tamamı tam yetkilidir; amaç yalnızca "değişikliği kim yaptı" bilgisini
+// tarihçeye düşürmektir.
+// ---------------------------------------------------------------------------
+
+/** Rust tarafındaki `UserSummary` ile birebir; PIN hiçbir zaman arayüze gelmez. */
+export interface User {
+  id: number
+  name: string
+  isActive: boolean
+}
+
 export interface NewStudent {
   firstName: string
   lastName: string

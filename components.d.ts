@@ -40,6 +40,7 @@ declare module 'vue' {
     LocationPickerMap: typeof import('./src/components/map/LocationPickerMap.vue')['default']
     Message: typeof import('openvue/message')['default']
     Panel: typeof import('openvue/panel')['default']
+    Password: typeof import('openvue/password')['default']
     ProgressBar: typeof import('openvue/progressbar')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
@@ -54,6 +55,9 @@ declare module 'vue' {
     Textarea: typeof import('openvue/textarea')['default']
     Toast: typeof import('openvue/toast')['default']
     ToggleSwitch: typeof import('openvue/toggleswitch')['default']
+    UserCreateDialog: typeof import('./src/components/user/UserCreateDialog.vue')['default']
+    UserPinDialog: typeof import('./src/components/user/UserPinDialog.vue')['default']
+    UserRenameDialog: typeof import('./src/components/user/UserRenameDialog.vue')['default']
   }
   export interface GlobalDirectives {
     Tooltip: typeof import('openvue/tooltip')['default']

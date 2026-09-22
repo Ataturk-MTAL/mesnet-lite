@@ -21,6 +21,7 @@ pub mod teaching_load;
 #[cfg(test)]
 pub(crate) mod teaching_load_test_support;
 pub mod terms;
+pub mod users;
 
 /// Tauri yönetilen durumu. Komutlar veritabanı havuzuna buradan erişir.
 pub struct AppState {

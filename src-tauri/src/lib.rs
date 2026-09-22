@@ -78,6 +78,13 @@ pub fn run() {
             commands::history_commands::get_subject_history,
             commands::term_commands::list_terms_with_dates,
             commands::term_commands::update_term_dates,
+            commands::user_commands::has_any_user,
+            commands::user_commands::list_users,
+            commands::user_commands::create_user,
+            commands::user_commands::rename_user,
+            commands::user_commands::set_user_pin,
+            commands::user_commands::set_user_active,
+            commands::user_commands::login,
         ])
         .run(tauri::generate_context!())
         .expect("Uygulama başlatılamadı");

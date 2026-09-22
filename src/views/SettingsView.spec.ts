@@ -5,7 +5,9 @@ import ToastService from 'openvue/toastservice'
 import Aura from '@openvue/themes/aura'
 import InputNumber from 'openvue/inputnumber'
 import SettingsView from './SettingsView.vue'
+import { labels } from '../i18n/labels'
 import type { SettingsMap } from '../api/settings'
+import type { User } from '../types/models'
 
 const getMock = vi.fn<() => Promise<SettingsMap>>()
 const saveMock = vi.fn<(entries: SettingsMap) => Promise<SettingsMap>>()
@@ -13,6 +15,24 @@ vi.mock('../api/settings', () => ({
   settingsApi: {
     get: () => getMock(),
     save: (entries: SettingsMap) => saveMock(entries),
+  },
+}))
+
+// PIN'li kullanıcılar; Ayarlar ekranındaki "Kullanıcılar" bölümü bunları listeler.
+const listUsersMock = vi.fn<() => Promise<User[]>>()
+const createUserMock = vi.fn<(name: string, pin: string) => Promise<User>>()
+const renameUserMock = vi.fn<(id: number, name: string) => Promise<void>>()
+const setUserPinMock = vi.fn<(id: number, pin: string) => Promise<void>>()
+const setUserActiveMock = vi.fn<(id: number, isActive: boolean) => Promise<void>>()
+vi.mock('../api/users', () => ({
+  usersApi: {
+    hasAny: vi.fn(),
+    list: () => listUsersMock(),
+    create: (name: string, pin: string) => createUserMock(name, pin),
+    rename: (id: number, name: string) => renameUserMock(id, name),
+    setPin: (id: number, pin: string) => setUserPinMock(id, pin),
+    setActive: (id: number, isActive: boolean) => setUserActiveMock(id, isActive),
+    login: vi.fn(),
   },
 }))
 
@@ -38,9 +58,21 @@ const baseSettings: SettingsMap = {
   day_end_hour: '17',
 }
 
+/** Teleport edilen diyalog alanları `wrapper.find()` ile bulunamaz; ham DOM üzerinden yazılır. */
+function setNativeValue(input: HTMLInputElement, value: string): void {
+  input.value = value
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 beforeEach(() => {
   getMock.mockReset()
   saveMock.mockReset()
+  listUsersMock.mockReset()
+  createUserMock.mockReset()
+  renameUserMock.mockReset()
+  setUserPinMock.mockReset()
+  setUserActiveMock.mockReset()
+  listUsersMock.mockResolvedValue([])
   document.body.innerHTML = ''
 })
 
@@ -209,6 +241,77 @@ describe('SettingsView max daily lessons', () => {
     await vi.waitFor(() => expect(saveMock).toHaveBeenCalledTimes(1))
 
     expect(saveMock.mock.calls[0][0].max_daily_lessons).toBe('23')
+    wrapper.unmount()
+  })
+})
+
+describe('SettingsView users section', () => {
+  const sampleUsers: User[] = [
+    { id: 1, name: 'Hakan GÜLEN', isActive: true },
+    { id: 2, name: 'Ayşe Kaya', isActive: true },
+    { id: 3, name: 'Eski Kullanıcı', isActive: false },
+  ]
+
+  it('renders the user table including an inactive user, tagged as such', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listUsersMock.mockResolvedValue(sampleUsers)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('Hakan GÜLEN')
+    expect(text).toContain('Ayşe Kaya')
+    // Pasif kullanıcı listeden kaybolmaz; etiketiyle görünür.
+    expect(text).toContain('Eski Kullanıcı')
+    expect(text).toContain(labels.settings.users.inactive)
+
+    wrapper.unmount()
+  })
+
+  it('creates a user through the create dialog', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listUsersMock.mockResolvedValue(sampleUsers)
+    createUserMock.mockResolvedValue({ id: 4, name: 'Yeni Kullanıcı', isActive: true })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const addButton = wrapper.findAll('button').find((b) => b.text() === labels.settings.users.add)
+    await addButton!.trigger('click')
+    await flushPromises()
+
+    // Dialog `appendTo="body"` ile document.body'ye teleport edilir; wrapper.find()
+    // kendi kök altındaki DOM'u arar, teleport edilen içeriği bulamaz.
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-create-name')!, 'Yeni Kullanıcı')
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-create-pin')!, '1234')
+    setNativeValue(document.body.querySelector<HTMLInputElement>('#user-create-pin-confirm')!, '1234')
+    await flushPromises()
+
+    const saveButton = document.body.querySelector<HTMLButtonElement>(
+      '[data-testid="user-create-save-button"]',
+    )!
+    saveButton.click()
+    await flushPromises()
+
+    expect(createUserMock).toHaveBeenCalledWith('Yeni Kullanıcı', '1234')
+    wrapper.unmount()
+  })
+
+  it('toggles a user active/inactive and reloads the list', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listUsersMock.mockResolvedValue(sampleUsers)
+    setUserActiveMock.mockResolvedValue(undefined)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const toggleButtons = wrapper.findAll(`button[aria-label="${labels.settings.users.deactivate}"]`)
+    await toggleButtons[0].trigger('click')
+    await flushPromises()
+
+    expect(setUserActiveMock).toHaveBeenCalledWith(1, false)
+    expect(listUsersMock).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
 })

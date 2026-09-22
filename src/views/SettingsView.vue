@@ -93,6 +93,68 @@
     <div class="actions">
       <Button :label="labels.common.save" icon="pi pi-check" :loading="isSaving" @click="save" />
     </div>
+
+    <Card>
+      <template #title>{{ labels.settings.users.title }}</template>
+      <template #content>
+        <div class="users-header">
+          <Button :label="labels.settings.users.add" icon="pi pi-plus" @click="isCreateOpen = true" />
+        </div>
+
+        <DataTable :value="users" :loading="isLoadingUsers" dataKey="id" stripedRows>
+          <template #empty>{{ labels.settings.users.empty }}</template>
+
+          <Column field="name" :header="labels.settings.users.name" />
+
+          <Column :header="labels.settings.users.status">
+            <template #body="{ data }">
+              <Tag
+                :value="data.isActive ? labels.settings.users.active : labels.settings.users.inactive"
+                :severity="data.isActive ? 'success' : 'secondary'"
+              />
+            </template>
+          </Column>
+
+          <Column :header="labels.settings.users.actions">
+            <template #body="{ data }">
+              <div class="row-actions">
+                <Button
+                  icon="pi pi-pencil"
+                  severity="secondary"
+                  outlined
+                  size="small"
+                  :aria-label="labels.settings.users.rename"
+                  v-tooltip.top="labels.settings.users.rename"
+                  @click="openRename(data)"
+                />
+                <Button
+                  icon="pi pi-key"
+                  severity="secondary"
+                  outlined
+                  size="small"
+                  :aria-label="labels.settings.users.changePin"
+                  v-tooltip.top="labels.settings.users.changePin"
+                  @click="openPinChange(data)"
+                />
+                <Button
+                  :icon="data.isActive ? 'pi pi-eye-slash' : 'pi pi-eye'"
+                  :severity="data.isActive ? 'danger' : 'success'"
+                  outlined
+                  size="small"
+                  :aria-label="data.isActive ? labels.settings.users.deactivate : labels.settings.users.activate"
+                  v-tooltip.top="data.isActive ? labels.settings.users.deactivate : labels.settings.users.activate"
+                  @click="toggleActive(data)"
+                />
+              </div>
+            </template>
+          </Column>
+        </DataTable>
+      </template>
+    </Card>
+
+    <UserCreateDialog v-model:visible="isCreateOpen" @save="handleCreateUser" />
+    <UserRenameDialog v-model:visible="isRenameOpen" :user="selectedUser" @save="handleRenameUser" />
+    <UserPinDialog v-model:visible="isPinOpen" @save="handlePinChange" />
   </div>
 </template>
 
@@ -100,10 +162,14 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import LocationPickerMap from '../components/map/LocationPickerMap.vue'
+import UserCreateDialog from '../components/user/UserCreateDialog.vue'
+import UserRenameDialog from '../components/user/UserRenameDialog.vue'
+import UserPinDialog from '../components/user/UserPinDialog.vue'
 import { settingsApi } from '../api/settings'
 import type { SettingsMap } from '../api/settings'
+import { usersApi } from '../api/users'
 import { labels } from '../i18n/labels'
-import type { LatLng } from '../types/models'
+import type { LatLng, User } from '../types/models'
 
 const toast = useToast()
 
@@ -202,6 +268,83 @@ async function load(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Kullanıcılar — PIN'li giriş, kayıt tutma amaçlı. Rol/izin YOK; herkes tam
+// yetkili. Arka uç dört kuralı (PIN biçimi, benzersiz ad, pasif giremez, son
+// etkin kullanıcı pasife alınamaz) AppError::Validation ile Türkçe döner; bu
+// ekran yalnız `showError` ile gösterir, kuralı yeniden yazmaz.
+// ---------------------------------------------------------------------------
+
+const users = ref<User[]>([])
+const isLoadingUsers = ref(false)
+const isCreateOpen = ref(false)
+const isRenameOpen = ref(false)
+const isPinOpen = ref(false)
+const selectedUser = ref<User | null>(null)
+
+async function loadUsers(): Promise<void> {
+  isLoadingUsers.value = true
+  try {
+    users.value = await usersApi.list()
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isLoadingUsers.value = false
+  }
+}
+
+async function handleCreateUser(name: string, pin: string): Promise<void> {
+  try {
+    await usersApi.create(name, pin)
+    toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
+    await loadUsers()
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
+function openRename(user: User): void {
+  selectedUser.value = user
+  isRenameOpen.value = true
+}
+
+async function handleRenameUser(name: string): Promise<void> {
+  if (!selectedUser.value) return
+  try {
+    await usersApi.rename(selectedUser.value.id, name)
+    toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
+    await loadUsers()
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
+function openPinChange(user: User): void {
+  selectedUser.value = user
+  isPinOpen.value = true
+}
+
+async function handlePinChange(pin: string): Promise<void> {
+  if (!selectedUser.value) return
+  try {
+    await usersApi.setPin(selectedUser.value.id, pin)
+    toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
+    await loadUsers()
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
+async function toggleActive(user: User): Promise<void> {
+  try {
+    await usersApi.setActive(user.id, !user.isActive)
+    await loadUsers()
+  } catch (error: unknown) {
+    // Ör. son etkin kullanıcı pasife alınamaz — arka ucun Türkçe mesajı olduğu gibi gösterilir.
+    showError(error)
+  }
+}
+
 async function save(): Promise<void> {
   const lessons = form.maxDailyLessons
   if (lessons === null || lessons < MIN_DAILY_LESSONS || lessons > MAX_DAILY_LESSONS) {
@@ -238,7 +381,10 @@ async function save(): Promise<void> {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  await loadUsers()
+})
 </script>
 
 <style scoped>
@@ -253,4 +399,6 @@ label { font-size: 0.875rem; font-weight: 500; }
 .hint { color: var(--p-text-muted-color); font-size: 0.75rem; }
 .cap-note { margin-top: 1rem; }
 .actions { display: flex; justify-content: flex-end; }
+.users-header { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+.row-actions { display: flex; gap: 0.25rem; }
 </style>

@@ -33,6 +33,12 @@ typst-as-lib = "0.16"
 typst = "0.15.1"
 typst-layout = "0.15.1"
 typst-pdf = "0.15.1"
+# PIN'ler özetlenerek saklanır. Uygulama tek makinede çalışır ve veritabanı
+# korumasızdır; özetleme kimseyi dışarıda tutmaz ama açık parola saklamamak
+# yine de doğru olanıdır. `std` özelliği: tuz üretimi için işletim sisteminin
+# CSPRNG'sine (`OsRng`) ihtiyaç var, bu da `rand_core`nun `getrandom`
+# özelliğini gerektiriyor — varsayılan özellik kümesi bunu getirmiyor.
+argon2 = { version = "0.5", features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"

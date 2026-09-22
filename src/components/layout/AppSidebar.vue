@@ -84,6 +84,15 @@
             <i :class="option.icon" :title="option.label" />
           </template>
         </SelectButton>
+        <span v-if="currentUser" class="topbar-user">{{ currentUser.name }}</span>
+        <Button
+          icon="pi pi-sign-out"
+          severity="secondary"
+          text
+          :aria-label="labels.auth.signOut"
+          v-tooltip.top="labels.auth.signOut"
+          @click="signOut"
+        />
       </header>
       <RouterView />
     </main>
@@ -95,6 +104,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { labels } from '../../i18n/labels'
 import { useTheme } from '../../composables/useTheme'
 import { activeTerm, terms, loadTerms, setActiveTerm } from '../../composables/useTerm'
+import { currentUser, signOut } from '../../composables/useAuth'
 import AsOfDatePicker from '../history/AsOfDatePicker.vue'
 
 const { preference, setThemePreference } = useTheme()
@@ -317,6 +327,7 @@ const navGroups: readonly NavGroup[] = [
 .topbar-term { display: flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; }
 .topbar-term > i { color: var(--p-text-muted-color); }
 .term-select { min-width: 11rem; }
+.topbar-user { font-size: 0.875rem; color: var(--p-text-muted-color); margin-inline: 0.5rem; white-space: nowrap; }
 
 .main > :not(.topbar) {
   flex: 1;
