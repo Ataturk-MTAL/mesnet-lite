@@ -23,6 +23,11 @@ pub(crate) mod teaching_load_test_support;
 pub mod terms;
 pub mod users;
 
+/// Veritabanı dosyasının sabit adı. `lib.rs`teki açılış yolu ve
+/// `services::backup`teki geri yükleme (eski dosyanın yerine yenisini koyma)
+/// AYNI adı kullanır; iki yerde ayrı ayrı yazılmasın diye tek burada tanımlıdır.
+pub const DB_FILE_NAME: &str = "mesnet-lite.db";
+
 /// Tauri yönetilen durumu. Komutlar veritabanı havuzuna buradan erişir.
 pub struct AppState {
     pub pool: SqlitePool,
@@ -34,6 +39,12 @@ pub async fn init_pool(db_path: &Path) -> AppResult<SqlitePool> {
         std::fs::create_dir_all(parent)?;
     }
 
+    // "Dosya zaten var mıydı" burada, havuz açılmadan ÖNCE sorulur: aşağıdaki
+    // `create_if_missing(true)` dosyayı sessizce oluşturabilir ve bu bilgiyi
+    // sonradan geri getiremeyiz. İlk kurulumda (dosya yok) otomatik yedek
+    // alınmaz — yedeklenecek bir şey henüz yok.
+    let db_existed_before_open = db_path.exists();
+
     let options = SqliteConnectOptions::new()
         .filename(db_path)
         .create_if_missing(true)
@@ -44,6 +55,22 @@ pub async fn init_pool(db_path: &Path) -> AppResult<SqlitePool> {
         .connect_with(options)
         .await
         .map_err(|e| AppError::Database(format!("Havuz açılamadı: {e}")))?;
+
+    // Otomatik günlük yedek, migration'lardan ÖNCE alınır: bozuk bir
+    // migration'dan bu yedekle geri dönülebilsin. Yedek BAŞARISIZ olsa bile
+    // uygulama açılmaya devam eder (veriye erişimi engellememeli); hata
+    // burada yutulmaz, en azından konsola yazılır.
+    if db_existed_before_open {
+        if let Some(parent) = db_path.parent() {
+            let backup_dir = crate::services::backup::auto_backup_dir(parent);
+            if let Err(e) =
+                crate::services::backup::create_daily_backup_if_missing(&pool, &backup_dir, crate::domain::terms::today_local())
+                    .await
+            {
+                eprintln!("Otomatik yedek alınamadı: {e}");
+            }
+        }
+    }
 
     sqlx::migrate!("./migrations")
         .run(&pool)
@@ -251,5 +278,39 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(after_second_run, districts);
+    }
+
+    /// İlk kurulumda (DB dosyası henüz yok) otomatik yedek ALINMAMALI:
+    /// yedeklenecek bir şey henüz yok.
+    #[tokio::test]
+    async fn init_pool_does_not_backup_on_first_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        init_pool(&db_path).await.unwrap();
+
+        let backup_dir = dir.path().join("backups");
+        assert!(
+            !backup_dir.exists() || std::fs::read_dir(&backup_dir).unwrap().next().is_none(),
+            "ilk kurulumda yedek klasörü boş olmalı"
+        );
+    }
+
+    /// DB dosyası zaten varsa (ikinci açılış), bugünün otomatik yedeği
+    /// migration'lardan önce, `backups/` altında alınmış olmalı.
+    #[tokio::test]
+    async fn init_pool_backs_up_existing_db_before_migrations() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // Birinci açılış: dosyayı yaratır, henüz yedek almaz (yukarıdaki test).
+        init_pool(&db_path).await.unwrap();
+        // İkinci açılış: dosya artık VAR, bu yüzden bugünün yedeği alınmalı.
+        init_pool(&db_path).await.unwrap();
+
+        let backup_dir = dir.path().join("backups");
+        let today = crate::domain::terms::today_local();
+        let expected = backup_dir.join(format!("mesnet-lite-{}.db", today.format("%Y-%m-%d")));
+        assert!(expected.exists(), "bugünün otomatik yedeği alınmış olmalı: {expected:?}");
     }
 }

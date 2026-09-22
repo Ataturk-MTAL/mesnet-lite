@@ -11,10 +11,11 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Veritabanı platform-doğru uygulama veri dizininde tutulur.
             let dir = app.path().app_data_dir()?;
-            let db_path = dir.join("mesnet-lite.db");
+            let db_path = dir.join(db::DB_FILE_NAME);
 
             let pool = tauri::async_runtime::block_on(init_pool(&db_path))
                 .map_err(|e| format!("Veritabanı açılamadı: {e}"))?;
@@ -85,6 +86,9 @@ pub fn run() {
             commands::user_commands::set_user_pin,
             commands::user_commands::set_user_active,
             commands::user_commands::login,
+            commands::backup_commands::backup_status,
+            commands::backup_commands::create_backup,
+            commands::backup_commands::restore_backup,
         ])
         .run(tauri::generate_context!())
         .expect("Uygulama başlatılamadı");

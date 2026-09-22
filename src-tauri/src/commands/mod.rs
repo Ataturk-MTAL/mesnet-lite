@@ -1,5 +1,6 @@
 pub mod assignment_commands;
 pub mod availability_commands;
+pub mod backup_commands;
 pub mod commission_minutes_commands;
 pub mod company_commands;
 pub mod company_merge_commands;

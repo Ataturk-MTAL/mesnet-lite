@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod change_service;
 pub mod commission_minutes;
 pub mod commission_minutes_pdf;
@@ -14,6 +15,8 @@ pub mod student_list_import;
 
 mod change_input;
 
+#[cfg(test)]
+mod backup_tests;
 #[cfg(test)]
 mod change_service_p6_tests;
 #[cfg(test)]
