@@ -147,6 +147,10 @@ export const labels = {
     empty: 'Kayıtlı işletme yok. Önce CSV içe aktarın.',
     changedCount: 'değişiklik',
     exceedsMax: 'Takdir edilen saat tavanı aşamaz.',
+    lockAll: 'Tümünü Kilitle',
+    unlockAll: 'Kilitleri Aç',
+    lockAllTooltip:
+      'Kilitli satırlar otomatik dağıtımda korunur. Değişikliğin kalıcı olması için Saatleri Kaydet gerekir.',
   },
   teachingLoad: {
     title: 'Ders Yükü ve Havuz',

@@ -1,0 +1,60 @@
+{
+  "get_hours_board": {
+    "term": "2026-2027/1",
+    "rows": [
+      {
+        "companyId": 1,
+        "companyName": "Akdeniz Elektronik San. Tic. Ltd. Şti.",
+        "addressText": "Kaleiçi Mah. Serbest Bölge",
+        "oneWayDistanceKm": 12.4,
+        "roundTripDistanceKm": 24.8,
+        "studentCount": 2,
+        "maxHours": 8,
+        "awardedHours": 6,
+        "isHonorary": false,
+        "isLocked": false,
+        "notes": "",
+        "isSaved": true
+      },
+      {
+        "companyId": 2,
+        "companyName": "Örnek Enerji Sistemleri Anonim Şirketi ve Endüstriyel Otomasyon Çözümleri",
+        "addressText": "Korukent Mah. Toroslar",
+        "oneWayDistanceKm": 8.5,
+        "roundTripDistanceKm": 17.0,
+        "studentCount": 3,
+        "maxHours": 10,
+        "awardedHours": 10,
+        "isHonorary": false,
+        "isLocked": true,
+        "notes": "",
+        "isSaved": true
+      },
+      {
+        "companyId": 3,
+        "companyName": "Toros Otomasyon ve Kontrol Sistemleri",
+        "addressText": "Serbest Bölge",
+        "oneWayDistanceKm": 5.1,
+        "roundTripDistanceKm": 10.2,
+        "studentCount": 1,
+        "maxHours": null,
+        "awardedHours": 0,
+        "isHonorary": true,
+        "isLocked": false,
+        "notes": "",
+        "isSaved": true
+      }
+    ],
+    "poolHours": 40,
+    "totalAwarded": 16,
+    "totalMax": 18,
+    "honoraryCount": 1,
+    "lockedCount": 1,
+    "withoutRuleCount": 1,
+    "warnings": []
+  },
+  "get_settings": { "active_term": "2026-2027/1", "school_name": "Atatürk MTAL" },
+  "list_terms_with_dates": [],
+  "known_terms": ["2026-2027/1"],
+  "get_known_terms": ["2026-2027/1"]
+}

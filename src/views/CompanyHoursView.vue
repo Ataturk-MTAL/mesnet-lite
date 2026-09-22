@@ -7,6 +7,15 @@
       </div>
       <div class="header-actions">
         <Button
+          :label="allRowsLocked ? labels.hours.unlockAll : labels.hours.lockAll"
+          :icon="allRowsLocked ? 'pi pi-lock-open' : 'pi pi-lock'"
+          severity="secondary"
+          outlined
+          :disabled="rows.length === 0"
+          v-tooltip.bottom="labels.hours.lockAllTooltip"
+          @click="toggleAllLocks"
+        />
+        <Button
           :label="labels.hours.autoDistribute"
           icon="pi pi-sparkles"
           severity="secondary"
@@ -190,8 +199,8 @@
     </DataTable>
 
     <div class="footer-actions">
-      <span v-if="board && board.lockedCount > 0" class="muted">
-        {{ board.lockedCount }} {{ labels.hours.lockedNote }}
+      <span v-if="liveLockedCount > 0" class="muted">
+        {{ liveLockedCount }} {{ labels.hours.lockedNote }}
       </span>
       <span class="muted">{{ labels.hours.savedHint }}</span>
       <RouterLink to="/allocation">
@@ -248,6 +257,7 @@ const liveTotalAwarded = computed(() =>
   rows.value.reduce((sum, row) => sum + row.awardedHours, 0),
 )
 const liveHonoraryCount = computed(() => rows.value.filter((row) => row.isHonorary).length)
+const liveLockedCount = computed(() => rows.value.filter((row) => row.isLocked).length)
 const isOverPool = computed(
   () => (board.value?.poolHours ?? 0) > 0 && liveTotalAwarded.value > (board.value?.poolHours ?? 0),
 )
@@ -286,6 +296,15 @@ function setAwarded(row: HoursRow, value: number | null): void {
 
 function toggleLock(row: HoursRow): void {
   row.isLocked = !row.isLocked
+}
+
+/** Tüm satırlar zaten kilitliyse toplu düğme "Kilitleri Aç" olur. */
+const allRowsLocked = computed(() => rows.value.length > 0 && rows.value.every((row) => row.isLocked))
+
+/** Toplu kilit/aç — satır sayısı kadar YENİ nesne üretir, mevcutları yerinde değiştirmez. */
+function toggleAllLocks(): void {
+  const nextLocked = !allRowsLocked.value
+  rows.value = rows.value.map((row) => ({ ...row, isLocked: nextLocked }))
 }
 
 function applyBoard(next: HoursBoard): void {
