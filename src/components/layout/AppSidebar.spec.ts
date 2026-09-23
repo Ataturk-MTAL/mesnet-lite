@@ -65,4 +65,11 @@ describe('AppSidebar', () => {
     expect(targets).toContain('/help')
     expect(targets).toContain('/about')
   })
+
+  it('okul amblemini anlamlı alt metinle başlıkta gösterir', () => {
+    const wrapper = mountSidebar()
+    const logo = wrapper.find('img.brand-logo')
+    expect(logo.exists()).toBe(true)
+    expect(logo.attributes('alt')).toBe(labels.app.logoAlt)
+  })
 })

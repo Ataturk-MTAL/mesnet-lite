@@ -1,6 +1,6 @@
 // Tüm Türkçe arayüz metinleri burada toplanır; başka dosyada sabit metin yazılmaz.
 export const labels = {
-  app: { title: 'MESNET.Lite' },
+  app: { title: 'MESNET.Lite', logoAlt: 'Atatürk Mesleki ve Teknik Anadolu Lisesi amblemi' },
   nav: {
     groupRecords: 'Kayıtlar',
     groupPlanning: 'Planlama',
@@ -738,10 +738,14 @@ export const labels = {
   },
   about: {
     appName: 'MESNET.Lite',
-    school: 'Atatürk Mesleki ve Teknik Anadolu Lisesi',
+    school: 'Atatürk Mesleki ve Teknik Anadolu Lisesi — Mersin / Toroslar',
     field: 'Elektrik Elektronik Teknolojileri Alanı',
     purpose:
       'İşletmelerde mesleki eğitim koordinatörlüğü görevlendirmelerini ve ek ders saati hesabını yürütür.',
+    license: 'Apache License 2.0',
+    logoLicenseNote: 'Okul amblemi Apache-2.0 lisansı kapsamında değildir.',
+    sourceCode: 'Kaynak Kod',
+    sourceCodeUrl: 'https://github.com/Ataturk-MTAL/mesnet-lite',
   },
   help: {
     title: 'Kullanım Kılavuzu',

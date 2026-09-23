@@ -4,6 +4,7 @@
          Sidebar ailesini içermediği için navigasyon elle kuruluyor. -->
     <aside v-if="!isNarrow" class="sidebar" :class="{ 'sidebar--collapsed': isCollapsed }">
       <div class="sidebar-header">
+        <img :src="logoUrl" :alt="labels.app.logoAlt" class="brand-logo" />
         <span v-if="!isCollapsed" class="brand">{{ labels.app.title }}</span>
       </div>
       <div v-if="!isCollapsed" class="sidebar-as-of-date">
@@ -106,6 +107,7 @@ import { useTheme } from '../../composables/useTheme'
 import { activeTerm, terms, loadTerms, setActiveTerm } from '../../composables/useTerm'
 import { currentUser, signOut } from '../../composables/useAuth'
 import AsOfDatePicker from '../history/AsOfDatePicker.vue'
+import logoUrl from '../../assets/ataturk-mtal.png'
 
 const { preference, setThemePreference } = useTheme()
 
@@ -244,9 +246,22 @@ const navGroups: readonly NavGroup[] = [
 .sidebar-header {
   display: flex;
   align-items: center;
+  gap: 0.625rem;
   height: 3.5rem;
   padding-inline: 1rem;
   border-bottom: 1px solid var(--p-content-border-color);
+}
+
+.sidebar--collapsed .sidebar-header {
+  justify-content: center;
+  padding-inline: 0.5rem;
+}
+
+.brand-logo {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex-shrink: 0;
+  object-fit: contain;
 }
 
 .brand {

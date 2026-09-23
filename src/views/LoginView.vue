@@ -1,89 +1,92 @@
 <template>
   <div class="login-screen">
-    <Card class="login-card">
-      <template #title>{{ labels.app.title }}</template>
-      <template #content>
-        <div v-if="isLoading" class="login-loading">{{ labels.common.loading }}</div>
+    <div class="login-column">
+      <img :src="logoUrl" :alt="labels.app.logoAlt" class="login-logo" />
+      <Card class="login-card">
+        <template #title>{{ labels.app.title }}</template>
+        <template #content>
+          <div v-if="isLoading" class="login-loading">{{ labels.common.loading }}</div>
 
-        <form v-else-if="mode === 'setup'" class="login-form" @submit.prevent="submitSetup">
-          <h2 class="login-subtitle">{{ labels.auth.firstSetupTitle }}</h2>
+          <form v-else-if="mode === 'setup'" class="login-form" @submit.prevent="submitSetup">
+            <h2 class="login-subtitle">{{ labels.auth.firstSetupTitle }}</h2>
 
-          <div class="field">
-            <label for="setup-name">{{ labels.auth.name }}</label>
-            <InputText id="setup-name" v-model="setupForm.name" autofocus fluid :aria-label="labels.auth.name" />
-          </div>
+            <div class="field">
+              <label for="setup-name">{{ labels.auth.name }}</label>
+              <InputText id="setup-name" v-model="setupForm.name" autofocus fluid :aria-label="labels.auth.name" />
+            </div>
 
-          <div class="field">
-            <label for="setup-pin">{{ labels.auth.pin }}</label>
-            <Password
-              input-id="setup-pin"
-              v-model="setupPinProxy"
-              :feedback="false"
-              fluid
-              :aria-label="labels.auth.pin"
-              :input-props="pinInputProps"
+            <div class="field">
+              <label for="setup-pin">{{ labels.auth.pin }}</label>
+              <Password
+                input-id="setup-pin"
+                v-model="setupPinProxy"
+                :feedback="false"
+                fluid
+                :aria-label="labels.auth.pin"
+                :input-props="pinInputProps"
+              />
+            </div>
+
+            <div class="field">
+              <label for="setup-pin-confirm">{{ labels.auth.pinConfirm }}</label>
+              <Password
+                input-id="setup-pin-confirm"
+                v-model="setupPinConfirmProxy"
+                :feedback="false"
+                fluid
+                :aria-label="labels.auth.pinConfirm"
+                :input-props="pinInputProps"
+              />
+            </div>
+
+            <Button
+              type="submit"
+              :label="labels.auth.createAndSignIn"
+              :loading="isSubmitting"
+              :disabled="!canSubmitSetup"
+              class="login-submit"
             />
-          </div>
+          </form>
 
-          <div class="field">
-            <label for="setup-pin-confirm">{{ labels.auth.pinConfirm }}</label>
-            <Password
-              input-id="setup-pin-confirm"
-              v-model="setupPinConfirmProxy"
-              :feedback="false"
-              fluid
-              :aria-label="labels.auth.pinConfirm"
-              :input-props="pinInputProps"
+          <form v-else class="login-form" @submit.prevent="submitLogin">
+            <div class="field">
+              <label for="login-user">{{ labels.auth.user }}</label>
+              <Select
+                id="login-user"
+                v-model="loginForm.userId"
+                :options="activeUsers"
+                optionLabel="name"
+                optionValue="id"
+                :placeholder="labels.auth.userPlaceholder"
+                :aria-label="labels.auth.user"
+                fluid
+              />
+            </div>
+
+            <div class="field">
+              <label for="login-pin">{{ labels.auth.pin }}</label>
+              <Password
+                input-id="login-pin"
+                ref="pinFieldRef"
+                v-model="loginPinProxy"
+                :feedback="false"
+                fluid
+                :aria-label="labels.auth.pin"
+                :input-props="pinInputProps"
+              />
+            </div>
+
+            <Button
+              type="submit"
+              :label="labels.auth.signIn"
+              :loading="isSubmitting"
+              :disabled="!canSubmitLogin"
+              class="login-submit"
             />
-          </div>
-
-          <Button
-            type="submit"
-            :label="labels.auth.createAndSignIn"
-            :loading="isSubmitting"
-            :disabled="!canSubmitSetup"
-            class="login-submit"
-          />
-        </form>
-
-        <form v-else class="login-form" @submit.prevent="submitLogin">
-          <div class="field">
-            <label for="login-user">{{ labels.auth.user }}</label>
-            <Select
-              id="login-user"
-              v-model="loginForm.userId"
-              :options="activeUsers"
-              optionLabel="name"
-              optionValue="id"
-              :placeholder="labels.auth.userPlaceholder"
-              :aria-label="labels.auth.user"
-              fluid
-            />
-          </div>
-
-          <div class="field">
-            <label for="login-pin">{{ labels.auth.pin }}</label>
-            <Password
-              input-id="login-pin"
-              ref="pinFieldRef"
-              v-model="loginPinProxy"
-              :feedback="false"
-              fluid
-              :aria-label="labels.auth.pin"
-              :input-props="pinInputProps"
-            />
-          </div>
-
-          <Button
-            type="submit"
-            :label="labels.auth.signIn"
-            :loading="isSubmitting"
-            :disabled="!canSubmitLogin"
-            class="login-submit"
-          />
-        </form>
-      </template>
-    </Card>
+          </form>
+        </template>
+      </Card>
+    </div>
   </div>
 </template>
 
@@ -95,6 +98,7 @@ import { signIn } from '../composables/useAuth'
 import { labels } from '../i18n/labels'
 import { sanitizePinInput } from '../utils/pin'
 import type { User } from '../types/models'
+import logoUrl from '../assets/ataturk-mtal.png'
 
 const toast = useToast()
 
@@ -244,6 +248,17 @@ onMounted(loadInitialState)
   align-items: center;
   justify-content: center;
   background: var(--p-content-background);
+}
+.login-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+.login-logo {
+  width: 6rem;
+  height: 6rem;
+  object-fit: contain;
 }
 .login-card {
   width: 24rem;
