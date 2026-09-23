@@ -25,3 +25,6 @@
 *.xls
 # Kurgusal test fixture'ları (ör. e-Okul .xls) izlenir — yukarıdaki kuralların istisnası.
 !src-tauri/src/services/fixtures/**
+
+# Yerel, üçüncü taraf belge kopyaları (OpenVue llms.txt) — yayınlanmaz.
+/.claude/reference/
