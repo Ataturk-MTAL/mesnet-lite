@@ -48,9 +48,14 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+  # Dört platformun tam `release` derlemesi ağırdır (Windows/macOS'ta 20–30 dk).
+  # Günlük iş dalı PR'larında çalışmaz; yalnız sürümden önceki `dev` → `main`
+  # PR'ında ve elle başlatıldığında paketlerin derlendiği doğrulanır. Sürüm
+  # paketlerini `release.yml` etiketle üretir.
   bundle:
     name: Paket (${{ matrix.name }})
     needs: [frontend, backend]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'main')
     strategy:
       fail-fast: false
       matrix:
