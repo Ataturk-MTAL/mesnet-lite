@@ -29,7 +29,7 @@ const startedTerm: TermWithDates = {
 function companyFixture(overrides: Partial<Company> = {}): Company {
   return {
     id: 1,
-    name: 'Örnek İşletme',
+    name: 'örnek Mekatronik Havacılık Sanayi A.Ş.',
     contactFirstName: '',
     contactLastName: '',
     phone: '',
@@ -47,8 +47,8 @@ function companyFixture(overrides: Partial<Company> = {}): Company {
   }
 }
 
-const source = companyFixture({ id: 5, name: 'Örnek İşletme' })
-const target = companyFixture({ id: 6, name: 'Örnek İşletme' })
+const source = companyFixture({ id: 5, name: 'örnek Mekatronik Havacılık Sanayi A.Ş.' })
+const target = companyFixture({ id: 6, name: 'ÖRNEK MEKATRONİK HAVACILIK' })
 const other = companyFixture({ id: 7, name: 'Farklı Firma' })
 
 function previewFixture(overrides: Partial<CompanyMergePreview> = {}): CompanyMergePreview {

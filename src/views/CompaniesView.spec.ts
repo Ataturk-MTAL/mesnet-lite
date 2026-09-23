@@ -230,8 +230,8 @@ describe('CompaniesView arama', () => {
 })
 
 describe('CompaniesView — işletme birleştirme', () => {
-  const duplicateA = companyFixture({ id: 5, name: 'Örnek İşletme' })
-  const duplicateB = companyFixture({ id: 6, name: 'Örnek İşletme' })
+  const duplicateA = companyFixture({ id: 5, name: 'örnek Mekatronik Havacılık Sanayi A.Ş.' })
+  const duplicateB = companyFixture({ id: 6, name: 'ÖRNEK MEKATRONİK HAVACILIK' })
 
   async function openMergeDialogForFirstRow(): Promise<VueWrapper> {
     const wrapper = await mountView([duplicateA, duplicateB])

@@ -67,7 +67,7 @@ describe('App', () => {
     const { signIn } = await import('./composables/useAuth')
     const { usersApi } = await import('./api/users')
     vi.mocked(usersApi.login).mockResolvedValue(true)
-    vi.mocked(usersApi.list).mockResolvedValue([{ id: 1, name: 'Hakan GÜLEN', isActive: true }])
+    vi.mocked(usersApi.list).mockResolvedValue([{ id: 1, name: 'Deniz ARSLAN', isActive: true }])
 
     await signIn(1, '1234')
     const wrapper = mountApp()

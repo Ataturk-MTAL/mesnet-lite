@@ -14,7 +14,7 @@ const fixtures = fixturePath ? JSON.parse(readFileSync(fixturePath, 'utf8')) : {
 // fixture) o değer kazanır — burada ELLE ezilmez.
 const authDefaults = {
   has_any_user: true,
-  list_users: [{ id: 1, name: 'Hakan GÜLEN', isActive: true }],
+  list_users: [{ id: 1, name: 'Deniz ARSLAN', isActive: true }],
   login: true,
 }
 const effectiveFixtures = { ...authDefaults, ...fixtures }

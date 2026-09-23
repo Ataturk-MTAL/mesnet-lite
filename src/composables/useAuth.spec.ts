@@ -25,13 +25,13 @@ describe('useAuth', () => {
   it('PIN doğruysa kullanıcıyı bellekte oturuma yazar', async () => {
     const { signIn, currentUser, isAuthenticated } = await loadAuth()
     loginMock.mockResolvedValue(true)
-    listMock.mockResolvedValue([{ id: 1, name: 'Hakan GÜLEN', isActive: true }])
+    listMock.mockResolvedValue([{ id: 1, name: 'Deniz ARSLAN', isActive: true }])
 
     const ok = await signIn(1, '1234')
 
     expect(ok).toBe(true)
     expect(isAuthenticated.value).toBe(true)
-    expect(currentUser.value).toEqual({ id: 1, name: 'Hakan GÜLEN', isActive: true })
+    expect(currentUser.value).toEqual({ id: 1, name: 'Deniz ARSLAN', isActive: true })
   })
 
   it('PIN yanlışsa hata FIRLATMAZ, false döner ve oturum açılmaz', async () => {
@@ -73,18 +73,18 @@ describe('refreshCurrentUser', () => {
   it('verilen listede aynı id yoksa oturuma dokunmaz', async () => {
     const { signIn, currentUser, refreshCurrentUser } = await loadAuth()
     loginMock.mockResolvedValue(true)
-    listMock.mockResolvedValue([{ id: 1, name: 'Hakan GÜLEN', isActive: true }])
+    listMock.mockResolvedValue([{ id: 1, name: 'Deniz ARSLAN', isActive: true }])
     await signIn(1, '1234')
 
     refreshCurrentUser([{ id: 2, name: 'Başka Kullanıcı', isActive: true }])
 
-    expect(currentUser.value).toEqual({ id: 1, name: 'Hakan GÜLEN', isActive: true })
+    expect(currentUser.value).toEqual({ id: 1, name: 'Deniz ARSLAN', isActive: true })
   })
 
   it('oturum yoksa dokunmaz', async () => {
     const { currentUser, refreshCurrentUser } = await loadAuth()
 
-    refreshCurrentUser([{ id: 1, name: 'Hakan GÜLEN', isActive: true }])
+    refreshCurrentUser([{ id: 1, name: 'Deniz ARSLAN', isActive: true }])
 
     expect(currentUser.value).toBeNull()
   })

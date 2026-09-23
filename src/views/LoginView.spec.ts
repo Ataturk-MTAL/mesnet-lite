@@ -167,10 +167,23 @@ describe('LoginView — ilk kurulum', () => {
 
     wrapper.unmount()
   })
+
+  it('kart üstünde okul amblemini anlamlı alt metinle gösterir', async () => {
+    hasAnyMock.mockResolvedValue(false)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const logo = wrapper.find('img.login-logo')
+    expect(logo.exists()).toBe(true)
+    expect(logo.attributes('alt')).toBe(labels.app.logoAlt)
+
+    wrapper.unmount()
+  })
 })
 
 describe('LoginView — giriş', () => {
-  const activeUser: User = { id: 1, name: 'Hakan GÜLEN', isActive: true }
+  const activeUser: User = { id: 1, name: 'Deniz ARSLAN', isActive: true }
   const inactiveUser: User = { id: 2, name: 'Pasif Kullanıcı', isActive: false }
 
   it('kullanıcı varken giriş formunu çizer, yalnız etkin kullanıcıları listeler', async () => {

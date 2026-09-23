@@ -9,7 +9,7 @@ import type { User } from '../../types/models'
 // Dialog `body`'ye teleport edilir; `wrapper.find` onu göremez, doğrudan
 // `document.body` sorgulanır (CompanyFormDialog.spec.ts'teki desen).
 
-const sampleUser: User = { id: 1, name: 'Hakan GÜLEN', isActive: true }
+const sampleUser: User = { id: 1, name: 'Deniz ARSLAN', isActive: true }
 
 function mountDialog(saving = false, user: User | null = sampleUser) {
   return mount(UserRenameDialog, {

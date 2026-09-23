@@ -308,7 +308,7 @@ describe('SettingsView max daily lessons', () => {
 
 describe('SettingsView users section', () => {
   const sampleUsers: User[] = [
-    { id: 1, name: 'Hakan GÜLEN', isActive: true },
+    { id: 1, name: 'Deniz ARSLAN', isActive: true },
     { id: 2, name: 'Ayşe Kaya', isActive: true },
     { id: 3, name: 'Eski Kullanıcı', isActive: false },
   ]
@@ -321,7 +321,7 @@ describe('SettingsView users section', () => {
     await flushPromises()
 
     const text = wrapper.text()
-    expect(text).toContain('Hakan GÜLEN')
+    expect(text).toContain('Deniz ARSLAN')
     expect(text).toContain('Ayşe Kaya')
     // Pasif kullanıcı listeden kaybolmaz; etiketiyle görünür.
     expect(text).toContain('Eski Kullanıcı')
@@ -379,7 +379,7 @@ describe('SettingsView users section', () => {
 
 describe('SettingsView kullanıcı diyalogları — arka uç reddi form kaybettirmez', () => {
   const sampleUsers: User[] = [
-    { id: 1, name: 'Hakan GÜLEN', isActive: true },
+    { id: 1, name: 'Deniz ARSLAN', isActive: true },
     { id: 2, name: 'Ayşe Kaya', isActive: true },
   ]
 

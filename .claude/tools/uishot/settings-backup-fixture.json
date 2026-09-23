@@ -1,7 +1,7 @@
 {
   "has_any_user": true,
   "list_users": [
-    { "id": 1, "name": "Hakan GÜLEN", "isActive": true }
+    { "id": 1, "name": "Deniz ARSLAN", "isActive": true }
   ],
   "get_settings": {
     "school_name": "Atatürk Mesleki ve Teknik Anadolu Lisesi",
