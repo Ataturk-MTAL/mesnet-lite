@@ -8,3 +8,20 @@ src-tauri/icons/ altındaki simgeler) Atatürk Mesleki ve Teknik Anadolu
 Lisesi'ne (Mersin / Toroslar) aittir ve Apache License 2.0 kapsamında
 DEĞİLDİR. Bu projeyi çatallayan/yeniden dağıtanlar amblemi kendi
 simgeleriyle değiştirmelidir.
+
+------------------------------------------------------------------------
+Üçüncü taraf bileşenler
+------------------------------------------------------------------------
+
+DejaVu Sans fontları (src-tauri/assets/fonts/DejaVuSans.ttf,
+DejaVuSans-Bold.ttf) PDF raporlarında kullanılmak üzere uygulamanın içine
+gömülüdür.
+  Copyright (c) 2003 Bitstream, Inc. (Bitstream Vera)
+  Copyright (c) 2006 Tavmjong Bah (Arev)
+  DejaVu değişiklikleri kamu malıdır (public domain).
+  Lisans: Bitstream Vera Fonts License / Arev Fonts License —
+  tam metin: src-tauri/assets/fonts/LICENSE-DejaVu.txt
+  Kaynak: https://dejavu-fonts.github.io/
+
+PDF üretimi Typst (https://typst.app) kütüphaneleriyle yapılır;
+Typst Apache License 2.0 ile lisanslanmıştır.
