@@ -205,9 +205,15 @@ pub fn parse_student_list_xls(bytes: &[u8]) -> AppResult<ParsedClassList> {
 mod tests {
     use super::*;
 
+    /// Gerçek e-Okul dosyaları öğrenci kişisel verisi içerdiği için depoya
+    /// commit edilemez; bunun yerine `scripts/make_eokul_fixtures.py`'nin
+    /// ürettiği, aynı BIFF8 yapısını taşıyan TAMAMEN KURGUSAL `.xls`
+    /// dosyaları `src/services/fixtures/eokul/` altında commit'lidir — bu
+    /// yüzden testler ATLAMADAN her ortamda (CI dahil) koşar.
     fn fixture(name_fragment: &str) -> Vec<u8> {
-        let data_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("data");
-        let path = std::fs::read_dir(&data_dir)
+        let fixtures_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/services/fixtures/eokul");
+        let path = std::fs::read_dir(&fixtures_dir)
             .unwrap()
             .flatten()
             .map(|e| e.path())
@@ -232,10 +238,10 @@ mod tests {
         assert!(parse_class_title("rastgele bir metin").is_err());
     }
 
-    /// R076_920.XLS (dal sütunlu, 12/D): 17 öğrenci, iki dal (9 + 8).
+    /// r076_12d.xls (dal sütunlu, 12/D, kurgusal): 17 öğrenci, iki dal (8 + 9).
     #[test]
     fn r076_class_d_has_seventeen_rows_split_across_two_branches() {
-        let parsed = parse_student_list_xls(&fixture("R076_920.XLS")).unwrap();
+        let parsed = parse_student_list_xls(&fixture("r076_12d")).unwrap();
         assert_eq!(parsed.grade, "12/D");
         assert_eq!(parsed.field_name, "ELEKTRİK-ELEKTRONİK TEKNOLOJİSİ ALANI");
         assert_eq!(parsed.rows.len(), 17);
@@ -246,10 +252,10 @@ mod tests {
         assert_eq!(bakim, 9);
     }
 
-    /// R076_920 (1).XLS (dal sütunlu, 12/C): 17 öğrenci, hepsi aynı dal.
+    /// r076_12c.xls (dal sütunlu, 12/C, kurgusal): 17 öğrenci, hepsi aynı dal.
     #[test]
     fn r076_class_c_has_seventeen_rows_all_same_branch() {
-        let parsed = parse_student_list_xls(&fixture("R076_920 (1).XLS")).unwrap();
+        let parsed = parse_student_list_xls(&fixture("r076_12c")).unwrap();
         assert_eq!(parsed.grade, "12/C");
         assert_eq!(parsed.rows.len(), 17);
         assert!(parsed.rows.iter().all(|r| r.branch == "Elektronik ve Haberleşme"));
@@ -265,8 +271,8 @@ mod tests {
     /// öğrenciler doğru ayrışmalı — bu, sütunların İSİMDEN eşlendiğinin kanıtı.
     #[test]
     fn r020_files_parse_despite_missing_branch_column_and_different_offsets() {
-        let class_c = parse_student_list_xls(&fixture("R020_920 (1).XLS")).unwrap();
-        let class_d = parse_student_list_xls(&fixture("R020_920 (2).XLS")).unwrap();
+        let class_c = parse_student_list_xls(&fixture("r020_12c")).unwrap();
+        let class_d = parse_student_list_xls(&fixture("r020_12d")).unwrap();
 
         assert_eq!(class_c.grade, "12/C");
         assert_eq!(class_d.grade, "12/D");
