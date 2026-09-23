@@ -39,3 +39,21 @@ fiilen uygulanmadı.
 `alp-implementor` ve `alp-investigator` alp-sdk / signex / tan-cli
 skill'lerini yükler, MESNET'i tanımaz. Bu projede onların yerine yukarıdaki
 iki ajanı kullan.
+
+## Dal kuralı (zorunlu geliştirme kısıtı)
+
+Ayrıntı: `CONTRIBUTING.md`.
+
+- `main` ve `dev`'e **doğrudan commit ya da push YOK**. İkisine de yalnız PR ile girilir.
+- Her özellik/hata düzeltmesi `dev`'den ayrılan bir dalda yapılır:
+  `git switch dev && git pull && git switch -c <tür>/<kısa-ad>` (`feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `test/`).
+- İşe başlamadan önce bulunulan dalı kontrol et; `main` ya da `dev` üzerindeysen önce dal aç.
+- İş dalı → `dev` PR'ı; CI yeşil olmadan birleştirme. Sürüm: `dev` → `main` PR'ı, sonra `main`'de `vX.Y.Z` etiketi.
+- Ajan brief'lerinde de çalışılacak dalı belirt; ajan `main`/`dev` üzerinde commit atmaz.
+
+## Kişisel veri (zorunlu)
+
+Depo herkese açık. Gerçek öğrenci/veli/öğretmen/işletme adı, numarası, telefonu,
+e-postası, gerçek CSV/Excel dışa aktarımı ya da `.db` dosyası hiçbir commit'e
+girmez. Testlerde yalnız kurgusal veri. Gerçek veritabanından okunan değerleri
+test/fixture'a kopyalama.
