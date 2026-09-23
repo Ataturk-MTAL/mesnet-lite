@@ -62,7 +62,11 @@ git tag v0.2.0 && git push origin v0.2.0
 
 GitHub Actions üç platform için paketleri derleyip taslak bir sürüme ekler.
 
+## Yazar
+
+**Hakan Gülen** — [@hkngln](https://github.com/hkngln)
+
 ## Lisans
 
-Kaynak kod [Apache License 2.0](LICENSE) ile lisanslanmıştır.
+Copyright © 2026 Hakan Gülen. Kaynak kod [Apache License 2.0](LICENSE) ile lisanslanmıştır.
 Okul amblemi Atatürk Mesleki ve Teknik Anadolu Lisesi'ne aittir ve bu lisans kapsamında **değildir** — ayrıntılar için [NOTICE](NOTICE).
