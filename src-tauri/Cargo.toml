@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "İşletmelerde mesleki eğitim koordinatörlük dağıtımı ve ek ders saati takdiri"
 authors = ["Hakan Gülen"]
 edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Ataturk-MTAL/mesnet-lite"
 
 [lib]
 # `_lib` soneki Windows'ta bin adıyla çakışmayı önlemek için gereklidir.

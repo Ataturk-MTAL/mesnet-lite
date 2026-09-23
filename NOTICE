@@ -1,0 +1,10 @@
+MESNET.Lite
+Copyright 2026 Hakan Gülen
+
+Bu ürün Apache License 2.0 ile lisanslanmıştır (bkz. LICENSE).
+
+Okul amblemi (src/assets/ataturk-mtal.png ve ondan üretilen
+src-tauri/icons/ altındaki simgeler) Atatürk Mesleki ve Teknik Anadolu
+Lisesi'ne (Mersin / Toroslar) aittir ve Apache License 2.0 kapsamında
+DEĞİLDİR. Bu projeyi çatallayan/yeniden dağıtanlar amblemi kendi
+simgeleriyle değiştirmelidir.

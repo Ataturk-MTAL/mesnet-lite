@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  frontend:
+    name: Arayüz (tip denetimi, test, derleme)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vue-tsc --noEmit -p tsconfig.json
+      - run: pnpm exec vitest run
+      - run: pnpm build
+
+  backend:
+    name: Arka uç (cargo test)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux bağımlılıkları
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+  bundle:
+    name: Paket (${{ matrix.name }})
+    needs: [frontend, backend]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            args: --target aarch64-apple-darwin
+            rust_targets: aarch64-apple-darwin
+          - name: macOS (Intel)
+            os: macos-latest
+            args: --target x86_64-apple-darwin
+            rust_targets: x86_64-apple-darwin
+          - name: Windows
+            os: windows-latest
+            args: ""
+            rust_targets: ""
+          - name: Linux
+            os: ubuntu-22.04
+            args: ""
+            rust_targets: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux bağımlılıkları
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          args: ${{ matrix.args }}
+      - name: Paketleri yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesnet-lite-${{ matrix.os }}-${{ strategy.job-index }}
+          path: |
+            src-tauri/target/**/release/bundle/**/*.dmg
+            src-tauri/target/**/release/bundle/**/*.msi
+            src-tauri/target/**/release/bundle/**/*.exe
+            src-tauri/target/**/release/bundle/**/*.deb
+            src-tauri/target/**/release/bundle/**/*.rpm
+            src-tauri/target/**/release/bundle/**/*.AppImage
+          if-no-files-found: warn
+          retention-days: 14

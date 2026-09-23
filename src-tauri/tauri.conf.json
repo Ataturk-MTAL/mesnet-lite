@@ -25,6 +25,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Atatürk Mesleki ve Teknik Anadolu Lisesi",
+    "copyright": "© 2026 Hakan Gülen — Apache-2.0",
+    "license": "Apache-2.0",
+    "category": "Education",
+    "shortDescription": "İşletmelerde mesleki eğitim koordinatörlük dağıtımı",
+    "longDescription": "İşletmelerde mesleki eğitim koordinatörlük dağıtımı, ek ders saati takdiri ve değişiklik tarihçesi.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
