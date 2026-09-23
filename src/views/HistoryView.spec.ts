@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
+import ConfirmationService from 'openvue/confirmationservice'
 import Aura from '@openvue/themes/aura'
 import HistoryView from './HistoryView.vue'
 import type { Company, HistoryChangeSetEntry, HistoryFilter, HistoryResponse, Teacher } from '../types/models'
@@ -19,6 +20,7 @@ vi.mock('../api/history', () => ({
   previewChange: vi.fn(),
   commitChange: vi.fn(),
   getSubjectHistory: vi.fn(),
+  deleteChangeSet: vi.fn(),
 }))
 
 vi.mock('../api/companies', () => ({
@@ -41,6 +43,7 @@ function entryFixture(changeSetId: number): HistoryChangeSetEntry {
     revokedByChangeSetId: null,
     revokesChangeSetId: null,
     isRevocable: true,
+    isDeletable: false,
     warnings: [],
     events: [],
   }
@@ -49,7 +52,11 @@ function entryFixture(changeSetId: number): HistoryChangeSetEntry {
 function mountView() {
   return mount(HistoryView, {
     global: {
-      plugins: [[OpenVue, { theme: { preset: Aura, options: { darkModeSelector: '.app-dark' } } }], ToastService],
+      plugins: [
+        [OpenVue, { theme: { preset: Aura, options: { darkModeSelector: '.app-dark' } } }],
+        ToastService,
+        ConfirmationService,
+      ],
     },
     attachTo: document.body,
   })

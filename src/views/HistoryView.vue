@@ -79,6 +79,7 @@
         :entry="entry"
         :term="activeTerm"
         @revoked="load"
+        @deleted="load"
       />
     </div>
 

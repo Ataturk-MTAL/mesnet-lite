@@ -45,6 +45,20 @@
         data-testid="revoke-button"
         @click="openRevokeDialog"
       />
+      <Button
+        v-if="entry.isDeletable"
+        :label="labels.history.delete.button"
+        icon="pi pi-trash"
+        severity="danger"
+        text
+        size="small"
+        :aria-label="labels.history.delete.button"
+        v-tooltip.top="labels.history.delete.tooltip"
+        :loading="isDeleting"
+        :disabled="isDeleting"
+        data-testid="delete-button"
+        @click="confirmDelete"
+      />
     </template>
   </Card>
 
@@ -85,8 +99,11 @@
 
 <script setup lang="ts">
 import { computed, ref, useId, watch } from 'vue'
+import { useToast } from 'openvue/usetoast'
+import { useConfirm } from 'openvue/useconfirm'
 import { labels } from '../../i18n/labels'
 import { useChange } from '../../composables/useChange'
+import { deleteChangeSet } from '../../api/history'
 import ImpactDialog from './ImpactDialog.vue'
 import type { HistoryChangeSetEntry, HistoryEventEntry } from '../../types/models'
 
@@ -97,7 +114,7 @@ const props = defineProps<{
   term: string
 }>()
 
-const emit = defineEmits<{ revoked: [] }>()
+const emit = defineEmits<{ revoked: []; deleted: [] }>()
 
 const isRevoked = computed(() => props.entry.revokedByChangeSetId !== null)
 
@@ -170,6 +187,37 @@ watch(
     if (status === 'committed') emit('revoked')
   },
 )
+
+// --- Tarihçeden kalıcı silme (bugünkü durumu etkilemeyen kayıtlar) ---
+
+const toast = useToast()
+const confirm = useConfirm()
+const isDeleting = ref(false)
+
+function confirmDelete(): void {
+  confirm.require({
+    message: labels.history.delete.confirmMessage,
+    header: labels.common.confirm,
+    acceptLabel: labels.common.yes,
+    rejectLabel: labels.common.no,
+    acceptProps: { severity: 'danger' },
+    accept: () => void submitDelete(),
+  })
+}
+
+async function submitDelete(): Promise<void> {
+  isDeleting.value = true
+  try {
+    await deleteChangeSet(props.entry.changeSetId)
+    toast.add({ severity: 'success', summary: labels.history.delete.success, life: 2500 })
+    emit('deleted')
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : labels.common.error
+    toast.add({ severity: 'error', summary: labels.common.error, detail, life: 6000 })
+  } finally {
+    isDeleting.value = false
+  }
+}
 </script>
 
 <style scoped>

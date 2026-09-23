@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
 import OpenVue from 'openvue/config'
 import Aura from '@openvue/themes/aura'
 import HistoryEntryCard from './HistoryEntryCard.vue'
@@ -9,11 +9,25 @@ import type { HistoryChangeSetEntry } from '../../types/models'
 // `useChange` bu testlerde hiç çağrılmıyor (Geri Al akışı ayrı bir görevde
 // canlı denenir), ama `api/history.ts` yine de taklit edilir; gerçek hâli
 // Tauri komutuna iner ve jsdom'da çöker.
+const deleteChangeSetMock = vi.fn<(changeSetId: number) => Promise<void>>()
 vi.mock('../../api/history', () => ({
   previewChange: vi.fn(),
   commitChange: vi.fn(),
   listHistory: vi.fn(),
   getSubjectHistory: vi.fn(),
+  deleteChangeSet: (changeSetId: number) => deleteChangeSetMock(changeSetId),
+}))
+
+// `<Toast />` ve `<ConfirmDialog />` App.vue'da yaşar; gerçek diyaloğu çizmek
+// yerine `require`e verilen `accept` geri çağrısını yakalayıp elle tetikleriz.
+const toastAddMock = vi.fn<(message: { severity: string; detail?: string }) => void>()
+vi.mock('openvue/usetoast', () => ({
+  useToast: () => ({ add: toastAddMock }),
+}))
+
+const confirmRequireMock = vi.fn<(options: { accept?: () => void }) => void>()
+vi.mock('openvue/useconfirm', () => ({
+  useConfirm: () => ({ require: confirmRequireMock, close: vi.fn() }),
 }))
 
 function mountCard(entry: HistoryChangeSetEntry) {
@@ -37,11 +51,18 @@ function baseEntry(overrides: Partial<HistoryChangeSetEntry> = {}): HistoryChang
     revokedByChangeSetId: null,
     revokesChangeSetId: null,
     isRevocable: true,
+    isDeletable: false,
     warnings: [],
     events: [],
     ...overrides,
   }
 }
+
+beforeEach(() => {
+  deleteChangeSetMock.mockReset()
+  toastAddMock.mockReset()
+  confirmRequireMock.mockReset()
+})
 
 describe('HistoryEntryCard', () => {
   it('nests caused events under their cause', () => {
@@ -108,5 +129,62 @@ describe('HistoryEntryCard', () => {
     const entry = baseEntry({ isRevocable: true })
     const wrapper = mountCard(entry)
     expect(wrapper.find('[data-testid="revoke-button"]').exists()).toBe(true)
+  })
+
+  it('hides delete when not deletable', () => {
+    const entry = baseEntry({ isDeletable: false })
+    const wrapper = mountCard(entry)
+    expect(wrapper.find('[data-testid="delete-button"]').exists()).toBe(false)
+  })
+
+  it('shows delete when deletable', () => {
+    const entry = baseEntry({ isDeletable: true })
+    const wrapper = mountCard(entry)
+    expect(wrapper.find('[data-testid="delete-button"]').exists()).toBe(true)
+  })
+
+  it('deletes the change set and emits deleted when the confirmation is accepted', async () => {
+    deleteChangeSetMock.mockResolvedValueOnce(undefined)
+    const entry = baseEntry({ changeSetId: 7, isDeletable: true })
+    const wrapper = mountCard(entry)
+
+    await wrapper.get('[data-testid="delete-button"]').trigger('click')
+    expect(confirmRequireMock).toHaveBeenCalledTimes(1)
+    expect(confirmRequireMock.mock.calls[0][0]).toMatchObject({ message: labels.history.delete.confirmMessage })
+
+    await confirmRequireMock.mock.calls[0][0].accept?.()
+    await flushPromises()
+
+    expect(deleteChangeSetMock).toHaveBeenCalledWith(7)
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', summary: labels.history.delete.success }),
+    )
+    expect(wrapper.emitted('deleted')).toHaveLength(1)
+  })
+
+  it('does not delete when the confirmation is not accepted', async () => {
+    const entry = baseEntry({ isDeletable: true })
+    const wrapper = mountCard(entry)
+
+    await wrapper.get('[data-testid="delete-button"]').trigger('click')
+    expect(confirmRequireMock).toHaveBeenCalledTimes(1)
+
+    expect(deleteChangeSetMock).not.toHaveBeenCalled()
+    expect(wrapper.emitted('deleted')).toBeUndefined()
+  })
+
+  it('shows an error toast with the real message when deletion fails', async () => {
+    deleteChangeSetMock.mockRejectedValueOnce(new Error('delete_change_set: Bu kayıt silinemez'))
+    const entry = baseEntry({ isDeletable: true })
+    const wrapper = mountCard(entry)
+
+    await wrapper.get('[data-testid="delete-button"]').trigger('click')
+    await confirmRequireMock.mock.calls[0][0].accept?.()
+    await flushPromises()
+
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'delete_change_set: Bu kayıt silinemez' }),
+    )
+    expect(wrapper.emitted('deleted')).toBeUndefined()
   })
 })

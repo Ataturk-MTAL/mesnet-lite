@@ -577,6 +577,13 @@ export const labels = {
     useSuggestedDate: "Ayın 1'inden gir",
     previousMonthClosedHint: (firstOfMonth: string) =>
       `Bu ayın puantajı ilçeye gönderildi; en erken ${firstOfMonth} ile girebilirsiniz.`,
+    delete: {
+      button: 'Sil',
+      tooltip: 'Bu kayıt geri alınmış; bugünkü durumu etkilemiyor. Tarihçeden silinebilir.',
+      confirmMessage:
+        'Bu kayıt ve onu iptal eden işaretler tarihçeden kalıcı olarak silinecek. Bugünkü durum değişmez. Devam edilsin mi?',
+      success: 'Kayıt silindi',
+    },
     eventKind: {
       student_placed: 'Yerleştirme',
       student_transferred: 'Nakil',

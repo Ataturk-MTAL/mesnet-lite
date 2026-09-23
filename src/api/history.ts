@@ -33,3 +33,11 @@ export function listHistory(filter: HistoryFilter): Promise<HistoryResponse> {
 export function getSubjectHistory(stream: Stream, subjectId: number, term: string): Promise<HistoryEventEntry[]> {
   return call('get_subject_history', { stream, subjectId, term })
 }
+
+/**
+ * Bugünkü durumu etkilemeyen bir değişiklik kümesini tarihçeden kalıcı olarak
+ * siler (`isDeletable` false ise Rust tarafı Türkçe bir `Error` döner).
+ */
+export function deleteChangeSet(changeSetId: number): Promise<void> {
+  return call('delete_change_set', { changeSetId })
+}

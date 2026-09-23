@@ -224,6 +224,7 @@ function lastChange(overrides: Partial<HistoryChangeSetEntry> = {}): HistoryChan
     revokedByChangeSetId: null,
     revokesChangeSetId: null,
     isRevocable: true,
+    isDeletable: false,
     warnings: [],
     events: [],
     ...overrides,

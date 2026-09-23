@@ -388,6 +388,8 @@ export interface HistoryChangeSetEntry {
   revokedByChangeSetId: number | null
   revokesChangeSetId: number | null
   isRevocable: boolean
+  /** Yalnızca bugünkü durumu değiştirmeyen (tüm olayları geri alınmış, opening olmayan) kayıtlarda true. */
+  isDeletable: boolean
   warnings: ImpactWarning[]
   events: HistoryEventEntry[]
 }

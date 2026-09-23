@@ -31,6 +31,7 @@ function entry(id: number, overrides: Partial<HistoryChangeSetEntry> = {}): Hist
     revokedByChangeSetId: null,
     revokesChangeSetId: null,
     isRevocable: true,
+    isDeletable: false,
     warnings: [],
     events: [],
     ...overrides,
