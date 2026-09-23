@@ -60,7 +60,7 @@ Yapı: `src/` Vue 3 + TypeScript + OpenVue arayüzü, `src-tauri/` Rust arka ucu
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-GitHub Actions üç platform için paketleri derleyip taslak bir sürüme ekler.
+GitHub Actions Windows, macOS ve Linux kurulum dosyalarını derleyip sürümü yayınlar.
 
 ## Yazar
 

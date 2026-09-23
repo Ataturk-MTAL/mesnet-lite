@@ -1,8 +1,7 @@
 name: Sürüm
 
-# `v0.2.0` gibi bir etiket gönderildiğinde üç platform için paketler
-# derlenir ve TASLAK bir GitHub sürümüne eklenir. Taslak, elle gözden
-# geçirilip yayınlanır.
+# `v0.2.0` gibi bir etiket gönderildiğinde dört platform için kurulum
+# dosyaları derlenir ve doğrudan yayınlanan bir GitHub sürümüne eklenir.
 on:
   push:
     tags: ['v*']
@@ -63,6 +62,6 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'MESNET.Lite ${{ github.ref_name }}'
           releaseBody: 'Kurulum dosyaları aşağıda. macOS paketleri imzasız olduğundan ilk açılışta sağ tık → Aç gerekir.'
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
