@@ -11,12 +11,26 @@ import type { ChangeOutcome, ChangeRequest, HistoryChangeSetEntry, HistoryFilter
 const listHistoryMock = vi.fn<(filter: HistoryFilter) => Promise<HistoryResponse>>()
 const previewChangeMock = vi.fn<(request: ChangeRequest) => Promise<ChangeOutcome>>()
 const commitChangeMock = vi.fn<(request: ChangeRequest, expectedHighWater: number | null) => Promise<ChangeOutcome>>()
+const deleteChangeSetMock = vi.fn<(changeSetId: number) => Promise<void>>()
 vi.mock('../../api/history', () => ({
   previewChange: (request: ChangeRequest) => previewChangeMock(request),
   commitChange: (request: ChangeRequest, expectedHighWater: number | null) =>
     commitChangeMock(request, expectedHighWater),
   listHistory: (filter: HistoryFilter) => listHistoryMock(filter),
   getSubjectHistory: vi.fn(),
+  deleteChangeSet: (changeSetId: number) => deleteChangeSetMock(changeSetId),
+}))
+
+// `<Toast />` ve `<ConfirmDialog />` App.vue'da yaşar; gerçek diyaloğu çizmek
+// yerine `require`e verilen `accept` geri çağrısını yakalayıp elle tetikleriz.
+const toastAddMock = vi.fn<(message: { severity: string; detail?: string }) => void>()
+vi.mock('openvue/usetoast', () => ({
+  useToast: () => ({ add: toastAddMock }),
+}))
+
+const confirmRequireMock = vi.fn<(options: { accept?: () => void }) => void>()
+vi.mock('openvue/useconfirm', () => ({
+  useConfirm: () => ({ require: confirmRequireMock, close: vi.fn() }),
 }))
 
 function entry(id: number, overrides: Partial<HistoryChangeSetEntry> = {}): HistoryChangeSetEntry {
@@ -62,6 +76,9 @@ beforeEach(() => {
   listHistoryMock.mockReset()
   previewChangeMock.mockReset()
   commitChangeMock.mockReset()
+  deleteChangeSetMock.mockReset()
+  toastAddMock.mockReset()
+  confirmRequireMock.mockReset()
   document.body.innerHTML = ''
 })
 
@@ -125,9 +142,9 @@ describe('TeacherScheduleHistory', () => {
     const wrapper = await mountPanel()
 
     const edit = wrapper.get('[data-testid="schedule-history-edit-button"]').element as HTMLButtonElement
-    const remove = wrapper.get('[data-testid="schedule-history-delete-button"]').element as HTMLButtonElement
+    const revoke = wrapper.get('[data-testid="schedule-history-revoke-button"]').element as HTMLButtonElement
     expect(edit.disabled).toBe(true)
-    expect(remove.disabled).toBe(true)
+    expect(revoke.disabled).toBe(true)
     expect(wrapper.get('[data-testid="schedule-history-not-revocable"]').text()).toBe(
       labels.availability.historyNotRevocableHint,
     )
@@ -146,12 +163,22 @@ describe('TeacherScheduleHistory', () => {
     wrapper.unmount()
   })
 
+  it('shows "Geri Al" as the active entry\'s revoke button label', async () => {
+    respondWith([entry(2), entry(1)])
+    const wrapper = await mountPanel()
+
+    const revoke = wrapper.get('[data-testid="schedule-history-revoke-button"]')
+    expect(revoke.attributes('aria-label')).toBe(labels.availability.historyRevoke)
+    expect(revoke.text()).toContain(labels.availability.historyRevoke)
+    wrapper.unmount()
+  })
+
   it('previews a revoke command with the entered reason', async () => {
     respondWith([entry(2), entry(1)])
     previewChangeMock.mockResolvedValue({ status: 'stale', message: 'durdur' })
     const wrapper = await mountPanel()
 
-    await wrapper.get('[data-testid="schedule-history-delete-button"]').trigger('click')
+    await wrapper.get('[data-testid="schedule-history-revoke-button"]').trigger('click')
     await flushPromises()
 
     const submit = document.body.querySelector<HTMLButtonElement>('[data-testid="schedule-delete-submit-button"]')
@@ -187,6 +214,91 @@ describe('TeacherScheduleHistory', () => {
     await flushPromises()
 
     expect(listHistoryMock).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('mutes a silently invalidated change set, tags it "Geçersiz" and skips it as active', async () => {
+    // 2, `revokedByChangeSetId` boş kaldığı halde arka uçta olay düzeyinde
+    // geri alındı (`isDeletable: true`); en son geçerli kayıt 1 olmalı.
+    respondWith([entry(2, { isDeletable: true }), entry(1)])
+    const wrapper = await mountPanel()
+
+    const invalidated = wrapper.get('[data-testid="schedule-history-item-2"]')
+    expect(invalidated.classes()).toContain('schedule-history-item--muted')
+    expect(invalidated.find('[data-testid="schedule-history-invalid-badge"]').exists()).toBe(true)
+    expect(invalidated.find('[data-testid="schedule-history-delete-button"]').exists()).toBe(true)
+
+    expect(wrapper.get('[data-testid="schedule-history-item-1"]').text()).toContain(labels.availability.historyActiveBadge)
+    expect(wrapper.find('[data-testid="schedule-history-item-2"] [data-testid="schedule-history-active-badge"]').exists()).toBe(
+      false,
+    )
+    wrapper.unmount()
+  })
+
+  it('does not tag an already revoked change set as "Geçersiz" too', async () => {
+    respondWith([
+      entry(4, { kind: 'revoke', revokesChangeSetId: 3, isRevocable: false, isDeletable: true }),
+      entry(3, { revokedByChangeSetId: 4, isRevocable: false, isDeletable: true }),
+      entry(2),
+    ])
+    const wrapper = await mountPanel()
+
+    expect(wrapper.find('[data-testid="schedule-history-item-3"] [data-testid="schedule-history-invalid-badge"]').exists()).toBe(
+      false,
+    )
+    expect(wrapper.find('[data-testid="schedule-history-item-4"] [data-testid="schedule-history-invalid-badge"]').exists()).toBe(
+      false,
+    )
+    wrapper.unmount()
+  })
+
+  it('deletes a deletable change set after confirmation and notifies the parent', async () => {
+    deleteChangeSetMock.mockResolvedValueOnce(undefined)
+    respondWith([entry(2, { isDeletable: true }), entry(1)])
+    const wrapper = await mountPanel()
+
+    await wrapper.get('[data-testid="schedule-history-item-2"] [data-testid="schedule-history-delete-button"]').trigger('click')
+    expect(confirmRequireMock).toHaveBeenCalledTimes(1)
+    expect(confirmRequireMock.mock.calls[0][0]).toMatchObject({ message: labels.history.delete.confirmMessage })
+
+    respondWith([entry(1)])
+    await confirmRequireMock.mock.calls[0][0].accept?.()
+    await flushPromises()
+
+    expect(deleteChangeSetMock).toHaveBeenCalledWith(2)
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', summary: labels.history.delete.success }),
+    )
+    expect(wrapper.emitted('changed')).toHaveLength(1)
+    expect(listHistoryMock).toHaveBeenCalledTimes(2) // ilk yükleme + silme sonrası yeniden yükleme
+    wrapper.unmount()
+  })
+
+  it('does not delete when the confirmation is not accepted', async () => {
+    respondWith([entry(2, { isDeletable: true }), entry(1)])
+    const wrapper = await mountPanel()
+
+    await wrapper.get('[data-testid="schedule-history-item-2"] [data-testid="schedule-history-delete-button"]').trigger('click')
+    expect(confirmRequireMock).toHaveBeenCalledTimes(1)
+
+    expect(deleteChangeSetMock).not.toHaveBeenCalled()
+    expect(wrapper.emitted('changed')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('shows an error toast with the real backend message when deletion fails', async () => {
+    deleteChangeSetMock.mockRejectedValueOnce(new Error('delete_change_set: Bu kayıt silinemez'))
+    respondWith([entry(2, { isDeletable: true }), entry(1)])
+    const wrapper = await mountPanel()
+
+    await wrapper.get('[data-testid="schedule-history-item-2"] [data-testid="schedule-history-delete-button"]').trigger('click')
+    await confirmRequireMock.mock.calls[0][0].accept?.()
+    await flushPromises()
+
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'delete_change_set: Bu kayıt silinemez' }),
+    )
+    expect(wrapper.emitted('changed')).toBeUndefined()
     wrapper.unmount()
   })
 })

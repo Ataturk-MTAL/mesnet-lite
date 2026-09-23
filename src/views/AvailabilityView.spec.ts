@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
+import ConfirmationService from 'openvue/confirmationservice'
 import Aura from '@openvue/themes/aura'
 import AvailabilityView from './AvailabilityView.vue'
 import EffectiveDateField from '../components/history/EffectiveDateField.vue'
@@ -46,6 +47,7 @@ vi.mock('../api/history', () => ({
     commitChangeMock(request, expectedHighWater),
   listHistory: vi.fn(),
   getSubjectHistory: vi.fn(),
+  deleteChangeSet: vi.fn(),
 }))
 
 function boardFixture(): AvailabilityBoard {
@@ -80,7 +82,11 @@ const startedTerm: TermWithDates = {
 function mountView() {
   return mount(AvailabilityView, {
     global: {
-      plugins: [[OpenVue, { theme: { preset: Aura, options: { darkModeSelector: '.app-dark' } } }], ToastService],
+      plugins: [
+        [OpenVue, { theme: { preset: Aura, options: { darkModeSelector: '.app-dark' } } }],
+        ToastService,
+        ConfirmationService,
+      ],
     },
     attachTo: document.body,
   })

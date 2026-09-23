@@ -36,6 +36,13 @@
               severity="secondary"
               data-testid="schedule-history-revocation-badge"
             />
+            <Tag
+              v-if="isInvalidated(entry)"
+              :value="labels.availability.historyInvalidBadge"
+              severity="secondary"
+              v-tooltip.top="labels.availability.historyInvalidTooltip"
+              data-testid="schedule-history-invalid-badge"
+            />
             <Tag v-if="entry.kind === 'correct'" :value="labels.availability.historyCorrectionBadge" severity="info" />
           </div>
 
@@ -50,8 +57,8 @@
             <span>{{ labels.changeHistory.recordedAt }}: {{ entry.recordedAt }}</span>
           </div>
 
-          <template v-if="entry.changeSetId === activeEntryId">
-            <div class="schedule-history-actions">
+          <div v-if="entry.changeSetId === activeEntryId || entry.isDeletable" class="schedule-history-actions">
+            <template v-if="entry.changeSetId === activeEntryId">
               <Button
                 :label="labels.availability.historyEdit"
                 :aria-label="labels.availability.historyEdit"
@@ -64,21 +71,39 @@
                 @click="emit('edit', entry)"
               />
               <Button
-                :label="labels.availability.historyDelete"
-                :aria-label="labels.availability.historyDelete"
-                icon="pi pi-trash"
+                :label="labels.availability.historyRevoke"
+                :aria-label="labels.availability.historyRevoke"
+                icon="pi pi-undo"
                 size="small"
                 severity="danger"
                 outlined
                 :disabled="!entry.isRevocable"
-                data-testid="schedule-history-delete-button"
+                data-testid="schedule-history-revoke-button"
                 @click="openDeleteDialog(entry)"
               />
-            </div>
-            <small v-if="!entry.isRevocable" class="schedule-history-hint" data-testid="schedule-history-not-revocable">
-              {{ labels.availability.historyNotRevocableHint }}
-            </small>
-          </template>
+            </template>
+            <Button
+              v-if="entry.isDeletable"
+              :label="labels.history.delete.button"
+              :aria-label="labels.history.delete.button"
+              icon="pi pi-trash"
+              size="small"
+              severity="danger"
+              text
+              v-tooltip.top="labels.history.delete.tooltip"
+              :loading="deletingChangeSetId === entry.changeSetId"
+              :disabled="deletingChangeSetId === entry.changeSetId"
+              data-testid="schedule-history-delete-button"
+              @click="confirmPermanentDelete(entry)"
+            />
+          </div>
+          <small
+            v-if="entry.changeSetId === activeEntryId && !entry.isRevocable"
+            class="schedule-history-hint"
+            data-testid="schedule-history-not-revocable"
+          >
+            {{ labels.availability.historyNotRevocableHint }}
+          </small>
         </li>
       </ul>
 
@@ -100,7 +125,7 @@
   <Dialog
     v-model:visible="isDeleteDialogOpen"
     modal
-    :header="labels.availability.historyDeleteConfirm"
+    :header="labels.availability.historyRevokeConfirm"
     :style="{ width: '28rem' }"
     data-testid="schedule-delete-dialog"
   >
@@ -120,7 +145,7 @@
     <template #footer>
       <Button :label="labels.common.cancel" severity="secondary" outlined @click="closeDeleteDialog" />
       <Button
-        :label="labels.availability.historyDelete"
+        :label="labels.availability.historyRevoke"
         severity="danger"
         :disabled="!isDeleteReasonValid"
         data-testid="schedule-delete-submit-button"
@@ -135,7 +160,8 @@
 <script setup lang="ts">
 import { computed, ref, useId, watch } from 'vue'
 import { useToast } from 'openvue/usetoast'
-import { listHistory } from '../../api/history'
+import { useConfirm } from 'openvue/useconfirm'
+import { deleteChangeSet, listHistory } from '../../api/history'
 import { labels } from '../../i18n/labels'
 import { useChange } from '../../composables/useChange'
 import ImpactDialog from './ImpactDialog.vue'
@@ -153,7 +179,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** "Düzenle"ye basıldı; ızgara düzeltme moduna geçirilir. */
   edit: [entry: HistoryChangeSetEntry]
-  /** "Geçmişten sil" kaydedildi; üst bileşen ızgarayı yeniler. */
+  /** Geri alma kaydedildi ya da bir kayıt kalıcı olarak silindi; üst bileşen ızgarayı yeniler. */
   changed: []
 }>()
 
@@ -177,7 +203,16 @@ function isRevocationRecord(entry: HistoryChangeSetEntry): boolean {
 }
 
 function isMuted(entry: HistoryChangeSetEntry): boolean {
-  return entry.revokedByChangeSetId !== null || isRevocationRecord(entry)
+  return entry.revokedByChangeSetId !== null || isRevocationRecord(entry) || entry.isDeletable
+}
+
+/**
+ * Aynı ay içinde girilen sonraki bir değişiklik bu kümenin tüm olaylarını
+ * olay düzeyinde geri aldı; `revokedByChangeSetId` bunu yakalayamaz çünkü o
+ * alan yalnız correct/revoke küme bağlarından türer.
+ */
+function isInvalidated(entry: HistoryChangeSetEntry): boolean {
+  return entry.isDeletable && entry.revokedByChangeSetId === null && !isRevocationRecord(entry)
 }
 
 /** En son geçerli (geri alınmamış, geri alma kaydı olmayan) değişiklik. */
@@ -239,7 +274,7 @@ watch(
   { immediate: true },
 )
 
-// --- Geçmişten sil (revoke) ---
+// --- Geri alma (revoke) ---
 
 const revokeChange = useChange()
 const deleteTarget = ref<HistoryChangeSetEntry | null>(null)
@@ -280,6 +315,36 @@ watch(
     void loadPage(null)
   },
 )
+
+// --- Tarihçeden kalıcı silme (bugünkü durumu etkilemeyen kayıtlar) ---
+
+const confirm = useConfirm()
+const deletingChangeSetId = ref<number | null>(null)
+
+function confirmPermanentDelete(entry: HistoryChangeSetEntry): void {
+  confirm.require({
+    message: labels.history.delete.confirmMessage,
+    header: labels.common.confirm,
+    acceptLabel: labels.common.yes,
+    rejectLabel: labels.common.no,
+    acceptProps: { severity: 'danger' },
+    accept: () => void submitPermanentDelete(entry.changeSetId),
+  })
+}
+
+async function submitPermanentDelete(changeSetId: number): Promise<void> {
+  deletingChangeSetId.value = changeSetId
+  try {
+    await deleteChangeSet(changeSetId)
+    toast.add({ severity: 'success', summary: labels.history.delete.success, life: 2500 })
+    emit('changed')
+    await loadPage(null)
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    deletingChangeSetId.value = null
+  }
+}
 </script>
 
 <style scoped>
