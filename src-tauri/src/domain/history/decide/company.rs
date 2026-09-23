@@ -85,13 +85,12 @@ pub(super) fn set_company_hours(ctx: &DecisionContext, req: &ChangeRequest, rows
     let mut coordinators: Vec<i64> = Vec::new();
 
     for row in rows {
-        let (event, coordinator) = build_hours_event(ctx, d, row, &mut impact)?;
+        let coordinator = build_hours_event(ctx, d, row, &mut events, &mut impact)?;
         if let Some(teacher_id) = coordinator {
             if !coordinators.contains(&teacher_id) {
                 coordinators.push(teacher_id);
             }
         }
-        events.push(event);
     }
 
     reject_if_pool_overrun(ctx, d, rows, &events)?;
@@ -143,10 +142,17 @@ fn total_awarded_at(ctx: &DecisionContext, d: NaiveDate, overrides: &BTreeMap<i6
         .sum()
 }
 
-/// Tek bir `CompanyHoursRow` için olayı ve etki satırını üretir; döndürdüğü
-/// öğretmen kimliği (varsa) O TARİHTEKİ koordinatördür — kapasite bayrağı
-/// çağıran tarafta TOPLU hesaplanır (spec §5.3, R2b brief madde 2).
-fn build_hours_event(ctx: &DecisionContext, d: NaiveDate, row: &CompanyHoursRow, impact: &mut ImpactSummary) -> Result<(PlannedEvent, Option<i64>), Rejection> {
+/// Tek bir `CompanyHoursRow` için olayı `events`e ekler ve etki satırını
+/// üretir; döndürdüğü öğretmen kimliği (varsa) O TARİHTEKİ koordinatördür —
+/// kapasite bayrağı çağıran tarafta TOPLU hesaplanır (spec §5.3, R2b brief
+/// madde 2).
+fn build_hours_event(
+    ctx: &DecisionContext,
+    d: NaiveDate,
+    row: &CompanyHoursRow,
+    events: &mut Vec<PlannedEvent>,
+    impact: &mut ImpactSummary,
+) -> Result<Option<i64>, Rejection> {
     ctx.require_company(row.company_id)?;
     let label = ctx.company_label(row.company_id);
     let prior = ctx.state_before::<HoursState>(Stream::CompanyHours, row.company_id, d, apply_hours);
@@ -172,10 +178,11 @@ fn build_hours_event(ctx: &DecisionContext, d: NaiveDate, row: &CompanyHoursRow,
         revokes: None,
     };
     impact.primary.push(impact_line(&label, &event, debug_opt(prior.as_ref()), Some(format!("{state:?}"))));
-    apply_shadow_and_future_notices(ctx, Stream::CompanyHours, row.company_id, &label, d, impact);
+    events.push(event);
+    apply_shadow_and_future_notices(ctx, Stream::CompanyHours, row.company_id, &label, d, events, impact);
 
     let coordinator = ctx.timeline::<CoordinationState>(Stream::Coordination, row.company_id, apply_coordination).state_at(d).map(|c| c.teacher_id);
-    Ok((event, coordinator))
+    Ok(coordinator)
 }
 
 /// Elle girilen saat, tavanı AŞACAK ŞEKİLDE artırılamaz (spec §5.2). Tek
@@ -555,6 +562,29 @@ mod tests {
             EventPayload::HoursSet { state, .. } => assert_eq!(state.awarded_hours, 0, "fahri ziyarette saat 0'a zorlanır"),
             other => panic!("beklenmedik olay: {other:?}"),
         }
+    }
+
+    /// AYNI AY içinde girilmiş, DAHA ESKİ bir `company_hours` kaydı OTOMATİK
+    /// geri alınır (brief: "CompanyHours ... için bir test" — `flags.rs`'teki
+    /// kuralın bu akışta da çalıştığının kanıtı).
+    #[test]
+    fn same_month_later_hours_record_is_revoked_automatically() {
+        let today = ymd(2026, 9, 25);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_event(placed(1, 200, 1))
+            .with_event(stored_event(2, 2, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(4, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(20, 3, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 20), EventPayload::HoursSet { state: hours_state(6, false), previous_awarded: None, labels: Labels(Default::default()) }, false))
+            .build();
+
+        let rows = vec![CompanyHoursRow { company_id: 1, awarded_hours: 5, is_honorary: false, is_locked: false, notes: String::new() }];
+        let req = request(ymd(2026, 9, 14), ChangeCommand::SetCompanyHours { rows: rows.clone() });
+        let decision = set_company_hours(&ctx, &req, &rows).unwrap();
+
+        assert!(decision.events.iter().any(|e| e.revokes == Some(20)), "aynı aydaki 09-20 kaydı geri alınmalı");
+        assert_eq!(decision.impact.shadowed_until, None);
+        let revoked_line = decision.impact.primary.iter().find(|l| l.kind == "revoked").expect("revoked satırı beklenir");
+        assert_eq!(revoked_line.effective_date, ymd(2026, 9, 20), "satırın tarihi geri alınan kaydın KENDİ tarihi olmalı");
     }
 
     #[test]

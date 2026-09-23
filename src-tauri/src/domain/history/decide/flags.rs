@@ -10,12 +10,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
-use super::{DecisionContext, ImpactSummary};
+use super::{DecisionContext, ImpactSummary, PlannedEvent};
 use crate::domain::history::apply::{apply_coordination, apply_hours, apply_load, apply_schedule};
-use crate::domain::history::events::{CoordinationState, EventPayload, HoursState, Stream, TeacherLoad, WeeklySchedule};
-use crate::domain::history::impact::{ImpactNotice, ImpactWarning, NoticeCode};
+use crate::domain::history::events::{CoordinationState, EventPayload, HoursState, Stream, StoredEvent, TeacherLoad, WeeklySchedule};
+use crate::domain::history::impact::{ImpactLine, ImpactNotice, ImpactWarning, NoticeCode};
 use crate::domain::history::policy::{capacity_flags, schedule_flags};
 use crate::domain::history::timeline::{Interval, Timeline};
 use crate::domain::scheduling::Block;
@@ -155,7 +155,19 @@ pub(super) fn teacher_schedule_warnings(ctx: &DecisionContext, teacher_id: i64, 
 /// Anlık görüntü akışlarında (saat, yük, program) bir değişikliğin öznenin
 /// SONRAKİ kaydına kadar mı geçerli olduğunu ve yürürlük tarihinin gelecekte
 /// olup olmadığını bildirir (spec §5.2 "shadowed"; R2b brief madde 4).
-/// Birden çok özne için çağrılırsa `impact.shadowed_until` EN ERKEN
+///
+/// Kanıtlanmış teşhis (kullanıcı Hakan GÜLEN): 14 Eylül'den geçerli bir
+/// değişiklik girildi, "Kaydedildi" görüldü, ama ekranda hiçbir şey
+/// değişmedi — çünkü AYNI AYIN 20'sinde girilmiş DAHA ESKİ bir kayıt hâlâ
+/// duruyordu ve eski davranış bunu yalnız `Shadowed` ile BİLDİRİYORDU. Ek
+/// ders puantajı AY SONU durumuna göre yapılır (önceki ay zaten
+/// `PreviousMonthClosed` ile kapalıdır — bkz. `terms::TermDates::earliest_allowed`);
+/// dolayısıyla `d` ile AYNI TAKVİM AYINDA (yıl+ay) yürürlüğe giren, henüz
+/// geri alınmamış her kayıt bu ay için ARTIK ANLAMSIZDIR ve OTOMATİK geri
+/// alınır — kullanıcının ayrıca bir şey işaretlemesi GEREKMEZ. Yalnız
+/// SONRAKİ AYLARDAKİ kayıtlar hâlâ `Shadowed` ile bildirilir (bir sonraki
+/// puantaj dönemi henüz kapanmadığı için o kayıt anlamlı kalabilir); birden
+/// çok özne için çağrılırsa `impact.shadowed_until` EN ERKEN kalan
 /// gölgeleme tarihine indirilir.
 pub(super) fn apply_shadow_and_future_notices(
     ctx: &DecisionContext,
@@ -163,6 +175,7 @@ pub(super) fn apply_shadow_and_future_notices(
     subject_id: i64,
     label: &str,
     d: NaiveDate,
+    events: &mut Vec<PlannedEvent>,
     impact: &mut ImpactSummary,
 ) {
     if d > ctx.today {
@@ -173,7 +186,11 @@ pub(super) fn apply_shadow_and_future_notices(
             date: d,
         });
     }
-    let Some(next_date) = next_live_event_date(ctx, stream, subject_id, d) else { return };
+
+    let (same_month, other_months) = split_later_live_records_by_month(ctx, stream, subject_id, d);
+    revoke_records(stream, subject_id, label, d, &same_month, events, impact);
+
+    let Some(next_date) = other_months.iter().map(|e| e.effective_date).min() else { return };
     impact.notices.push(ImpactNotice {
         code: NoticeCode::Shadowed,
         message: format!("{label}: bu değişiklik {next_date} tarihli kayda kadar geçerli"),
@@ -186,12 +203,48 @@ pub(super) fn apply_shadow_and_future_notices(
     });
 }
 
-/// Bir öznenin, `after`'DAN SONRA yürürlüğe giren, geri alınmamış bir
-/// sonraki kaydı var mı? Varsa en erken tarihini döner.
-fn next_live_event_date(ctx: &DecisionContext, stream: Stream, subject_id: i64, after: NaiveDate) -> Option<NaiveDate> {
-    ctx.events_for(stream, subject_id)
-        .iter()
-        .filter(|e| !matches!(e.payload, EventPayload::Revoked) && e.effective_date > after)
-        .map(|e| e.effective_date)
-        .min()
+/// Her geri alınan kayıt için `Revoked` işareti (`decide::revoke::revoke_family_events`
+/// ile AYNI desen: aynı `change_set` içinde) ve `impact.primary`de
+/// `kind: revoked` satırı üretir — satırın tarihi geri alınan kaydın KENDİ
+/// tarihidir, `d` değil (kullanıcı hangi kaydın kalktığını görebilsin diye).
+fn revoke_records(stream: Stream, subject_id: i64, label: &str, d: NaiveDate, records: &[StoredEvent], events: &mut Vec<PlannedEvent>, impact: &mut ImpactSummary) {
+    for record in records {
+        events.push(PlannedEvent {
+            stream,
+            subject_id,
+            effective_date: d,
+            payload: EventPayload::Revoked,
+            caused_by: None,
+            revokes: Some(record.id),
+        });
+        impact.primary.push(ImpactLine {
+            kind: "revoked".to_string(),
+            stream: stream.as_str().to_string(),
+            subject_id,
+            subject_label: label.to_string(),
+            effective_date: record.effective_date,
+            before: Some(record.payload.kind().to_string()),
+            after: None,
+        });
+    }
+}
+
+/// `after`'DAN SONRA yürürlüğe giren, HENÜZ geri alınmamış canlı kayıtları
+/// `after` ile AYNI takvim ayında olanlar / olmayanlar diye ikiye ayırır.
+/// `order_events`in filtresiyle AYNI iki eleme uygulanır (DRY: markörler VE
+/// başka bir markörün hedefi olan kayıtlar dışlanır) — aksi hâlde zaten geri
+/// alınmış bir kayıt burada ikinci kez "canlı" sayılırdı.
+fn split_later_live_records_by_month(ctx: &DecisionContext, stream: Stream, subject_id: i64, after: NaiveDate) -> (Vec<StoredEvent>, Vec<StoredEvent>) {
+    let raw = ctx.events_for(stream, subject_id);
+    let revoked_target_ids: BTreeSet<i64> = raw.iter().filter_map(|e| e.revokes).collect();
+    raw.into_iter()
+        .filter(|e| !matches!(e.payload, EventPayload::Revoked))
+        .filter(|e| !revoked_target_ids.contains(&e.id))
+        .filter(|e| e.effective_date > after)
+        .partition(|e| same_calendar_month(e.effective_date, after))
+}
+
+/// İki tarih aynı takvim ayında mı (yıl VE ay eşit)?
+fn same_calendar_month(a: NaiveDate, b: NaiveDate) -> bool {
+    a.year() == b.year() && a.month() == b.month()
 }

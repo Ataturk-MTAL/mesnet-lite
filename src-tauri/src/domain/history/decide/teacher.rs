@@ -51,14 +51,15 @@ pub(super) fn set_teacher_load(ctx: &DecisionContext, req: &ChangeRequest, teach
     };
     let mut impact = ImpactSummary::empty(d, ctx.term.is_planning(ctx.today));
     impact.primary.push(impact_line(&label, &event, debug_opt(prior.as_ref()), Some(format!("{load:?}"))));
-    apply_shadow_and_future_notices(ctx, Stream::TeacherLoad, teacher_id, &label, d, &mut impact);
+    let mut events = vec![event];
+    apply_shadow_and_future_notices(ctx, Stream::TeacherLoad, teacher_id, &label, d, &mut events, &mut impact);
 
     // Yükseltilmiş `other_extra_hours`/şeflik kapasiteyi aşabilir; kural
     // yeniden yazılmaz, yalnız bayraklanır (spec §5.3, R2b brief madde 2).
-    let augmented = with_pending(ctx, &[event.clone()]);
+    let augmented = with_pending(ctx, &events);
     impact.warnings.extend(teacher_capacity_warnings(&augmented, teacher_id, d));
 
-    finish(ctx, req, d, vec![event], impact, Vec::new())
+    finish(ctx, req, d, events, impact, Vec::new())
 }
 
 pub(super) fn set_teacher_schedule(ctx: &DecisionContext, req: &ChangeRequest, teacher_id: i64, slots: &[Slot]) -> Result<Decision, Rejection> {
@@ -83,14 +84,15 @@ pub(super) fn set_teacher_schedule(ctx: &DecisionContext, req: &ChangeRequest, t
     };
     let mut impact = ImpactSummary::empty(d, ctx.term.is_planning(ctx.today));
     impact.primary.push(impact_line(&label, &event, debug_opt(prior.as_ref()), Some(format!("{schedule:?}"))));
-    apply_shadow_and_future_notices(ctx, Stream::TeacherSchedule, teacher_id, &label, d, &mut impact);
+    let mut events = vec![event];
+    apply_shadow_and_future_notices(ctx, Stream::TeacherSchedule, teacher_id, &label, d, &mut events, &mut impact);
 
     // Boş saatler daralınca zorlanmamış ziyaret blokları dışarıda kalabilir
     // (spec §5.3, R2b brief madde 2).
-    let augmented = with_pending(ctx, &[event.clone()]);
+    let augmented = with_pending(ctx, &events);
     impact.warnings.extend(teacher_schedule_warnings(&augmented, teacher_id, d));
 
-    finish(ctx, req, d, vec![event], impact, Vec::new())
+    finish(ctx, req, d, events, impact, Vec::new())
 }
 
 /// Kaynak dönemdeki (`ctx.source_schedules`, R3'te `history_context::load`
@@ -124,8 +126,8 @@ pub(super) fn copy_schedules_from_term(ctx: &DecisionContext, req: &ChangeReques
             revokes: None,
         };
         impact.primary.push(impact_line(&label, &event, debug_opt(prior.as_ref()), Some(format!("{schedule:?}"))));
-        apply_shadow_and_future_notices(ctx, Stream::TeacherSchedule, teacher_id, &label, d, &mut impact);
         events.push(event);
+        apply_shadow_and_future_notices(ctx, Stream::TeacherSchedule, teacher_id, &label, d, &mut events, &mut impact);
     }
 
     let augmented = with_pending(ctx, &events);
@@ -383,6 +385,171 @@ mod tests {
 
         assert_eq!(decision.impact.shadowed_until, Some(ymd(2026, 12, 1)));
         assert!(decision.impact.notices.iter().any(|n| n.code == NoticeCode::Shadowed));
+    }
+
+    /// Hakan GÜLEN senaryosu (brief, kanıtlanmış teşhis): dönemde 09-01
+    /// açılış programı var, ama AYNI AYIN 20'sinde girilmiş DAHA ESKİ bir
+    /// kayıt (gerçekteki `event 63`) duruyor. Kullanıcı 09-14'ten geçerli
+    /// bir değişiklik yapınca eski davranış bunu yalnız `Shadowed` ile
+    /// BİLDİRİYORDU — "Kaydedildi" görüp ekranda hiçbir şeyin
+    /// değişmemesinin kök nedeni buydu. Yeni kural: AYNI AY içindeki
+    /// sonraki kayıt OTOMATİK geri alınır (ek ders puantajı ay sonu
+    /// durumuna göre yapıldığı için), kullanıcının ayrıca bir şey
+    /// işaretlemesi GEREKMEZ.
+    #[test]
+    fn same_month_later_schedule_record_is_revoked_automatically() {
+        // `today` AYNI AY içinde: `d`(09-14) 'nin `earliest_allowed`i geçmesi için
+        // (dönem başladıktan sonra yalnız İÇİNDE BULUNULAN ayın 1'inden itibaren
+        // tarih girilebilir — `terms::earliest_allowed`).
+        let today = ymd(2026, 9, 25);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_teacher(5, "Hakan Gülen")
+            .with_event(stored_event(
+                1,
+                1,
+                Stream::TeacherSchedule,
+                5,
+                "2026-2027/1",
+                ymd(2026, 9, 1),
+                EventPayload::ScheduleSet { schedule: WeeklySchedule(BTreeSet::from([Slot::new(1, 1)])), previous_slot_count: None, source: "opening".into(), labels: Labels(Default::default()) },
+                true,
+            ))
+            .with_event(stored_event(
+                63,
+                2,
+                Stream::TeacherSchedule,
+                5,
+                "2026-2027/1",
+                ymd(2026, 9, 20),
+                EventPayload::ScheduleSet { schedule: WeeklySchedule(BTreeSet::from([Slot::new(2, 2)])), previous_slot_count: None, source: "manual".into(), labels: Labels(Default::default()) },
+                false,
+            ))
+            .build();
+
+        let new_slots = vec![Slot::new(3, 3)];
+        let req = ChangeRequest {
+            term: "2026-2027/1".into(),
+            effective_date: Some(ymd(2026, 9, 14)),
+            document_date: None,
+            reason: "program değişikliği".into(),
+            command: ChangeCommand::SetTeacherSchedule { teacher_id: 5, slots: new_slots.clone() },
+        };
+        let decision = set_teacher_schedule(&ctx, &req, 5, &new_slots).unwrap();
+
+        assert_eq!(decision.impact.shadowed_until, None, "aynı aydaki kayıt gölgelemez, GERİ ALINIR");
+        assert!(!decision.impact.notices.iter().any(|n| n.code == crate::domain::history::impact::NoticeCode::Shadowed));
+
+        let revoked_line = decision.impact.primary.iter().find(|l| l.kind == "revoked").expect("09-20 kaydı için 'revoked' satırı beklenir");
+        assert_eq!(revoked_line.effective_date, ymd(2026, 9, 20), "satırın tarihi geri alınan kaydın KENDİ tarihi olmalı");
+        assert_eq!(revoked_line.subject_id, 5);
+        assert!(revoked_line.before.is_some());
+        assert!(revoked_line.after.is_none());
+        assert!(decision.events.iter().any(|e| matches!(e.payload, EventPayload::Revoked) && e.revokes == Some(63)), "63 numaralı 09-20 kaydı geri alınmalı");
+
+        // Commit sonrası: 09-14'ten itibaren dönem artık 09-20'de KESİLMİYOR.
+        let mut ctx_committed = ctx;
+        let mut sim = SimCommit::starting_at(100, 10);
+        sim.apply(&mut ctx_committed, decision);
+        let timeline = ctx_committed.timeline::<WeeklySchedule>(Stream::TeacherSchedule, 5, apply_schedule);
+        assert_eq!(timeline.intervals.len(), 2, "açılıştan 09-14'e bir aralık, 09-14'ten itibaren TEK açık aralık");
+        let last = timeline.intervals.last().unwrap();
+        assert_eq!(last.valid_from, ymd(2026, 9, 14));
+        assert_eq!(last.valid_to, None, "09-14'ten itibaren dönem artık 09-20'de kesilmemeli (eski kayıt geri alındı)");
+        assert_eq!(last.state, WeeklySchedule(BTreeSet::from([Slot::new(3, 3)])));
+    }
+
+    /// Aynı ayda BİRDEN ÇOK sonraki kayıt varsa (09-20 ve 09-25), İKİSİ de
+    /// otomatik geri alınır (brief). Aynı zamanda `teacher_load` akışı için
+    /// bu kuralın testidir (brief: "TeacherLoad için bir test").
+    #[test]
+    fn two_later_records_in_the_same_month_are_both_revoked() {
+        let today = ymd(2026, 9, 25);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_teacher(5, "Ali Öğretmen")
+            .with_event(stored_event(1, 1, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 1), EventPayload::LoadSet { load: sample_load(), previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(20, 2, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 20), EventPayload::LoadSet { load: sample_load(), previous: None, source: "manual".into(), labels: Labels(Default::default()) }, false))
+            .with_event(stored_event(25, 3, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 25), EventPayload::LoadSet { load: sample_load(), previous: None, source: "manual".into(), labels: Labels(Default::default()) }, false))
+            .build();
+
+        let mut new_load = sample_load();
+        new_load.other_extra_hours = 3;
+        let req = ChangeRequest { term: "2026-2027/1".into(), effective_date: Some(ymd(2026, 9, 14)), document_date: None, reason: "test".into(), command: ChangeCommand::SetTeacherLoad { teacher_id: 5, load: new_load.clone() } };
+        let decision = set_teacher_load(&ctx, &req, 5, &new_load).unwrap();
+
+        let revoked_targets: BTreeSet<i64> = decision.events.iter().filter_map(|e| e.revokes).collect();
+        assert_eq!(revoked_targets, BTreeSet::from([20, 25]), "aynı aydaki İKİ kayıt da geri alınmalı");
+        assert_eq!(decision.impact.primary.iter().filter(|l| l.kind == "revoked").count(), 2);
+        assert_eq!(decision.impact.shadowed_until, None);
+    }
+
+    /// SONRAKİ AYDAKİ bir kayda dokunulmaz — yalnız gölgeleme bildirimi
+    /// kalır (brief: "09-20 + 10-01 → 09-20 geri alınır, 10-01 kalır,
+    /// shadowed_until 10-01").
+    #[test]
+    fn a_later_record_in_a_different_month_keeps_the_shadow_notice() {
+        let today = ymd(2026, 9, 25);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_teacher(5, "Ali Öğretmen")
+            .with_event(stored_event(1, 1, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 1), EventPayload::LoadSet { load: sample_load(), previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(20, 2, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 20), EventPayload::LoadSet { load: sample_load(), previous: None, source: "manual".into(), labels: Labels(Default::default()) }, false))
+            .with_event(stored_event(30, 3, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 10, 1), EventPayload::LoadSet { load: sample_load(), previous: None, source: "manual".into(), labels: Labels(Default::default()) }, false))
+            .build();
+
+        let mut new_load = sample_load();
+        new_load.other_extra_hours = 3;
+        let req = ChangeRequest { term: "2026-2027/1".into(), effective_date: Some(ymd(2026, 9, 14)), document_date: None, reason: "test".into(), command: ChangeCommand::SetTeacherLoad { teacher_id: 5, load: new_load.clone() } };
+        let decision = set_teacher_load(&ctx, &req, 5, &new_load).unwrap();
+
+        assert!(decision.events.iter().any(|e| e.revokes == Some(20)), "aynı aydaki 09-20 kaydı geri alınmalı");
+        assert!(!decision.events.iter().any(|e| e.revokes == Some(30)), "sonraki AYDAKİ 10-01 kaydına dokunulmamalı");
+        assert_eq!(decision.impact.shadowed_until, Some(ymd(2026, 10, 1)), "kalan sonraki ayın kaydı hâlâ gölgeli bildirilmeli");
+        assert!(decision.impact.notices.iter().any(|n| n.code == crate::domain::history::impact::NoticeCode::Shadowed));
+    }
+
+    /// Zaten geri alınmış bir sonraki kayıt TEKRAR geri alınmaz (brief).
+    #[test]
+    fn does_not_revoke_an_already_revoked_record() {
+        let today = ymd(2026, 9, 25);
+        let mut already_revoked_marker = stored_event(21, 3, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 22), EventPayload::Revoked, false);
+        already_revoked_marker.revokes = Some(20);
+
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_teacher(5, "Ali Öğretmen")
+            .with_event(stored_event(1, 1, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 1), EventPayload::LoadSet { load: sample_load(), previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(20, 2, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 20), EventPayload::LoadSet { load: sample_load(), previous: None, source: "manual".into(), labels: Labels(Default::default()) }, false))
+            .with_event(already_revoked_marker)
+            .build();
+
+        let mut new_load = sample_load();
+        new_load.other_extra_hours = 3;
+        let req = ChangeRequest { term: "2026-2027/1".into(), effective_date: Some(ymd(2026, 9, 14)), document_date: None, reason: "test".into(), command: ChangeCommand::SetTeacherLoad { teacher_id: 5, load: new_load.clone() } };
+        let decision = set_teacher_load(&ctx, &req, 5, &new_load).unwrap();
+
+        assert!(!decision.events.iter().any(|e| e.revokes == Some(20)), "zaten geri alınmış 09-20 kaydı TEKRAR geri alınmamalı");
+        assert!(decision.impact.primary.iter().all(|l| l.kind != "revoked"), "geri alınacak canlı bir kayıt kalmadı");
+    }
+
+    /// Otomatik geri alma YALNIZ hedef özneyi etkiler — başka bir
+    /// öğretmenin aynı aydaki kaydına dokunulmaz (brief).
+    #[test]
+    fn does_not_touch_another_teachers_later_record() {
+        let today = ymd(2026, 9, 25);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_teacher(5, "Ali Öğretmen")
+            .with_teacher(6, "Veli Öğretmen")
+            .with_event(stored_event(1, 1, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 1), EventPayload::LoadSet { load: sample_load(), previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 2, Stream::TeacherLoad, 6, "2026-2027/1", ymd(2026, 9, 1), EventPayload::LoadSet { load: sample_load(), previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(20, 3, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 20), EventPayload::LoadSet { load: sample_load(), previous: None, source: "manual".into(), labels: Labels(Default::default()) }, false))
+            .with_event(stored_event(30, 4, Stream::TeacherLoad, 6, "2026-2027/1", ymd(2026, 9, 20), EventPayload::LoadSet { load: sample_load(), previous: None, source: "manual".into(), labels: Labels(Default::default()) }, false))
+            .build();
+
+        let mut new_load = sample_load();
+        new_load.other_extra_hours = 3;
+        let req = ChangeRequest { term: "2026-2027/1".into(), effective_date: Some(ymd(2026, 9, 14)), document_date: None, reason: "test".into(), command: ChangeCommand::SetTeacherLoad { teacher_id: 5, load: new_load.clone() } };
+        let decision = set_teacher_load(&ctx, &req, 5, &new_load).unwrap();
+
+        assert!(decision.events.iter().any(|e| e.revokes == Some(20)), "hedef öğretmenin 09-20 kaydı geri alınmalı");
+        assert!(!decision.events.iter().any(|e| e.revokes == Some(30)), "başka öğretmenin 09-20 kaydına DOKUNULMAMALI");
     }
 
     /// Yürürlük tarihi bugünden SONRAYSA `futureDated` bildirimi eklenir

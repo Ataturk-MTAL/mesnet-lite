@@ -92,7 +92,7 @@ fn merge_into_correction(req: &ChangeRequest, target_id: i64, revoke_decision: D
 
 fn build_revoke_decision(ctx: &DecisionContext, req: &ChangeRequest, target_id: i64) -> Result<Decision, Rejection> {
     let facts = validate_revocable(ctx, target_id)?;
-    let family: Vec<StoredEvent> = ctx.events.iter().filter(|e| e.change_set_id == target_id && !matches!(e.payload, EventPayload::Revoked)).cloned().collect();
+    let family = live_family_events(ctx, target_id);
     let (mut events, mut impact) = revoke_family_events(ctx, &facts, &family);
     replay_policy_for_affected_companies(ctx, target_id, &facts, &family, &mut events, &mut impact);
     let row_actions: Vec<RowAction> = deactivation_row_action(ctx, &family).into_iter().collect();
@@ -112,6 +112,23 @@ fn build_revoke_decision(ctx: &DecisionContext, req: &ChangeRequest, target_id: 
         row_actions,
         touched,
     })
+}
+
+/// Hedef kümenin CANLI (henüz geri alınmamış) olayları. `!= Revoked` yalnız
+/// kümenin KENDİ markörlerini eler; `revoked_target_ids` ise `flags.rs`teki
+/// OTOMATİK aynı-ay geri almasının (ya da başka herhangi bir kümenin) bu
+/// olayı ZATEN hedeflemiş olabileceğini hesaba katar — aksi hâlde aynı olay
+/// İKİ kez geri alınmaya çalışılır ve `change_events.revokes` UNIQUE kısıtı
+/// ihlal edilir (P6 rastgele komut dizisi fuzz testinde yakalandı: bir
+/// öznenin AYNI AYDAKİ sonraki kaydı otomatik geri alındıktan SONRA, o
+/// kaydın ait olduğu küme AYRICA elle `revoke` edilmeye çalışılabilir).
+fn live_family_events(ctx: &DecisionContext, target_id: i64) -> Vec<StoredEvent> {
+    let revoked_target_ids: BTreeSet<i64> = ctx.events.iter().filter_map(|e| e.revokes).collect();
+    ctx.events
+        .iter()
+        .filter(|e| e.change_set_id == target_id && !matches!(e.payload, EventPayload::Revoked) && !revoked_target_ids.contains(&e.id))
+        .cloned()
+        .collect()
 }
 
 /// Hedef kümenin geri alınabilir olup olmadığını denetler (spec §5.4,
