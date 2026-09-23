@@ -640,13 +640,15 @@ export const labels = {
     noWarnings: 'Uyarı yok.',
     noNotices: 'Bildirim yok.',
     planningBadge: 'Planlama dönemi',
-    shadowedNote: 'Bu değişiklik, sonraki bir kayıtla gölgeleniyor.',
     rejectedTitle: 'Reddedildi',
     previewing: 'Önizleniyor…',
     committing: 'Kaydediliyor…',
     committed: 'Değişiklik kaydedildi',
     confirm: 'Onayla ve Kaydet',
     cancel: 'Vazgeç',
+    /** Sonraki ayda önceden planlanmış bir kayıt varken bu değişikliğin ne zamana kadar geçerli olacağını bildirir. */
+    shadowedNote: (shadowedUntil: string) =>
+      `Bu değişiklik ${shadowedUntil} tarihine kadar geçerli; o tarihte önceden planlanmış kayıt devreye girer.`,
   },
   changeHistory: {
     title: 'Değişiklik Tarihçesi',

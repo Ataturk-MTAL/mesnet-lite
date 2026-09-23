@@ -1,0 +1,73 @@
+{
+  "get_settings": { "active_term": "2026-2027/1", "school_name": "Atatürk MTAL" },
+  "list_terms_with_dates": [
+    {
+      "term": "2026-2027/1",
+      "startDate": "2026-09-14",
+      "endDate": "2027-06-30",
+      "datesConfirmed": true,
+      "isPlanning": false,
+      "defaultAsOf": "2026-09-19",
+      "earliestAllowedDate": "2026-10-05"
+    }
+  ],
+  "known_terms": ["2026-2027/1"],
+  "get_known_terms": ["2026-2027/1"],
+  "list_companies": [],
+  "list_teachers": [],
+  "list_history": {
+    "entries": [
+      {
+        "changeSetId": 501,
+        "recordedAt": "2026-10-10 09:15",
+        "kind": "studentLeaves",
+        "reason": "Öğrenci işletmeden ayrıldı",
+        "actor": "Hakan GÜLEN",
+        "effectiveDate": "2026-10-10",
+        "documentDate": null,
+        "revokedByChangeSetId": null,
+        "revokesChangeSetId": null,
+        "isRevocable": true,
+        "warnings": [],
+        "events": [
+          {
+            "eventId": 9001,
+            "stream": "placement",
+            "subjectId": 12,
+            "subjectLabel": "Ahmet Yılmaz",
+            "kind": "student_left",
+            "effectiveDate": "2026-10-10",
+            "before": "Akdeniz Elektronik",
+            "after": null,
+            "causedByEventId": null,
+            "isRevoked": false
+          }
+        ]
+      }
+    ],
+    "nextBeforeChangeSetId": null
+  },
+  "preview_change": {
+    "status": "preview",
+    "highWater": 7,
+    "impact": {
+      "effectiveDate": "2026-10-10",
+      "isPlanning": false,
+      "shadowedUntil": "2026-11-15",
+      "primary": [
+        {
+          "kind": "student_left",
+          "stream": "placement",
+          "subjectId": 12,
+          "subjectLabel": "Ahmet Yılmaz",
+          "effectiveDate": "2026-10-10",
+          "before": "Akdeniz Elektronik",
+          "after": null
+        }
+      ],
+      "automatic": [],
+      "warnings": [],
+      "notices": []
+    }
+  }
+}

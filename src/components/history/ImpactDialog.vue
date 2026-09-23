@@ -84,7 +84,14 @@
         <p v-else class="impact-empty-note">{{ labels.impact.noNotices }}</p>
       </section>
 
-      <p v-if="impact?.shadowedUntil" class="impact-shadow-note">{{ labels.impact.shadowedNote }}</p>
+      <Message
+        v-if="impact?.shadowedUntil"
+        severity="warn"
+        :closable="false"
+        data-testid="impact-shadowed-warning"
+      >
+        {{ labels.impact.shadowedNote(impact.shadowedUntil) }}
+      </Message>
     </div>
 
     <template #footer>
@@ -162,5 +169,4 @@ async function onConfirm(): Promise<void> {
 .impact-line p { margin: 0.25rem 0 0; }
 .impact-meta { color: var(--p-text-muted-color); font-size: 0.8125rem; }
 .impact-empty-note { color: var(--p-text-muted-color); font-size: 0.875rem; margin: 0; }
-.impact-shadow-note { color: var(--p-text-muted-color); font-size: 0.8125rem; margin: 0; }
 </style>

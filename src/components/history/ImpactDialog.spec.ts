@@ -147,4 +147,75 @@ describe('ImpactDialog', () => {
 
     wrapper.unmount()
   })
+
+  it('does not show the shadowed warning and keeps confirm enabled when nothing is shadowed', async () => {
+    previewChangeMock.mockResolvedValueOnce({ status: 'preview', impact: impactFixture, highWater: 3 })
+
+    const change = useChange()
+    await change.preview(baseRequest())
+
+    const wrapper = mountDialog(change)
+    await nextTick()
+
+    expect(document.body.querySelector('[data-testid="impact-shadowed-warning"]')).toBeNull()
+    const confirmButton = getByTestId('impact-confirm-button') as HTMLButtonElement
+    expect(confirmButton.disabled).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('shows the shadowed warning with its Turkish message and keeps confirm enabled', async () => {
+    previewChangeMock.mockResolvedValueOnce({
+      status: 'preview',
+      impact: { ...impactFixture, shadowedUntil: '2026-11-01' },
+      highWater: 3,
+    })
+
+    const change = useChange()
+    await change.preview(baseRequest())
+
+    const wrapper = mountDialog(change)
+    await nextTick()
+
+    const warning = getByTestId('impact-shadowed-warning')
+    expect(warning.textContent).toContain(labels.impact.shadowedNote('2026-11-01'))
+
+    const confirmButton = getByTestId('impact-confirm-button') as HTMLButtonElement
+    expect(confirmButton.disabled).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('renders a revoked primary line correctly', async () => {
+    previewChangeMock.mockResolvedValueOnce({
+      status: 'preview',
+      impact: {
+        ...impactFixture,
+        primary: [
+          {
+            kind: 'revoked',
+            stream: 'placement',
+            subjectId: 5,
+            subjectLabel: 'Ayşe Kaya',
+            effectiveDate: '2026-11-01',
+            before: 'Örnek Mekatronik',
+            after: null,
+          },
+        ],
+      },
+      highWater: 3,
+    })
+
+    const change = useChange()
+    await change.preview(baseRequest())
+
+    const wrapper = mountDialog(change)
+    await nextTick()
+    const text = document.body.textContent ?? ''
+
+    expect(text).toContain(labels.history.eventKind.revoked)
+    expect(text).toContain('Ayşe Kaya')
+
+    wrapper.unmount()
+  })
 })
