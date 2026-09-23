@@ -30,8 +30,8 @@ struct Pair {
 async fn pair_with_students_and_hours() -> (tempfile::TempDir, Pair) {
     let (dir, pool) = test_pool().await;
     let today = planning_today();
-    let from = add_company(&pool, "Örnek İşletme", 3.0).await;
-    let into = add_company(&pool, "Örnek İşletme", 3.0).await;
+    let from = add_company(&pool, "örnek Mekatronik Sanayi A.Ş.", 3.0).await;
+    let into = add_company(&pool, "ÖRNEK MEKATRONİK SANAYİ", 3.0).await;
     let student_from = add_student(&pool, "Ada", Some(from), today).await;
     let student_into = add_student(&pool, "Bora", Some(into), today).await;
 

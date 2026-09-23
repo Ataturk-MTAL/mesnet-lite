@@ -387,7 +387,7 @@ mod tests {
         assert!(decision.impact.notices.iter().any(|n| n.code == NoticeCode::Shadowed));
     }
 
-    /// Hakan GÜLEN senaryosu (brief, kanıtlanmış teşhis): dönemde 09-01
+    /// Deniz ARSLAN senaryosu (brief, kanıtlanmış teşhis): dönemde 09-01
     /// açılış programı var, ama AYNI AYIN 20'sinde girilmiş DAHA ESKİ bir
     /// kayıt (gerçekteki `event 63`) duruyor. Kullanıcı 09-14'ten geçerli
     /// bir değişiklik yapınca eski davranış bunu yalnız `Shadowed` ile
@@ -403,7 +403,7 @@ mod tests {
         // tarih girilebilir — `terms::earliest_allowed`).
         let today = ymd(2026, 9, 25);
         let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
-            .with_teacher(5, "Hakan Gülen")
+            .with_teacher(5, "Deniz Arslan")
             .with_event(stored_event(
                 1,
                 1,

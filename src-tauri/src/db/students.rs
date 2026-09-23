@@ -832,7 +832,7 @@ mod tests {
     async fn same_student_in_a_later_term_is_not_a_duplicate() {
         let (_dir, pool) = test_pool().await;
         let mut this_year = sample("Ahmet", "Yilmaz", "12/C");
-        this_year.student_no = Some("9101".into());
+        this_year.student_no = Some("9001".into());
         create(&pool, &this_year).await.unwrap();
 
         let mut next_year = this_year.clone();
@@ -845,34 +845,34 @@ mod tests {
     async fn find_duplicate_matches_on_student_no_first() {
         let (_dir, pool) = test_pool().await;
         let mut existing = sample("Ahmet", "Yilmaz", "12/C");
-        existing.student_no = Some("9101".into());
+        existing.student_no = Some("9001".into());
         create(&pool, &existing).await.unwrap();
 
         // Aynı numara, tamamen farklı ad: yine de aynı öğrencidir.
         let mut candidate = sample("Bambaska", "Isim", "12/D");
-        candidate.student_no = Some("9101".into());
+        candidate.student_no = Some("9001".into());
         assert!(find_duplicate(&pool, &candidate).await.unwrap().is_some());
 
         // Farklı numara: farklı öğrenci.
         let mut other = sample("Ahmet", "Yilmaz", "12/C");
-        other.student_no = Some("9102".into());
+        other.student_no = Some("9002".into());
         assert!(find_duplicate(&pool, &other).await.unwrap().is_none());
     }
 
-    /// Gerçek veride aynı sınıfta aynı ad ve soyada sahip iki farklı öğrenci var
-    /// (Kurgusal Kişi, 12/D — numaraları 9101 ve 9102, dalları farklı).
-    /// Bunlar ayrı kayıt olarak durmalı.
+    /// Bir sınıfta aynı ad ve soyada sahip iki farklı öğrenci olabilir
+    /// (kurgusal senaryo: Kerem TUNA, 12/D — numaraları 9001 ve 9002, dalları
+    /// farklı). Bunlar ayrı kayıt olarak durmalı.
     #[tokio::test]
     async fn two_students_with_same_name_and_grade_are_distinct() {
         let (_dir, pool) = test_pool().await;
 
-        let mut first = sample("Mehmet", "Yildiz", "12/D");
-        first.student_no = Some("9101".into());
+        let mut first = sample("Kerem", "Tuna", "12/D");
+        first.student_no = Some("9001".into());
         first.branch = "Elektrik Tesisatları ve Pano Montörlüğü".into();
         create(&pool, &first).await.unwrap();
 
-        let mut second = sample("Mehmet", "Yildiz", "12/D");
-        second.student_no = Some("9102".into());
+        let mut second = sample("Kerem", "Tuna", "12/D");
+        second.student_no = Some("9002".into());
         second.branch = "Endüstriyel Bakım Onarım".into();
 
         assert!(
@@ -908,7 +908,7 @@ mod tests {
     async fn numbered_record_does_not_swallow_unnumbered_candidate() {
         let (_dir, pool) = test_pool().await;
         let mut existing = sample("Ahmet", "Yilmaz", "12/C");
-        existing.student_no = Some("9101".into());
+        existing.student_no = Some("9001".into());
         create(&pool, &existing).await.unwrap();
 
         let candidate = sample("Ahmet", "Yilmaz", "12/C");
@@ -922,12 +922,12 @@ mod tests {
     async fn find_duplicate_in_works_directly_on_a_connection() {
         let (_dir, pool) = test_pool().await;
         let mut existing = sample("Ahmet", "Yilmaz", "12/C");
-        existing.student_no = Some("9101".into());
+        existing.student_no = Some("9001".into());
         create(&pool, &existing).await.unwrap();
 
         let mut conn = pool.acquire().await.unwrap();
         let mut candidate = sample("Ahmet", "Yilmaz", "12/C");
-        candidate.student_no = Some("9101".into());
+        candidate.student_no = Some("9001".into());
         assert!(find_duplicate_in(&mut conn, &candidate).await.unwrap().is_some());
     }
 }

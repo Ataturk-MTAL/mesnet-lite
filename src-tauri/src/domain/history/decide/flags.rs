@@ -156,7 +156,7 @@ pub(super) fn teacher_schedule_warnings(ctx: &DecisionContext, teacher_id: i64, 
 /// SONRAKİ kaydına kadar mı geçerli olduğunu ve yürürlük tarihinin gelecekte
 /// olup olmadığını bildirir (spec §5.2 "shadowed"; R2b brief madde 4).
 ///
-/// Kanıtlanmış teşhis (kullanıcı Hakan GÜLEN): 14 Eylül'den geçerli bir
+/// Kanıtlanmış teşhis (kullanıcı Deniz ARSLAN): 14 Eylül'den geçerli bir
 /// değişiklik girildi, "Kaydedildi" görüldü, ama ekranda hiçbir şey
 /// değişmedi — çünkü AYNI AYIN 20'sinde girilmiş DAHA ESKİ bir kayıt hâlâ
 /// duruyordu ve eski davranış bunu yalnız `Shadowed` ile BİLDİRİYORDU. Ek

@@ -39,7 +39,7 @@ fn entry_of_kind<'a>(entries: &'a [HistoryEntry], kind: &str) -> &'a HistoryEntr
 #[tokio::test]
 async fn d1_audit_shows_before_after_automatic_children_and_actor() {
     let w = world().await;
-    sqlx::query("UPDATE settings SET value = 'Hakan Gülen' WHERE key = 'operator_name'").execute(&w.pool).await.unwrap();
+    sqlx::query("UPDATE settings SET value = 'Deniz Arslan' WHERE key = 'operator_name'").execute(&w.pool).await.unwrap();
     let req = request(Some(ymd(2026, 11, 3)), transfer(w.students[0], w.company_a, w.company_b));
     let (set_id, _) = expect_committed(commit(&w.pool, req, november_today()).await);
 
@@ -48,7 +48,7 @@ async fn d1_audit_shows_before_after_automatic_children_and_actor() {
     assert_eq!(page[0].change_set_id, set_id, "en yeni küme başta olmalı");
     let entry = &page[0];
     assert_eq!(entry.kind, "transfer_student");
-    assert_eq!(entry.actor, "Hakan Gülen");
+    assert_eq!(entry.actor, "Deniz Arslan");
     assert_eq!(entry.effective_date, ymd(2026, 11, 3));
     assert!(entry.is_revocable);
 
