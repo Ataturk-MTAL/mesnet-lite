@@ -565,9 +565,15 @@ mod tests {
         (dir, pool)
     }
 
+    /// Gerçek e-Okul dosyaları öğrenci kişisel verisi içerdiği için depoya
+    /// commit edilemez; bunun yerine `scripts/make_eokul_fixtures.py`'nin
+    /// ürettiği, aynı BIFF8 yapısını taşıyan TAMAMEN KURGUSAL `.xls`
+    /// dosyaları `src/services/fixtures/eokul/` altında commit'lidir — bu
+    /// yüzden testler ATLAMADAN her ortamda (CI dahil) koşar.
     fn read_fixture(name_fragment: &str) -> StudentListFile {
-        let data_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("data");
-        let path = std::fs::read_dir(&data_dir)
+        let fixtures_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/services/fixtures/eokul");
+        let path = std::fs::read_dir(&fixtures_dir)
             .unwrap()
             .flatten()
             .map(|e| e.path())
@@ -580,7 +586,7 @@ mod tests {
     }
 
     fn r076_files() -> Vec<StudentListFile> {
-        vec![read_fixture("R076_920 (1).XLS"), read_fixture("R076_920.XLS")]
+        vec![read_fixture("r076_12c"), read_fixture("r076_12d")]
     }
 
     /// Varsayılan tohum dönemi ("2026-2027/1") 1 Eylül 2026'da başlar
@@ -711,7 +717,7 @@ mod tests {
         .await
         .unwrap();
 
-        let preview_result = preview(&pool, &[read_fixture("R076_920 (1).XLS")]).await.unwrap();
+        let preview_result = preview(&pool, &[read_fixture("r076_12c")]).await.unwrap();
         assert!(
             preview_result.warnings.iter().any(|w| w.contains("12/C") && w.contains("Elektronik Haberleşme") && w.contains("öğrenci yok")),
             "uyarı bulunamadı: {:?}",
@@ -740,7 +746,7 @@ mod tests {
     #[tokio::test]
     async fn applying_a_branchless_file_as_new_students_is_rejected_by_existing_domain_rule() {
         let (_dir, pool) = test_pool().await;
-        let branchless = vec![read_fixture("R020_920 (1).XLS")];
+        let branchless = vec![read_fixture("r020_12c")];
 
         let result = apply(&pool, &branchless, Some(before_term_start()), "test", before_term_start()).await;
 
@@ -816,7 +822,7 @@ mod tests {
 
         // Yalnız 12/C dosyası TEKRAR uygulanır; 12/D bu içe aktarmanın
         // kapsamında değildir ve dokunulmamalıdır.
-        let only_c = vec![read_fixture("R076_920 (1).XLS")];
+        let only_c = vec![read_fixture("r076_12c")];
         let summary = apply(&pool, &only_c, None, "yalnız 12/C", before_term_start()).await.unwrap();
 
         assert_eq!(summary.removed, 0, "12/C dosyasındaki tüm öğrenciler zaten kayıtlı");
@@ -873,7 +879,7 @@ mod tests {
     #[tokio::test]
     async fn a_student_the_gate_refuses_to_delete_does_not_abort_the_import() {
         let (_dir, pool) = test_pool().await;
-        let only_c = vec![read_fixture("R076_920 (1).XLS")];
+        let only_c = vec![read_fixture("r076_12c")];
         apply(&pool, &only_c, None, "ilk aktarım", before_term_start()).await.unwrap();
 
         let term = settings::get_active_term(&pool).await.unwrap();
