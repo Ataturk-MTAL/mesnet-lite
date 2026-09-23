@@ -7,6 +7,7 @@
 pub mod apply;
 pub mod audit;
 pub mod decide;
+pub mod deletion;
 pub mod events;
 pub mod impact;
 pub mod policy;

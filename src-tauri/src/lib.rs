@@ -77,6 +77,7 @@ pub fn run() {
             commands::history_commands::commit_change,
             commands::history_commands::list_history,
             commands::history_commands::get_subject_history,
+            commands::history_commands::delete_change_set,
             commands::term_commands::list_terms_with_dates,
             commands::term_commands::update_term_dates,
             commands::user_commands::has_any_user,

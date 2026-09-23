@@ -12,7 +12,8 @@ use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::db::{change_log, history_context, terms};
 use crate::domain::history::audit::{describe, AuditEvent};
-use crate::domain::history::decide::{decide, ChangeCommand, ChangeRequest, DecisionContext, Materialized};
+use crate::domain::history::decide::{decide, ChangeCommand, ChangeRequest, ChangeSetFacts, DecisionContext, Materialized};
+use crate::domain::history::deletion;
 use crate::domain::history::events::{EventPayload, Stream, StoredEvent};
 use crate::error::{AppError, AppResult};
 
@@ -50,6 +51,12 @@ pub struct HistoryEventEntry {
     pub after: Option<String>,
     pub caused_by_event_id: Option<i64>,
     pub is_revoked: bool,
+    /// Olayın AİT OLDUĞU kümenin silinebilirliği (bkz. `domain::history::deletion`)
+    /// — küme düzeyinde bir alandır, aynı kümenin TÜM olaylarında AYNIDIR.
+    /// `From<AuditEvent>` bunu bilemez (küme kimliğini taşımaz); çağıran
+    /// (`group_audit_by_set`/`subject_history`) burayı silme kuralını
+    /// çalıştırdıktan SONRA doldurur.
+    pub is_deletable: bool,
 }
 
 impl From<AuditEvent> for HistoryEventEntry {
@@ -65,6 +72,7 @@ impl From<AuditEvent> for HistoryEventEntry {
             after: event.after,
             caused_by_event_id: event.caused_by_event_id,
             is_revoked: event.is_revoked,
+            is_deletable: false,
         }
     }
 }
@@ -82,6 +90,11 @@ pub struct HistoryEntry {
     pub revoked_by_change_set_id: Option<i64>,
     pub revokes_change_set_id: Option<i64>,
     pub is_revocable: bool,
+    /// Bugünkü durumu (ve öğretmen ek ders SAATİNİ) DEĞİŞTİRMEYEN — yani
+    /// zaten tamamen geri alınmış — bir küme GERÇEKTEN silinebilir (bkz.
+    /// `domain::history::deletion::is_deletable`, kullanıcı kararı
+    /// 2026-09-23). `is_revocable`den AYRI bir sorudur.
+    pub is_deletable: bool,
     /// Kayıt anındaki etki özetinin `warnings` dizisi, olduğu gibi.
     pub warnings: Vec<serde_json::Value>,
     pub events: Vec<HistoryEventEntry>,
@@ -197,6 +210,10 @@ fn group_audit_by_set(audited: Vec<AuditEvent>, by_id: &BTreeMap<i64, &StoredEve
 
 fn entry_from_row(ctx: &DecisionContext, row: ChangeSetRow, events: Vec<HistoryEventEntry>) -> AppResult<HistoryEntry> {
     let revoked_by = ctx.change_sets.get(&row.id).and_then(|facts| facts.revoked_by);
+    let deletable = deletion::is_deletable(&ctx.events, row.id, &row.kind);
+    // `is_deletable` KÜME düzeyinde bir alandır; kümenin tüm olaylarına aynı
+    // değer yansır (bkz. `HistoryEventEntry.is_deletable` yorumu).
+    let events: Vec<HistoryEventEntry> = events.into_iter().map(|e| HistoryEventEntry { is_deletable: deletable, ..e }).collect();
     Ok(HistoryEntry {
         change_set_id: row.id,
         recorded_at: row.recorded_at,
@@ -208,6 +225,7 @@ fn entry_from_row(ctx: &DecisionContext, row: ChangeSetRow, events: Vec<HistoryE
         revoked_by_change_set_id: revoked_by,
         revokes_change_set_id: row.revokes_change_set_id,
         is_revocable: is_revocable(ctx, row.id, revoked_by),
+        is_deletable: deletable,
         warnings: warnings_of(row.id, &row.impact_json)?,
         events,
     })
@@ -301,14 +319,38 @@ pub async fn subject_history(pool: &SqlitePool, stream_raw: &str, subject_id: i6
     let mut tx = pool.begin().await?;
     let term_dates = terms::get_in(&mut tx, term).await?;
     let events = change_log::load_term_events(&mut tx, term).await?;
+    let change_sets = change_log::load_change_sets(&mut tx, term).await?;
     tx.commit().await?;
 
     // `describe` "önce" değerini her öznenin kendi olaylarından katlar; diğer
     // özneleri dışarıda bırakmak sonucu değiştirmez, yalnızca işi azaltır.
-    let subject_events: Vec<StoredEvent> = events.into_iter().filter(|e| e.stream == stream && e.subject_id == subject_id).collect();
+    // `events`in TAMAMI (yalnız `subject_events` değil) `is_deletable`in
+    // girdisidir: bir olayın geri alınmış sayılması, onu hedefleyen markörün
+    // BAŞKA bir öznede olabilmesi yüzünden dönemin TÜMÜNÜ bilmeyi gerektirir.
+    let owner_of: BTreeMap<i64, i64> = events.iter().map(|e| (e.id, e.change_set_id)).collect();
+    let subject_events: Vec<StoredEvent> = events.iter().filter(|e| e.stream == stream && e.subject_id == subject_id).cloned().collect();
     let mut change_set_ids: Vec<i64> = subject_events.iter().map(|e| e.change_set_id).collect();
     change_set_ids.sort_unstable();
     change_set_ids.dedup();
 
-    Ok(describe(&subject_events, term_dates.start, &change_set_ids).into_iter().map(Into::into).collect())
+    let entries = describe(&subject_events, term_dates.start, &change_set_ids)
+        .into_iter()
+        .map(|audit| to_subject_entry(audit, &events, &owner_of, &change_sets))
+        .collect();
+    Ok(entries)
+}
+
+/// `AuditEvent`in taşımadığı `change_set_id`yi `owner_of` üzerinden bulup
+/// o kümenin `kind`ini (`change_sets`) `is_deletable`e verir.
+fn to_subject_entry(
+    audit: AuditEvent,
+    events: &[StoredEvent],
+    owner_of: &BTreeMap<i64, i64>,
+    change_sets: &BTreeMap<i64, ChangeSetFacts>,
+) -> HistoryEventEntry {
+    let mut entry: HistoryEventEntry = audit.into();
+    let Some(&cs_id) = owner_of.get(&entry.event_id) else { return entry };
+    let Some(facts) = change_sets.get(&cs_id) else { return entry };
+    entry.is_deletable = deletion::is_deletable(events, cs_id, &facts.kind);
+    entry
 }
