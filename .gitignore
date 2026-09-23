@@ -12,6 +12,10 @@
 /src-tauri/gen/
 /data
 
+# `dev` dalındaki daha geniş bir yoksayma kuralıyla çakışmayı önlemek için:
+# kurgusal e-Okul test fixture'ları (`.xls`, gerçek veri İÇERMEZ) izlenmeli.
+!src-tauri/src/services/fixtures/**
+
 # Impeccable: config.json paylasilan bir karardir ve izlenir; hook.cache.json
 # ise oturum kimligiyle anahtarlanmis, mutlak yol iceren yerel bir onbellektir.
 /.impeccable/hook.cache.json
