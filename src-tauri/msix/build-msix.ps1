@@ -32,7 +32,7 @@ $layout = Join-Path ([System.IO.Path]::GetTempPath()) "mesnet-msix-$([guid]::New
 $assets = Join-Path $layout 'Assets'
 New-Item -ItemType Directory -Path $assets -Force | Out-Null
 Copy-Item $exe $layout
-foreach ($icon in 'StoreLogo', 'Square44x44Logo', 'Square71x71Logo', 'Square150x150Logo', 'Square310x310Logo') {
+foreach ($icon in 'StoreLogo', 'Square44x44Logo', 'Square71x71Logo', 'Square150x150Logo') {
     Copy-Item (Join-Path $tauriDir "icons/$icon.png") $assets
 }
 
