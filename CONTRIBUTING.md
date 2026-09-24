@@ -49,4 +49,4 @@ Depo herkese açıktır. **Gerçek öğrenci, veli, öğretmen ya da işletme ve
 1. `dev`'de `package.json` ve `src-tauri/tauri.conf.json` sürümünü artır (bir `chore/` dalında).
 2. `dev` → `main` PR'ı; CI yeşil → birleştir.
 3. `git switch main && git pull && git tag vX.Y.Z && git push origin vX.Y.Z`
-4. Actions taslak sürümü üç platformun paketleriyle doldurur; gözden geçirip yayınla.
+4. Actions Windows, macOS ve Linux kurulum dosyalarını derleyip sürümü yayınlar.

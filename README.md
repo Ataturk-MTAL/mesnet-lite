@@ -60,7 +60,33 @@ Yapı: `src/` Vue 3 + TypeScript + OpenVue arayüzü, `src-tauri/` Rust arka ucu
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-GitHub Actions üç platform için paketleri derleyip taslak bir sürüme ekler.
+GitHub Actions Windows, macOS ve Linux kurulum dosyalarını derleyip sürümü yayınlar.
+
+## Gizlilik
+
+Tüm veriler yalnız kendi bilgisayarınızdaki yerel SQLite dosyasında tutulur; uygulama telemetri toplamaz, hesap açmaz, verilerinizi hiçbir sunucuya göndermez. Yalnız **kullanıcı açıkça istediğinde** iki ağ bağlantısı kurulur:
+
+- **Konum bulma** (İşletmeler → "Konum Bul"): işletme adresleri koordinat için [OpenStreetMap Nominatim](https://nominatim.org/)'e gönderilir.
+- **Konum haritası** (işletme konumunu haritada seçme): harita görüntüleri [OpenStreetMap](https://www.openstreetmap.org/) karo sunucusundan indirilir.
+
+> This program will not transfer any information to other networked systems unless specifically requested by the user.
+
+Kaldırma: Windows'ta *Ayarlar → Uygulamalar*, macOS'ta uygulamayı Çöp Kutusu'na taşıma, Linux'ta paket yöneticisi. Veriler ayrı klasörde kalır (Windows: `%APPDATA%\ai.alplab.mesnet-lite`, macOS: `~/Library/Application Support/ai.alplab.mesnet-lite`, Linux: `~/.local/share/ai.alplab.mesnet-lite`); tamamen silmek için bu klasörü de silin.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+Windows installers are built from this repository's source by GitHub Actions ([`release.yml`](.github/workflows/release.yml)) and signed only after a manual approval.
+
+> Durum: SignPath Foundation başvurusu aşamasında. Onaydan önceki sürümler (`v0.1.0`) imzasızdır.
+
+| Role | Members |
+|---|---|
+| Committers and reviewers | [@hkngln](https://github.com/hkngln) |
+| Approvers | [@hkngln](https://github.com/hkngln) |
+
+All team members use multi-factor authentication for GitHub and SignPath. Privacy: see [Gizlilik](#gizlilik) above.
 
 ## Yazar
 
