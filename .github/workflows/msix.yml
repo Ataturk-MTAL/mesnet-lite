@@ -1,0 +1,115 @@
+name: MSIX (Microsoft Store)
+
+# Microsoft Store paketi. Store, gönderilen MSIX'i kendi sertifikasıyla
+# imzalar; bu yüzden burada imza sertifikası gerekmez.
+#
+# - `v*` etiketi: MSIX üretilir ve sürüme eklenir (Partner Center'a elle yüklenir).
+# - MSIX dosyalarını değiştiren PR ve elle başlatma: paket, geçici bir deneme
+#   sertifikasıyla imzalanıp Windows'a gerçekten kurulur ve kaldırılır —
+#   paketin geçerli olduğu doğrulanır. Günlük PR'larda çalışmaz.
+#
+# Store kimliği depo değişkenlerinden gelir (Settings → Secrets and variables →
+# Actions → Variables): MSIX_IDENTITY_NAME, MSIX_PUBLISHER,
+# MSIX_PUBLISHER_DISPLAY_NAME. Tanımlı değilse deneme kimliği kullanılır ve
+# sürüme yükleme yapılmaz.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'src-tauri/msix/**'
+      - '.github/workflows/msix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  msix:
+    name: MSIX paketi
+    runs-on: windows-latest
+    env:
+      IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME || 'AtaturkMTAL.MESNETLite.Test' }}
+      PUBLISHER: ${{ vars.MSIX_PUBLISHER || 'CN=MESNET-Test' }}
+      PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME || 'Atatürk MTAL' }}
+      HAS_STORE_IDENTITY: ${{ vars.MSIX_IDENTITY_NAME != '' && vars.MSIX_PUBLISHER != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+
+      - name: Programı derle (paketlemeden)
+        run: pnpm tauri build --no-bundle
+
+      - name: MSIX üret
+        shell: pwsh
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $out = "dist-msix/MESNET.Lite_${version}_x64.msix"
+          ./src-tauri/msix/build-msix.ps1 -IdentityName $env:IDENTITY_NAME -Publisher $env:PUBLISHER `
+            -PublisherDisplayName $env:PUBLISHER_DISPLAY_NAME -OutFile $out
+          "MSIX_PATH=$out" >> $env:GITHUB_ENV
+
+      - name: Doğrula — deneme sertifikasıyla imzala, kur, kaldır
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+            Sort-Object { [version]($_.Directory.Parent.Name) } -Descending | Select-Object -First 1
+          $cert = New-SelfSignedCertificate -Type Custom -Subject $env:PUBLISHER -KeyUsage DigitalSignature `
+            -FriendlyName 'MESNET MSIX deneme' -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
+          $pfxPass = ConvertTo-SecureString -String ([guid]::NewGuid().ToString()) -Force -AsPlainText
+          $pfx = Join-Path $env:RUNNER_TEMP 'test.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pfxPass | Out-Null
+          Import-PfxCertificate -FilePath $pfx -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' -Password $pfxPass | Out-Null
+
+          # Store'a giden dosya imzasız kalır; imza yalnız bir kopyaya atılır.
+          $signed = Join-Path $env:RUNNER_TEMP 'signed-test.msix'
+          Copy-Item $env:MSIX_PATH $signed
+          $plain = [System.Net.NetworkCredential]::new('', $pfxPass).Password
+          & $signtool.FullName sign /fd SHA256 /f $pfx /p $plain $signed
+          if ($LASTEXITCODE -ne 0) { throw 'signtool başarısız' }
+
+          Add-AppxPackage -Path $signed
+          $pkg = Get-AppxPackage -Name $env:IDENTITY_NAME
+          if (-not $pkg) { throw 'Paket kurulmadı' }
+          Write-Host "Kuruldu: $($pkg.PackageFullName) — $($pkg.InstallLocation)"
+          if (-not (Test-Path (Join-Path $pkg.InstallLocation 'mesnet-lite.exe'))) { throw 'Program pakette yok' }
+          Remove-AppxPackage -Package $pkg.PackageFullName
+          Write-Host 'MSIX doğrulandı: kuruldu ve kaldırıldı.'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesnet-lite-msix
+          path: ${{ env.MSIX_PATH }}
+          retention-days: 14
+
+      - name: Sürüme ekle
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ($env:HAS_STORE_IDENTITY -ne 'true') {
+            Write-Warning 'Store kimliği (MSIX_* değişkenleri) tanımlı değil; deneme kimlikli paket sürüme eklenmedi.'
+            exit 0
+          }
+          # Sürümü release.yml oluşturur; hazır olana kadar (en fazla 60 dk) beklenir.
+          for ($i = 0; $i -lt 120; $i++) {
+            gh release view $env:TAG --repo $env:GITHUB_REPOSITORY *> $null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 30
+          }
+          gh release upload $env:TAG $env:MSIX_PATH --repo $env:GITHUB_REPOSITORY --clobber
