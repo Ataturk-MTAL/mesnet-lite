@@ -89,7 +89,7 @@ import { companiesApi } from '../api/companies'
 import { listTermsWithDates } from '../api/terms'
 import { labels } from '../i18n/labels'
 import type { Company, NewStudent, Student, TermWithDates } from '../types/models'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 import { useSelectionStore } from '../stores/selection'
 import { buildGlobalFilter, extractGlobalFilterValue } from '../utils/dataTableFilters'
 
@@ -97,6 +97,7 @@ const toast = useToast()
 const confirm = useConfirm()
 const selection = useSelectionStore()
 const { studentSearch } = storeToRefs(selection)
+const { activeTerm } = storeToRefs(useTermStore())
 
 const students = ref<Student[]>([])
 const companies = ref<Company[]>([])

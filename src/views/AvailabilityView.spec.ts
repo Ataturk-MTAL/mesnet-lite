@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
@@ -12,15 +11,10 @@ import type { AvailabilityBoard, CopyOutcome, SlotInput } from '../api/availabil
 import { listHistory } from '../api/history'
 import { labels } from '../i18n/labels'
 import { useSelectionStore } from '../stores/selection'
+import { useTermStore } from '../stores/term'
 import type { ChangeOutcome, ChangeRequest, HistoryChangeSetEntry, ImpactSummary, TermWithDates } from '../types/models'
 
 // Dönem, aktif dönem ve müsaitlik verisi Tauri komutlarından gelir; testte backend yoktur.
-// `AvailabilityView` bunu `watch()` ile izlediği için gerçek bir `ref` olmalı
-// (AppSidebar.spec.ts'teki düz nesne burada Vue'nun watch uyarısını tetikler).
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
-}))
-
 const listTermsWithDatesMock = vi.fn<() => Promise<TermWithDates[]>>()
 vi.mock('../api/terms', () => ({
   listTermsWithDates: () => listTermsWithDatesMock(),
@@ -127,6 +121,7 @@ beforeEach(() => {
   previewChangeMock.mockReset()
   commitChangeMock.mockReset()
   document.body.innerHTML = ''
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('AvailabilityView', () => {

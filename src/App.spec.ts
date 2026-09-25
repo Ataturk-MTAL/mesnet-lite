@@ -5,15 +5,8 @@ import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
 import Aura from '@openvue/themes/aura'
 import App from './App.vue'
-import { signOut } from './composables/useAuth'
-
-// Dönem listesi Tauri komutlarından gelir; testte backend yoktur (AppSidebar bunu okur).
-vi.mock('./composables/useTerm', () => ({
-  activeTerm: { value: '2026-2027/1' },
-  terms: { value: ['2026-2027/1'] },
-  loadTerms: vi.fn().mockResolvedValue(undefined),
-  setActiveTerm: vi.fn().mockResolvedValue(undefined),
-}))
+import { useAuthStore } from './stores/auth'
+import { useTermStore } from './stores/term'
 
 // LoginView açılışta has_any_user çağırır; giriş yapılmadığı sürece bu yeterli.
 const hasAnyMock = vi.fn<() => Promise<boolean>>()
@@ -44,11 +37,16 @@ function mountApp() {
 beforeEach(() => {
   hasAnyMock.mockReset()
   hasAnyMock.mockResolvedValue(false)
+  // Dönem listesi Tauri komutlarından gelir; testte backend yoktur (AppSidebar bunu okur).
+  const termStore = useTermStore()
+  termStore.activeTerm = '2026-2027/1'
+  termStore.terms = ['2026-2027/1']
+  vi.spyOn(termStore, 'loadTerms').mockResolvedValue(undefined)
 })
 
-// Oturum modül düzeyinde paylaşılır; testler arasında sızmaması için sıfırlanır.
+// Oturum Pinia store'unda paylaşılır; testler arasında sızmaması için sıfırlanır.
 afterEach(() => {
-  signOut()
+  useAuthStore().signOut()
 })
 
 describe('App', () => {
@@ -64,12 +62,11 @@ describe('App', () => {
   })
 
   it('giriş yapılınca kenar çubuğunu çizer', async () => {
-    const { signIn } = await import('./composables/useAuth')
     const { usersApi } = await import('./api/users')
     vi.mocked(usersApi.login).mockResolvedValue(true)
     vi.mocked(usersApi.list).mockResolvedValue([{ id: 1, name: 'Deniz ARSLAN', isActive: true }])
 
-    await signIn(1, '1234')
+    await useAuthStore().signIn(1, '1234')
     const wrapper = mountApp()
     await flushPromises()
 
@@ -79,13 +76,13 @@ describe('App', () => {
   })
 
   it('oturum kapanınca seçim store’u sıfırlanır, başka kullanıcı önceki filtreleri devralmaz', async () => {
-    const { signIn } = await import('./composables/useAuth')
     const { usersApi } = await import('./api/users')
     const { useSelectionStore } = await import('./stores/selection')
     vi.mocked(usersApi.login).mockResolvedValue(true)
     vi.mocked(usersApi.list).mockResolvedValue([{ id: 1, name: 'Deniz ARSLAN', isActive: true }])
 
-    await signIn(1, '1234')
+    const authStore = useAuthStore()
+    await authStore.signIn(1, '1234')
     const wrapper = mountApp()
     await flushPromises()
 
@@ -93,7 +90,7 @@ describe('App', () => {
     selection.selectedTeacherId = 7
     selection.studentSearch = 'ayşe'
 
-    signOut()
+    authStore.signOut()
     await flushPromises()
 
     expect(selection.selectedTeacherId).toBeNull()

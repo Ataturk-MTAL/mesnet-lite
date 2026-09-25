@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
@@ -13,6 +12,7 @@ import type { Company, CompanyRemoval, TermWithDates } from '../types/models'
 import type { SettingsMap } from '../api/settings'
 import type { GeocodeSummary } from '../api/files'
 import type { CompanyMergeSummary } from '../api/companies'
+import { useTermStore } from '../stores/term'
 
 const listMock = vi.fn<() => Promise<Company[]>>()
 const removeMock = vi.fn<(id: number) => Promise<CompanyRemoval>>()
@@ -49,10 +49,6 @@ vi.mock('../api/files', () => ({
 const listTermsWithDatesMock = vi.fn<() => Promise<TermWithDates[]>>()
 vi.mock('../api/terms', () => ({
   listTermsWithDates: () => listTermsWithDatesMock(),
-}))
-
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
 }))
 
 // CompaniesView `<Toast />`'u kendi içinde barındırmaz (App.vue'da yaşar); Rust
@@ -133,6 +129,7 @@ beforeEach(() => {
   toastAddMock.mockReset()
   confirmRequireMock.mockReset()
   document.body.replaceChildren()
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('CompaniesView tablo sütunları', () => {

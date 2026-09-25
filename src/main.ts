@@ -7,12 +7,13 @@ import Tooltip from 'openvue/tooltip'
 import Aura from '@openvue/themes/aura'
 import App from './App.vue'
 import router from './router'
-import { initTheme } from './composables/useTheme'
+import { useThemeStore } from './stores/theme'
 import 'primeicons/primeicons.css'
 import 'leaflet/dist/leaflet.css'
 
 const app = createApp(App)
-app.use(createPinia())
+const pinia = createPinia()
+app.use(pinia)
 app.use(router)
 
 // OpenVue, PrimeVue 4.5.5'in MIT lisanslı devamıdır; lisans anahtarı gerektirmez.
@@ -30,6 +31,6 @@ app.use(ConfirmationService)
 app.directive('tooltip', Tooltip)
 
 // Tema, ilk boyamadan önce uygulanır ki açılışta yanıp sönme olmasın.
-initTheme()
+useThemeStore(pinia).init()
 
 app.mount('#app')

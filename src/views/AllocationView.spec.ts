@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
@@ -10,11 +9,7 @@ import AllocationView from './AllocationView.vue'
 import type { AssignmentBoard, BoardCompany, BoardTeacher } from '../api/assignments'
 import { labels } from '../i18n/labels'
 import { useSelectionStore } from '../stores/selection'
-
-// Dönem, `AllocationView` içinde `watch()` ile izlenir; gerçek bir `ref` olmalı.
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
-}))
+import { useTermStore } from '../stores/term'
 
 const getBoardMock = vi.fn<() => Promise<AssignmentBoard>>()
 vi.mock('../api/assignments', async () => {
@@ -113,6 +108,7 @@ async function mountView(companies: BoardCompany[], boardOverrides: Partial<Assi
 beforeEach(() => {
   getBoardMock.mockReset()
   document.body.replaceChildren()
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('AllocationView atanmamış işletme gruplaması', () => {

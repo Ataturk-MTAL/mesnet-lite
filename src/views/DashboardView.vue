@@ -154,13 +154,15 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { dashboardApi } from '../api/dashboard'
 import type { DashboardStats } from '../api/dashboard'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 
 const toast = useToast()
+const { activeTerm } = storeToRefs(useTermStore())
 const stats = ref<DashboardStats | null>(null)
 
 const isOverCapacity = computed(() => (stats.value?.remainingHours ?? 0) < 0)

@@ -1,17 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import Aura from '@openvue/themes/aura'
 import ImportExportView from './ImportExportView.vue'
 import { labels } from '../i18n/labels'
+import { useTermStore } from '../stores/term'
 import type { StudentListPreview, StudentListSummary } from '../api/studentListImport'
 import type { TermWithDates } from '../types/models'
-
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
-}))
 
 // Tauri çalışma zamanı testte yoktur; komut adları ve argümanlar burada gözlenir.
 const callMock = vi.fn<(command: string, args?: Record<string, unknown>) => Promise<unknown>>()
@@ -43,6 +39,7 @@ beforeEach(() => {
   callMock.mockReset()
   toastAddMock.mockReset()
   document.body.innerHTML = ''
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('ImportExportView commission minutes', () => {

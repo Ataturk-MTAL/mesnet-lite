@@ -201,6 +201,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog'
@@ -213,14 +214,15 @@ import { settingsApi } from '../api/settings'
 import type { SettingsMap } from '../api/settings'
 import { usersApi } from '../api/users'
 import { backupApi } from '../api/backup'
-import { useAuth } from '../composables/useAuth'
+import { useAuthStore } from '../stores/auth'
 import { labels } from '../i18n/labels'
 import { dateToIso, isoToDate } from '../utils/isoDate'
 import type { BackupStatus, LatLng, User } from '../types/models'
 
 const toast = useToast()
 const confirm = useConfirm()
-const { currentUser, refreshCurrentUser } = useAuth()
+const authStore = useAuthStore()
+const { currentUser } = storeToRefs(authStore)
 
 /** Günlük ders saati sayısının alt sınırı. Izgara ders numarası artık her zaman 1'den başlar. */
 const MIN_DAILY_LESSONS = 1
@@ -340,7 +342,7 @@ async function loadUsers(): Promise<void> {
     users.value = await usersApi.list()
     // Oturumdaki kullanıcı listede yeniden adlandırılmış olabilir; ekran eski
     // adı göstermesin diye bellekteki oturum burada tazelenir.
-    refreshCurrentUser(users.value)
+    authStore.refreshCurrentUser(users.value)
   } catch (error: unknown) {
     showError(error)
   } finally {

@@ -9,8 +9,9 @@ import type { Stream } from '../types/models'
  * kullanıcı sayfalar arasında geçiş yaptığında seçimler sıfırlanmaz.
  *
  * Yalnızca bellekte tutulur — `localStorage`/`sessionStorage` KULLANILMAZ
- * (bkz. `useAuth.ts`). Oturum kapanınca `reset()` ile temizlenir; başka bir
- * kullanıcı öncekinin filtrelerini devralmaz (bkz. `App.vue`).
+ * (bkz. `stores/auth.ts`). Oturum kapanınca `reset()` ile temizlenir; başka
+ * bir kullanıcı öncekinin filtrelerini devralmaz (bkz. `stores/auth.ts`ın
+ * `signOut` eylemi).
  */
 export const useSelectionStore = defineStore('selection', () => {
   // Dağıtım (Allocation) ve Müsaitlik (Availability) ekranlarının ORTAK öğretmen seçimi.

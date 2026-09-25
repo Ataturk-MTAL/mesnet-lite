@@ -435,7 +435,7 @@ import type {
   ProposedAssignment,
 } from '../api/assignments'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 import { useSelectionStore } from '../stores/selection'
 
 /** İşletme adresi ipucu. Varsayılan `--p-tooltip-max-width` (12.5rem) uzun bir
@@ -490,6 +490,7 @@ const selection = useSelectionStore()
 // `allocationCompanySearch`'tür (Dağıtım işletme arama kutusu, ekranlar
 // arasında paylaşılan genel `companySearch`'ten AYRIDIR).
 const { selectedTeacherId, allocationCompanySearch: companySearch } = storeToRefs(selection)
+const { activeTerm } = storeToRefs(useTermStore())
 
 const board = ref<AssignmentBoard | null>(null)
 const draggedCompanyId = ref<number | null>(null)

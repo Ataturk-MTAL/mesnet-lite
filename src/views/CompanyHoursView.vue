@@ -224,13 +224,14 @@ import type { DataTableFilterMeta } from 'openvue/datatable'
 import { hoursApi } from '../api/hours'
 import type { AutoDistributeRow, HoursBoard, HoursInput, HoursRow } from '../api/hours'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 import { useSelectionStore } from '../stores/selection'
 import { buildGlobalFilter, extractGlobalFilterValue } from '../utils/dataTableFilters'
 
 const toast = useToast()
 const selection = useSelectionStore()
 const { companyHoursSearch } = storeToRefs(selection)
+const { activeTerm } = storeToRefs(useTermStore())
 
 const board = ref<HoursBoard | null>(null)
 /** Ekranda düzenlenen kopyalar; kaydedilene kadar sunucuya gitmez. */

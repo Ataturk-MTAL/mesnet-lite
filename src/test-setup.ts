@@ -10,7 +10,7 @@ beforeEach(() => {
   setActivePinia(createPinia())
 })
 
-// jsdom `matchMedia` sağlamaz; tema composable'ı sistem tercihini onunla okur.
+// jsdom `matchMedia` sağlamaz; tema store'u sistem tercihini onunla okur.
 // Varsayılan olarak açık tema döndürülür.
 if (typeof window.matchMedia !== 'function') {
   Object.defineProperty(window, 'matchMedia', {

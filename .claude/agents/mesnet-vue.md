@@ -83,6 +83,17 @@ kullan; verilmemişse raporunda iste.
 **Değişmezlik.** Nesneyi yerinde değiştirme, yeni nesne döndür. Reaktif
 durumu türetilebiliyorsa `computed` ile türet, elle senkronlama.
 
+**Durum yönetimi.** Ekranlar arası paylaşılan ya da sayfa değişiminden sağ
+çıkması gereken HER durum `src/stores/` altındaki bir Pinia setup store'unda
+yaşar (`useAuthStore`, `useTermStore`, `useAsOfDateStore`, `useThemeStore`,
+`useSelectionStore`). Modül düzeyinde `ref` ile global durum YAZMA; yeni bir
+global alan gerekiyorsa uygun store'a ekle. Görünümde `storeToRefs` ile al.
+Store state'ine yazma eylemlerle olur; doğrudan `v-model` bağı yalnız
+`useSelectionStore`'daki seçimler için. Yalnız bellek: `localStorage` yalnız
+tema tercihi için. Yalnız bir bileşene ait geçici durum (diyalog açık mı,
+taslak) bileşende kalır. Spec'ler store modülünü `vi.mock` ile sahtelemez;
+state'i doğrudan verir, ağ sınırını sahteler.
+
 **Hata yönetimi.** Hata sessizce yutulmaz. Dosyadaki mevcut `showError` +
 Toast düzenine uy; Rust'tan gelen Türkçe mesaj kullanıcıya olduğu gibi
 ulaşsın, yutulup genel bir metne çevrilmesin. Toplu işlemde bir öğe

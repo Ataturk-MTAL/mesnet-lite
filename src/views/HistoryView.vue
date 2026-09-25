@@ -104,7 +104,7 @@ import { listHistory } from '../api/history'
 import { companiesApi } from '../api/companies'
 import { teachersApi } from '../api/teachers'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 import { useSelectionStore } from '../stores/selection'
 import type { Company, HistoryChangeSetEntry, HistoryFilter, Stream, Teacher } from '../types/models'
 
@@ -115,6 +115,7 @@ const HISTORY_PAGE_SIZE = 20
 const STREAMS: readonly Stream[] = ['placement', 'company_hours', 'coordination', 'teacher_load', 'teacher_schedule']
 
 const toast = useToast()
+const { activeTerm } = storeToRefs(useTermStore())
 const selection = useSelectionStore()
 const {
   historyStream: filterStream,

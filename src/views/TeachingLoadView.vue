@@ -195,12 +195,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import { teachingLoadApi } from '../api/teachingLoad'
 import type { TeachingLoadBoard, TeachingLoadInput, TeachingLoadRow } from '../api/teachingLoad'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
+
+const { activeTerm } = storeToRefs(useTermStore())
 
 /** Ekranda düzenlenen satır. `key` yalnızca yerel `v-for` kimliği içindir,
  *  sunucuya gitmez — `id === null` olan hem öneri hem de yeni eklenen boş

@@ -102,6 +102,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import TeacherFormDialog from '../components/teacher/TeacherFormDialog.vue'
@@ -110,12 +111,13 @@ import { teachersApi } from '../api/teachers'
 import { studentsApi } from '../api/students'
 import { listTermsWithDates } from '../api/terms'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 import { parseBranches } from '../types/models'
 import type { ChiefType, NewTeacher, TeacherWithCapacity, TermWithDates } from '../types/models'
 
 const toast = useToast()
 const confirm = useConfirm()
+const { activeTerm } = storeToRefs(useTermStore())
 
 const teachers = ref<TeacherWithCapacity[]>([])
 const knownBranches = ref<string[]>([])

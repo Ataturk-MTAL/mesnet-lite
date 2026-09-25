@@ -219,7 +219,7 @@ import { useToast } from 'openvue/usetoast'
 import { availabilityApi } from '../api/availability'
 import type { AvailabilityBoard, ClassDays, SlotInput } from '../api/availability'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 import { listTermsWithDates } from '../api/terms'
 import { useSelectionStore } from '../stores/selection'
 import { useChange } from '../composables/useChange'
@@ -234,6 +234,7 @@ const toast = useToast()
 const selection = useSelectionStore()
 // Dağıtım ekranıyla PAYLAŞILAN öğretmen seçimi.
 const { selectedTeacherId } = storeToRefs(selection)
+const { activeTerm } = storeToRefs(useTermStore())
 
 const board = ref<AvailabilityBoard | null>(null)
 const isSavingTeacher = ref(false)

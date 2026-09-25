@@ -153,7 +153,7 @@ import { settingsApi } from '../api/settings'
 import { filesApi } from '../api/files'
 import { listTermsWithDates } from '../api/terms'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 import { roundTripDistanceKm } from '../types/models'
 import type { Company, GeocodeStatus, LatLng, NewCompany, TermWithDates } from '../types/models'
 import type { CompanyMergeInput } from '../api/companies'
@@ -164,6 +164,7 @@ const toast = useToast()
 const confirm = useConfirm()
 const selection = useSelectionStore()
 const { companySearch } = storeToRefs(selection)
+const { activeTerm } = storeToRefs(useTermStore())
 
 const companies = ref<Company[]>([])
 const isLoading = ref(false)

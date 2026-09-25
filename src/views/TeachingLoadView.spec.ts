@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import { ref } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
@@ -11,12 +10,8 @@ import Aura from '@openvue/themes/aura'
 import TeachingLoadView from './TeachingLoadView.vue'
 import { labels } from '../i18n/labels'
 import { teachingLoadApi } from '../api/teachingLoad'
+import { useTermStore } from '../stores/term'
 import type { TeachingLoadBoard } from '../api/teachingLoad'
-
-// Aktif dönem `watch()` ile izlendiği için gerçek bir `ref` olmalı.
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
-}))
 
 const getBoardMock = vi.fn<() => Promise<TeachingLoadBoard>>()
 vi.mock('../api/teachingLoad', () => ({
@@ -75,6 +70,7 @@ function textOf(wrapper: VueWrapper, testId: string): string {
 beforeEach(() => {
   getBoardMock.mockReset()
   document.body.replaceChildren()
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('TeachingLoadView havuz kırılımı', () => {

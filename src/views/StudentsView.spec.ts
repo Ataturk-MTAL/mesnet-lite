@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
@@ -11,6 +10,7 @@ import StudentsView from './StudentsView.vue'
 import { labels } from '../i18n/labels'
 import type { Company, Student, TermWithDates } from '../types/models'
 import { useSelectionStore } from '../stores/selection'
+import { useTermStore } from '../stores/term'
 
 const listStudentsMock = vi.fn<() => Promise<Student[]>>()
 vi.mock('../api/students', () => ({
@@ -38,10 +38,6 @@ vi.mock('../api/companies', () => ({
 const listTermsWithDatesMock = vi.fn<() => Promise<TermWithDates[]>>()
 vi.mock('../api/terms', () => ({
   listTermsWithDates: () => listTermsWithDatesMock(),
-}))
-
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
 }))
 
 function studentFixture(overrides: Partial<Student> = {}): Student {
@@ -93,6 +89,7 @@ beforeEach(() => {
   listCompaniesMock.mockReset()
   listTermsWithDatesMock.mockReset()
   document.body.replaceChildren()
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('StudentsView — nakil/yerleştirme düğmesi', () => {

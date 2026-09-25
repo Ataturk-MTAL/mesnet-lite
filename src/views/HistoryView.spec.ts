@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
@@ -8,12 +7,7 @@ import Aura from '@openvue/themes/aura'
 import HistoryView from './HistoryView.vue'
 import type { Company, HistoryChangeSetEntry, HistoryFilter, HistoryResponse, Teacher } from '../types/models'
 import { useSelectionStore } from '../stores/selection'
-
-// `AvailabilityView.spec.ts`'teki gibi: `watch(activeTerm, load)` çağrıldığı
-// için gerçek bir `ref` gerekir, düz nesne Vue'nun watch uyarısını tetikler.
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
-}))
+import { useTermStore } from '../stores/term'
 
 const listHistoryMock = vi.fn<(filter: HistoryFilter) => Promise<HistoryResponse>>()
 vi.mock('../api/history', () => ({
@@ -72,6 +66,7 @@ beforeEach(() => {
   listTeachersMock.mockReset()
   listTeachersMock.mockResolvedValue([])
   document.body.innerHTML = ''
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 function companyFixture(overrides: Partial<Company> = {}): Company {

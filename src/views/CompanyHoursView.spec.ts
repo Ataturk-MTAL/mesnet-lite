@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { DOMWrapper, VueWrapper } from '@vue/test-utils'
-import { ref } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
@@ -12,11 +11,7 @@ import CompanyHoursView from './CompanyHoursView.vue'
 import { labels } from '../i18n/labels'
 import type { AutoDistributeRow, DistributionOutcome, HoursBoard, HoursRow } from '../api/hours'
 import { useSelectionStore } from '../stores/selection'
-
-// Aktif dönem `watch()` ile izlendiği için gerçek bir `ref` olmalı.
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
-}))
+import { useTermStore } from '../stores/term'
 
 const getBoardMock = vi.fn<() => Promise<HoursBoard>>()
 const autoDistributeMock = vi.fn<(rows: AutoDistributeRow[]) => Promise<DistributionOutcome>>()
@@ -118,6 +113,7 @@ beforeEach(() => {
   getBoardMock.mockReset()
   autoDistributeMock.mockReset()
   document.body.replaceChildren()
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('CompanyHoursView toplu kilit düğmesi', () => {

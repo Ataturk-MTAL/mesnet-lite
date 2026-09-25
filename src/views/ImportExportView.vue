@@ -356,6 +356,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { importApi } from '../api/importExport'
 import type { DuplicatePolicy, ImportPreview, ImportSummary } from '../api/importExport'
@@ -369,13 +370,14 @@ import {
   type StudentListSummary,
 } from '../api/studentListImport'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 import { filesApi } from '../api/files'
 import { listTermsWithDates } from '../api/terms'
 import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
 import type { TermWithDates } from '../types/models'
 
 const toast = useToast()
+const { activeTerm } = storeToRefs(useTermStore())
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const fileName = ref('')
