@@ -29,6 +29,11 @@
     "copyright": "© 2026 Hakan Gülen — Apache-2.0",
     "license": "Apache-2.0",
     "category": "Education",
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    },
     "shortDescription": "İşletmelerde mesleki eğitim koordinatörlük dağıtımı",
     "longDescription": "İşletmelerde mesleki eğitim koordinatörlük dağıtımı, ek ders saati takdiri ve değişiklik tarihçesi.",
     "icon": [
