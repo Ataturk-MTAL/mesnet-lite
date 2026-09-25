@@ -97,6 +97,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import HistoryEntryCard from '../components/history/HistoryEntryCard.vue'
 import { listHistory } from '../api/history'
@@ -104,6 +105,7 @@ import { companiesApi } from '../api/companies'
 import { teachersApi } from '../api/teachers'
 import { labels } from '../i18n/labels'
 import { activeTerm } from '../composables/useTerm'
+import { useSelectionStore } from '../stores/selection'
 import type { Company, HistoryChangeSetEntry, HistoryFilter, Stream, Teacher } from '../types/models'
 
 /** Bir sayfada istenen azami değişiklik kümesi sayısı; "Daha Fazla Yükle" bunu tekrarlar. */
@@ -113,6 +115,14 @@ const HISTORY_PAGE_SIZE = 20
 const STREAMS: readonly Stream[] = ['placement', 'company_hours', 'coordination', 'teacher_load', 'teacher_schedule']
 
 const toast = useToast()
+const selection = useSelectionStore()
+const {
+  historyStream: filterStream,
+  historySubjectId: filterSubjectId,
+  historyCompanyId: filterCompanyId,
+  historyTeacherId: filterTeacherId,
+  historyIncludeOpening: includeOpening,
+} = storeToRefs(selection)
 
 const entries = ref<HistoryChangeSetEntry[]>([])
 const nextBeforeChangeSetId = ref<number | null>(null)
@@ -121,12 +131,6 @@ const isLoadingMore = ref(false)
 
 const companies = ref<Company[]>([])
 const teachers = ref<Teacher[]>([])
-
-const filterStream = ref<Stream | null>(null)
-const filterSubjectId = ref<number | null>(null)
-const filterCompanyId = ref<number | null>(null)
-const filterTeacherId = ref<number | null>(null)
-const includeOpening = ref(false)
 
 const streamOptions = computed(() =>
   STREAMS.map((stream) => ({ value: stream, label: labels.history.stream[stream] })),
@@ -190,6 +194,12 @@ async function loadFilterOptions(): Promise<void> {
     const [companyList, teacherList] = await Promise.all([companiesApi.list(), teachersApi.list()])
     companies.value = companyList
     teachers.value = teacherList
+    // Filtrede seçili işletme/öğretmen artık listede yoksa (silinmiş, dönem
+    // değişmiş) temizlenir; geçerli seçim korunur.
+    selection.syncHistoryOptions(
+      companyList.map((c) => c.id),
+      teacherList.map((t) => t.id),
+    )
   } catch (error: unknown) {
     showError(error)
   }

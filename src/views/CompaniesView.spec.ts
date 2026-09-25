@@ -227,6 +227,30 @@ describe('CompaniesView arama', () => {
     expect(wrapper.get('input[type="text"]').attributes('placeholder')).toBe(labels.company.searchPlaceholder)
     wrapper.unmount()
   })
+
+  it('arama metni yeniden mount edilince korunur ve tabloya uygulanır (Pinia store)', async () => {
+    // Arrange
+    const wrapper = await mountView([
+      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Serbest Bölge' }),
+      companyFixture({ id: 2, name: 'Firma B', addressText: 'Adana Sanayi Sitesi' }),
+    ])
+    await wrapper.get('input[type="text"]').setValue('Mersin')
+    await flushPromises()
+    wrapper.unmount()
+
+    // Act: sayfa değişip geri dönülmüş gibi ikinci bir mount.
+    const wrapper2 = await mountView([
+      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Serbest Bölge' }),
+      companyFixture({ id: 2, name: 'Firma B', addressText: 'Adana Sanayi Sitesi' }),
+    ])
+
+    // Assert: arama kutusu dolu gelir ve filtre tabloya hâlâ uygulanır.
+    expect((wrapper2.get('input[type="text"]').element as HTMLInputElement).value).toBe('Mersin')
+    const bodyRows = wrapper2.findAll('tbody tr')
+    expect(bodyRows).toHaveLength(1)
+    expect(bodyRows[0].text()).toContain('Firma A')
+    wrapper2.unmount()
+  })
 })
 
 describe('CompaniesView — işletme birleştirme', () => {

@@ -7,6 +7,7 @@ import ConfirmationService from 'openvue/confirmationservice'
 import Aura from '@openvue/themes/aura'
 import HistoryView from './HistoryView.vue'
 import type { Company, HistoryChangeSetEntry, HistoryFilter, HistoryResponse, Teacher } from '../types/models'
+import { useSelectionStore } from '../stores/selection'
 
 // `AvailabilityView.spec.ts`'teki gibi: `watch(activeTerm, load)` çağrıldığı
 // için gerçek bir `ref` gerekir, düz nesne Vue'nun watch uyarısını tetikler.
@@ -23,12 +24,14 @@ vi.mock('../api/history', () => ({
   deleteChangeSet: vi.fn(),
 }))
 
+const listCompaniesMock = vi.fn<() => Promise<Company[]>>()
 vi.mock('../api/companies', () => ({
-  companiesApi: { list: (): Promise<Company[]> => Promise.resolve([]) },
+  companiesApi: { list: (): Promise<Company[]> => listCompaniesMock() },
 }))
 
+const listTeachersMock = vi.fn<() => Promise<Teacher[]>>()
 vi.mock('../api/teachers', () => ({
-  teachersApi: { list: (): Promise<Teacher[]> => Promise.resolve([]), listWithCapacity: vi.fn() },
+  teachersApi: { list: (): Promise<Teacher[]> => listTeachersMock(), listWithCapacity: vi.fn() },
 }))
 
 function entryFixture(changeSetId: number): HistoryChangeSetEntry {
@@ -64,7 +67,94 @@ function mountView() {
 
 beforeEach(() => {
   listHistoryMock.mockReset()
+  listCompaniesMock.mockReset()
+  listCompaniesMock.mockResolvedValue([])
+  listTeachersMock.mockReset()
+  listTeachersMock.mockResolvedValue([])
   document.body.innerHTML = ''
+})
+
+function companyFixture(overrides: Partial<Company> = {}): Company {
+  return {
+    id: 1,
+    name: 'Firma A',
+    contactFirstName: '',
+    contactLastName: '',
+    phone: '',
+    email: '',
+    addressText: '',
+    district: '',
+    latitude: null,
+    longitude: null,
+    geocodeStatus: 'pending',
+    oneWayDistanceKm: null,
+    notes: '',
+    createdAt: '2026-01-01',
+    updatedAt: '2026-01-01',
+    ...overrides,
+  }
+}
+
+function teacherFixture(overrides: Partial<Teacher> = {}): Teacher {
+  return {
+    id: 1,
+    firstName: 'Ahmet',
+    lastName: 'Yılmaz',
+    registryNo: '1',
+    field: 'Elektrik-Elektronik',
+    branches: '[]',
+    employmentType: 'tenured',
+    baseHours: 0,
+    maxExtraHours: 0,
+    otherExtraHours: 0,
+    chiefType: 'none',
+    isActive: 1,
+    ...overrides,
+  }
+}
+
+describe('HistoryView seçim kalıcılığı (Pinia store)', () => {
+  it('store’da filtre varken mount edilince listHistory o filtreyle çağrılır', async () => {
+    // Arrange
+    listHistoryMock.mockResolvedValue({ entries: [], nextBeforeChangeSetId: null })
+    listCompaniesMock.mockResolvedValue([companyFixture({ id: 1 })])
+    listTeachersMock.mockResolvedValue([teacherFixture({ id: 3 })])
+    const selection = useSelectionStore()
+    selection.historyStream = 'coordination'
+    selection.historyCompanyId = 1
+    selection.historyTeacherId = 3
+    selection.historyIncludeOpening = true
+
+    // Act
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Assert
+    expect(listHistoryMock.mock.calls[0][0]).toMatchObject({
+      stream: 'coordination',
+      companyId: 1,
+      teacherId: 3,
+      includeOpening: true,
+    })
+    wrapper.unmount()
+  })
+
+  it('seçenek listesinde olmayan historyCompanyId mount sonrası temizlenir', async () => {
+    // Arrange: store'daki işletme kimliği artık listede yok (silinmiş/bayat).
+    listHistoryMock.mockResolvedValue({ entries: [], nextBeforeChangeSetId: null })
+    listCompaniesMock.mockResolvedValue([companyFixture({ id: 1 })])
+    listTeachersMock.mockResolvedValue([])
+    const selection = useSelectionStore()
+    selection.historyCompanyId = 99
+
+    // Act
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Assert
+    expect(selection.historyCompanyId).toBeNull()
+    wrapper.unmount()
+  })
 })
 
 describe('HistoryView', () => {

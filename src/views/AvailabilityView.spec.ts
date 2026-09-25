@@ -11,6 +11,7 @@ import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
 import type { AvailabilityBoard, CopyOutcome, SlotInput } from '../api/availability'
 import { listHistory } from '../api/history'
 import { labels } from '../i18n/labels'
+import { useSelectionStore } from '../stores/selection'
 import type { ChangeOutcome, ChangeRequest, HistoryChangeSetEntry, ImpactSummary, TermWithDates } from '../types/models'
 
 // Dönem, aktif dönem ve müsaitlik verisi Tauri komutlarından gelir; testte backend yoktur.
@@ -202,6 +203,31 @@ describe('AvailabilityView', () => {
     expect(previewChangeMock).not.toHaveBeenCalled()
     expect(saveTeacherMock).toHaveBeenCalledWith(1, expect.any(Array))
 
+    wrapper.unmount()
+  })
+})
+
+describe('AvailabilityView seçim kalıcılığı (Pinia store)', () => {
+  it('Dağıtım ekranıyla paylaşılan öğretmen seçimi store’dan gelir', async () => {
+    // Arrange: store'da öğretmen 2 önceden seçili — Dağıtım ekranında seçilmiş gibi.
+    const selection = useSelectionStore()
+    selection.selectedTeacherId = 2
+    getBoardMock.mockResolvedValue({
+      ...boardFixture(),
+      teachers: [
+        { teacherId: 1, teacherName: 'Ahmet Yılmaz', freeSlots: [], freeCount: 0 },
+        { teacherId: 2, teacherName: 'Quinn Harlow', freeSlots: [], freeCount: 0 },
+      ],
+    })
+    listTermsWithDatesMock.mockResolvedValue([planningTerm])
+
+    // Act
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Assert: seçim değişmedi (2 kaldı) ve seçici bu öğretmenin adını gösteriyor.
+    expect(selection.selectedTeacherId).toBe(2)
+    expect(wrapper.find('.teacher-select').text()).toContain('Quinn Harlow')
     wrapper.unmount()
   })
 })

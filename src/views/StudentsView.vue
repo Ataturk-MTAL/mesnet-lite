@@ -22,7 +22,7 @@
       stripedRows
     >
       <template #header>
-        <InputText v-model="filters.global.value" :placeholder="labels.student.searchPlaceholder" />
+        <InputText v-model="studentSearch" :placeholder="labels.student.searchPlaceholder" />
       </template>
       <template #empty>{{ labels.student.empty }}</template>
 
@@ -78,8 +78,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
+import type { DataTableFilterMeta } from 'openvue/datatable'
 import StudentFormDialog from '../components/student/StudentFormDialog.vue'
 import StudentChangeDialog, { type StudentChangeSubject } from '../components/student/StudentChangeDialog.vue'
 import { studentsApi } from '../api/students'
@@ -88,9 +90,13 @@ import { listTermsWithDates } from '../api/terms'
 import { labels } from '../i18n/labels'
 import type { Company, NewStudent, Student, TermWithDates } from '../types/models'
 import { activeTerm } from '../composables/useTerm'
+import { useSelectionStore } from '../stores/selection'
+import { buildGlobalFilter, extractGlobalFilterValue } from '../utils/dataTableFilters'
 
 const toast = useToast()
 const confirm = useConfirm()
+const selection = useSelectionStore()
+const { studentSearch } = storeToRefs(selection)
 
 const students = ref<Student[]>([])
 const companies = ref<Company[]>([])
@@ -98,7 +104,14 @@ const termsWithDates = ref<TermWithDates[]>([])
 const isLoading = ref(false)
 const isDialogOpen = ref(false)
 const selected = ref<Student | null>(null)
-const filters = ref({ global: { value: null as string | null, matchMode: 'contains' } })
+// DataTable'ın arama kutusu iki yönlü; store'daki `studentSearch` ile senkron
+// kalması için OKUNABİLİR + YAZILABİLİR computed olarak sunulur.
+const filters = computed<DataTableFilterMeta>({
+  get: () => buildGlobalFilter(studentSearch.value),
+  set: (next) => {
+    studentSearch.value = extractGlobalFilterValue(next)
+  },
+})
 
 const isChangeDialogOpen = ref(false)
 const changeSubject = ref<StudentChangeSubject>({ id: 0, fullName: '', companyId: null, companyName: null })

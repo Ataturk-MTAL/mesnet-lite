@@ -11,6 +11,7 @@ import Aura from '@openvue/themes/aura'
 import CompanyHoursView from './CompanyHoursView.vue'
 import { labels } from '../i18n/labels'
 import type { AutoDistributeRow, DistributionOutcome, HoursBoard, HoursRow } from '../api/hours'
+import { useSelectionStore } from '../stores/selection'
 
 // Aktif dönem `watch()` ile izlendiği için gerçek bir `ref` olmalı.
 vi.mock('../composables/useTerm', () => ({
@@ -401,5 +402,27 @@ describe('CompanyHoursView Geri Al ve kilitli satır donması', () => {
     expect(numberInputAfter.find('input').attributes('disabled')).toBeUndefined()
     expect(toggleAfter.find('input').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
+  })
+})
+
+describe('CompanyHoursView seçim kalıcılığı (Pinia store)', () => {
+  it('arama metni yeniden mount edilince korunur', async () => {
+    // Arrange
+    getBoardMock.mockResolvedValue(
+      boardFixture([hoursRow({ companyId: 1, companyName: 'Akdeniz Elektronik' })]),
+    )
+    const wrapper = await mountView()
+    await wrapper.get('input[type="text"]').setValue('Akdeniz')
+    await flushPromises()
+    wrapper.unmount()
+
+    // Act
+    const selection = useSelectionStore()
+    const wrapper2 = await mountView()
+
+    // Assert
+    expect(selection.companyHoursSearch).toBe('Akdeniz')
+    expect((wrapper2.get('input[type="text"]').element as HTMLInputElement).value).toBe('Akdeniz')
+    wrapper2.unmount()
   })
 })

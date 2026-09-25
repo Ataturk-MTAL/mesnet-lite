@@ -77,4 +77,28 @@ describe('App', () => {
 
     wrapper.unmount()
   })
+
+  it('oturum kapanınca seçim store’u sıfırlanır, başka kullanıcı önceki filtreleri devralmaz', async () => {
+    const { signIn } = await import('./composables/useAuth')
+    const { usersApi } = await import('./api/users')
+    const { useSelectionStore } = await import('./stores/selection')
+    vi.mocked(usersApi.login).mockResolvedValue(true)
+    vi.mocked(usersApi.list).mockResolvedValue([{ id: 1, name: 'Deniz ARSLAN', isActive: true }])
+
+    await signIn(1, '1234')
+    const wrapper = mountApp()
+    await flushPromises()
+
+    const selection = useSelectionStore()
+    selection.selectedTeacherId = 7
+    selection.studentSearch = 'ayşe'
+
+    signOut()
+    await flushPromises()
+
+    expect(selection.selectedTeacherId).toBeNull()
+    expect(selection.studentSearch).toBe('')
+
+    wrapper.unmount()
+  })
 })

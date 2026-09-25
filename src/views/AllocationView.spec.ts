@@ -9,6 +9,7 @@ import Aura from '@openvue/themes/aura'
 import AllocationView from './AllocationView.vue'
 import type { AssignmentBoard, BoardCompany, BoardTeacher } from '../api/assignments'
 import { labels } from '../i18n/labels'
+import { useSelectionStore } from '../stores/selection'
 
 // Dönem, `AllocationView` içinde `watch()` ile izlenir; gerçek bir `ref` olmalı.
 vi.mock('../composables/useTerm', () => ({
@@ -323,5 +324,55 @@ describe('AllocationView işletme adresi', () => {
     expect(addresses).toHaveLength(1)
     expect(addresses[0]?.text()).toBe('Hürriyet Mah. Hüseyin Okan Merzeci Blv No:489, Yenişehir/Mersin')
     wrapper.unmount()
+  })
+})
+
+describe('AllocationView seçim kalıcılığı (Pinia store)', () => {
+  it('seçili öğretmen unmount + yeniden mount edilince korunur', async () => {
+    // Arrange
+    const teachers = [teacherFixture({ teacherId: 1 }), teacherFixture({ teacherId: 2 })]
+    const selection = useSelectionStore()
+    const wrapper = await mountView([], { teachers })
+    selection.selectedTeacherId = 2
+    await flushPromises()
+    wrapper.unmount()
+
+    // Act: aynı store'a bağlı ikinci bir mount
+    const wrapper2 = await mountView([], { teachers })
+
+    // Assert
+    expect(selection.selectedTeacherId).toBe(2)
+    wrapper2.unmount()
+  })
+
+  it('store bayat (board’da olmayan) bir kimlik taşıyorsa mount edilince ilk öğretmene düşer', async () => {
+    // Arrange
+    const selection = useSelectionStore()
+    selection.selectedTeacherId = 99
+    const teachers = [teacherFixture({ teacherId: 1 }), teacherFixture({ teacherId: 2 })]
+
+    // Act
+    const wrapper = await mountView([], { teachers })
+
+    // Assert
+    expect(selection.selectedTeacherId).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('allocationCompanySearch yeniden mount edilince korunur', async () => {
+    // Arrange
+    const company = companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz' })
+    const wrapper = await mountView([company])
+    const selection = useSelectionStore()
+
+    // Act
+    await wrapper.get('input[type="text"]').setValue('Toroslar')
+    wrapper.unmount()
+
+    // Assert
+    expect(selection.allocationCompanySearch).toBe('Toroslar')
+    const wrapper2 = await mountView([company])
+    expect((wrapper2.get('.search').element as HTMLInputElement).value).toBe('Toroslar')
+    wrapper2.unmount()
   })
 })

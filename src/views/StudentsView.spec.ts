@@ -10,6 +10,7 @@ import Aura from '@openvue/themes/aura'
 import StudentsView from './StudentsView.vue'
 import { labels } from '../i18n/labels'
 import type { Company, Student, TermWithDates } from '../types/models'
+import { useSelectionStore } from '../stores/selection'
 
 const listStudentsMock = vi.fn<() => Promise<Student[]>>()
 vi.mock('../api/students', () => ({
@@ -148,5 +149,24 @@ describe('StudentsView — nakil/yerleştirme düğmesi', () => {
     // Assert
     expect(document.body.textContent ?? '').toContain(labels.studentChange.placeTitle)
     wrapper.unmount()
+  })
+})
+
+describe('StudentsView seçim kalıcılığı (Pinia store)', () => {
+  it('arama metni yeniden mount edilince korunur', async () => {
+    // Arrange
+    const wrapper = await mountView([studentFixture()])
+    await wrapper.get('input[type="text"]').setValue('Ayşe')
+    await flushPromises()
+    wrapper.unmount()
+
+    // Act
+    const selection = useSelectionStore()
+    const wrapper2 = await mountView([studentFixture()])
+
+    // Assert
+    expect(selection.studentSearch).toBe('Ayşe')
+    expect((wrapper2.get('input[type="text"]').element as HTMLInputElement).value).toBe('Ayşe')
+    wrapper2.unmount()
   })
 })
