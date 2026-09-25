@@ -423,6 +423,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import { assignmentsApi } from '../api/assignments'
@@ -434,7 +435,8 @@ import type {
   ProposedAssignment,
 } from '../api/assignments'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
+import { useSelectionStore } from '../stores/selection'
 
 /** İşletme adresi ipucu. Varsayılan `--p-tooltip-max-width` (12.5rem) uzun bir
  *  adres için çok dar kalır; sınır `.p-tooltip` KÖKÜNDE tanımlı olduğundan
@@ -483,10 +485,14 @@ interface ProposalApplyResult {
 
 const toast = useToast()
 const confirm = useConfirm()
+const selection = useSelectionStore()
+// `companySearch` şablonda aynı adla kalır; store'daki karşılığı
+// `allocationCompanySearch`'tür (Dağıtım işletme arama kutusu, ekranlar
+// arasında paylaşılan genel `companySearch`'ten AYRIDIR).
+const { selectedTeacherId, allocationCompanySearch: companySearch } = storeToRefs(selection)
+const { activeTerm } = storeToRefs(useTermStore())
 
 const board = ref<AssignmentBoard | null>(null)
-const selectedTeacherId = ref<number | null>(null)
-const companySearch = ref('')
 const draggedCompanyId = ref<number | null>(null)
 /** Sürükleme veya klavye seçimi sırasında imlecin üstünde olduğu hücre. */
 const hoverCell = ref<HoverCell | null>(null)
@@ -1045,10 +1051,9 @@ async function applyProposal(): Promise<void> {
 async function load(): Promise<void> {
   try {
     board.value = await assignmentsApi.get()
-    // İlk öğretmen otomatik seçilsin ki ızgara boş görünmesin.
-    if (selectedTeacherId.value === null && board.value.teachers.length > 0) {
-      selectedTeacherId.value = board.value.teachers[0].teacherId
-    }
+    // Seçim listede varsa korunur; yoksa (bayat ya da hiç seçilmemiş) ilk
+    // öğretmene düşer, ızgara boş görünmesin.
+    selection.syncTeacherSelection(board.value.teachers.map((t) => t.teacherId))
   } catch (error: unknown) {
     showError(error)
   }

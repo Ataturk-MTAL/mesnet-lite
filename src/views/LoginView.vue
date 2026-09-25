@@ -94,13 +94,14 @@
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useToast } from 'openvue/usetoast'
 import { usersApi } from '../api/users'
-import { signIn } from '../composables/useAuth'
+import { useAuthStore } from '../stores/auth'
 import { labels } from '../i18n/labels'
 import { sanitizePinInput } from '../utils/pin'
 import type { User } from '../types/models'
 import logoUrl from '../assets/ataturk-mtal.png'
 
 const toast = useToast()
+const authStore = useAuthStore()
 
 type Mode = 'setup' | 'login'
 
@@ -182,7 +183,7 @@ async function submitLogin(): Promise<void> {
   if (!canSubmitLogin.value || loginForm.userId === null) return
   isSubmitting.value = true
   try {
-    const ok = await signIn(loginForm.userId, loginForm.pin)
+    const ok = await authStore.signIn(loginForm.userId, loginForm.pin)
     if (!ok) await handleWrongPin()
   } catch (error: unknown) {
     showError(error)
@@ -201,7 +202,7 @@ async function submitLogin(): Promise<void> {
  */
 async function signInAfterSetup(created: User): Promise<void> {
   try {
-    const ok = await signIn(created.id, setupForm.pin)
+    const ok = await authStore.signIn(created.id, setupForm.pin)
     if (!ok) throw new Error(labels.auth.wrongPin)
   } catch (error: unknown) {
     showError(error)

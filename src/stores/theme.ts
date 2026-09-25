@@ -1,4 +1,5 @@
-import { ref, readonly } from 'vue'
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
 
 /** Kullanıcının tema tercihi. 'system' işletim sistemini izler. */
 export type ThemePreference = 'light' | 'dark' | 'system'
@@ -10,9 +11,6 @@ const STORAGE_KEY = 'mesnet-lite-theme'
  * Değişirse main.ts içindeki ayar da değişmelidir.
  */
 const DARK_CLASS = 'app-dark'
-
-const preference = ref<ThemePreference>('system')
-const isDark = ref(false)
 
 function prefersDarkSystem(): boolean {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -45,33 +43,31 @@ function storePreference(value: ThemePreference): void {
   }
 }
 
-export function setThemePreference(value: ThemePreference): void {
-  preference.value = value
-  isDark.value = resolveIsDark(value)
-  applyToDocument(isDark.value)
-  storePreference(value)
-}
+/**
+ * Uygulamanın tema tercihi. Diğer paylaşılan durumun aksine tema tercihi
+ * `localStorage`'da KALICI tutulur — "yalnız bellek" kuralının bilinen
+ * istisnası (mevcut davranış): tema, uygulama kapanıp açıldığında korunur.
+ */
+export const useThemeStore = defineStore('theme', () => {
+  const preference = ref<ThemePreference>('system')
+  const isDark = ref(false)
 
-/** Açık ↔ koyu arasında geçiş yapar ve tercihi açıkça sabitler. */
-export function toggleTheme(): void {
-  setThemePreference(isDark.value ? 'light' : 'dark')
-}
-
-/** Uygulama açılışında bir kez çağrılır. */
-export function initTheme(): void {
-  setThemePreference(readStoredPreference())
-
-  // Tercih 'system' ise işletim sistemi değiştikçe tema da değişmeli.
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-    if (preference.value === 'system') setThemePreference('system')
-  })
-}
-
-export function useTheme() {
-  return {
-    preference: readonly(preference),
-    isDark: readonly(isDark),
-    setThemePreference,
-    toggleTheme,
+  function setThemePreference(value: ThemePreference): void {
+    preference.value = value
+    isDark.value = resolveIsDark(value)
+    applyToDocument(isDark.value)
+    storePreference(value)
   }
-}
+
+  /** Uygulama açılışında bir kez çağrılır. */
+  function init(): void {
+    setThemePreference(readStoredPreference())
+
+    // Tercih 'system' ise işletim sistemi değiştikçe tema da değişmeli.
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (preference.value === 'system') setThemePreference('system')
+    })
+  }
+
+  return { preference, isDark, setThemePreference, init }
+})

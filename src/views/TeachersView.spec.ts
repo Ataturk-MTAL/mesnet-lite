@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
@@ -8,11 +7,8 @@ import Aura from '@openvue/themes/aura'
 import TeachersView from './TeachersView.vue'
 import EffectiveDateField from '../components/history/EffectiveDateField.vue'
 import { labels } from '../i18n/labels'
+import { useTermStore } from '../stores/term'
 import type { TeacherWithCapacity, TermWithDates } from '../types/models'
-
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
-}))
 
 // Tauri çalışma zamanı testte yoktur; komut adları ve argümanlar burada gözlenir
 // (bkz. ImportExportView.spec.ts).
@@ -75,6 +71,8 @@ function mockDefaultCommands(): void {
 beforeEach(() => {
   callMock.mockReset()
   document.body.innerHTML = ''
+  // Dönem store'u gerçek Pinia store'dur; API'ye gitmeden doğrudan doldurulur.
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('TeachersView — yürürlük tarihi/gerekçe akışı update_teacher üzerinde', () => {

@@ -1,19 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import { ref } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import Aura from '@openvue/themes/aura'
 import DashboardView from './DashboardView.vue'
 import { labels } from '../i18n/labels'
+import { useTermStore } from '../stores/term'
 import type { DashboardStats } from '../api/dashboard'
-
-// Aktif dönem `watch()` ile izlendiği için gerçek bir `ref` olmalı.
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
-}))
 
 const getStatsMock = vi.fn<() => Promise<DashboardStats>>()
 vi.mock('../api/dashboard', () => ({
@@ -77,6 +72,7 @@ function textOf(wrapper: VueWrapper, testId: string): string {
 beforeEach(() => {
   getStatsMock.mockReset()
   document.body.replaceChildren()
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('DashboardView alan koordinatörlük ders yükü kartı', () => {

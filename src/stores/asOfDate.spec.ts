@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useAsOfDate } from './useAsOfDate'
+import { useAsOfDateStore } from './asOfDate'
 import type { TermWithDates } from '../types/models'
 
-describe('useAsOfDate', () => {
+describe('useAsOfDateStore', () => {
   beforeEach(() => {
     // Gerçek "bugün" testten teste değişmesin diye sabitlenir (UTC 2026-11-10 → TR 2026-11-10).
     vi.useFakeTimers()
@@ -26,11 +26,11 @@ describe('useAsOfDate', () => {
       earliestAllowedDate: '2026-11-15',
     }
 
-    const { asOfDate, isToday, isReadOnly, initializeFromTerm } = useAsOfDate()
-    initializeFromTerm(planningTerm)
+    const store = useAsOfDateStore()
+    store.initializeFromTerm(planningTerm)
 
-    expect(asOfDate.value).toBe('2026-11-15')
-    expect(isToday.value).toBe(false)
-    expect(isReadOnly.value).toBe(true)
+    expect(store.asOfDate).toBe('2026-11-15')
+    expect(store.isToday).toBe(false)
+    expect(store.isReadOnly).toBe(true)
   })
 })

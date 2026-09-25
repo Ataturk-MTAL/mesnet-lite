@@ -79,7 +79,7 @@
           optionValue="value"
           :allowEmpty="false"
           :aria-label="labels.theme.label"
-          @update:model-value="setThemePreference"
+          @update:model-value="themeStore.setThemePreference"
         >
           <template #option="{ option }">
             <i :class="option.icon" :title="option.label" />
@@ -92,7 +92,7 @@
           text
           :aria-label="labels.auth.signOut"
           v-tooltip.top="labels.auth.signOut"
-          @click="signOut"
+          @click="authStore.signOut"
         />
       </header>
       <RouterView />
@@ -102,14 +102,22 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { labels } from '../../i18n/labels'
-import { useTheme } from '../../composables/useTheme'
-import { activeTerm, terms, loadTerms, setActiveTerm } from '../../composables/useTerm'
-import { currentUser, signOut } from '../../composables/useAuth'
+import { useThemeStore } from '../../stores/theme'
+import { useTermStore } from '../../stores/term'
+import { useAuthStore } from '../../stores/auth'
 import AsOfDatePicker from '../history/AsOfDatePicker.vue'
 import logoUrl from '../../assets/ataturk-mtal.png'
 
-const { preference, setThemePreference } = useTheme()
+const themeStore = useThemeStore()
+const { preference } = storeToRefs(themeStore)
+
+const termStore = useTermStore()
+const { activeTerm, terms } = storeToRefs(termStore)
+
+const authStore = useAuthStore()
+const { currentUser } = storeToRefs(authStore)
 
 // Dönem listesi; seçici serbest metin de kabul eder, böylece yeni bir
 // eğitim-öğretim yılı listede olmadan da açılabilir.
@@ -119,7 +127,7 @@ async function onTermChange(value: string | null): Promise<void> {
   const term = (value ?? '').trim()
   if (term.length === 0) return
   try {
-    await setActiveTerm(term)
+    await termStore.setActiveTerm(term)
   } catch {
     // Ayar yazılamazsa seçici eski değerine döner; hata Toast ile
     // ekranların kendi yükleme akışında görünür.
@@ -148,7 +156,7 @@ onMounted(() => {
   window.addEventListener('resize', updateWidth)
   // Dönem listesi bir kez yüklenir; okunamazsa seçici boş kalır ama
   // uygulama çalışmaya devam eder.
-  void loadTerms().catch(() => undefined)
+  void termStore.loadTerms().catch(() => undefined)
 })
 
 onUnmounted(() => window.removeEventListener('resize', updateWidth))

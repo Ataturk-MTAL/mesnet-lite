@@ -109,7 +109,7 @@
       tableStyle="min-width: 56rem"
     >
       <template #header>
-        <InputText v-model="filters.global.value" :placeholder="labels.company.searchPlaceholder" />
+        <InputText v-model="companyHoursSearch" :placeholder="labels.company.searchPlaceholder" />
       </template>
       <template #empty>{{ labels.hours.empty }}</template>
 
@@ -218,13 +218,20 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
+import type { DataTableFilterMeta } from 'openvue/datatable'
 import { hoursApi } from '../api/hours'
 import type { AutoDistributeRow, HoursBoard, HoursInput, HoursRow } from '../api/hours'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
+import { useSelectionStore } from '../stores/selection'
+import { buildGlobalFilter, extractGlobalFilterValue } from '../utils/dataTableFilters'
 
 const toast = useToast()
+const selection = useSelectionStore()
+const { companyHoursSearch } = storeToRefs(selection)
+const { activeTerm } = storeToRefs(useTermStore())
 
 const board = ref<HoursBoard | null>(null)
 /** Ekranda düzenlenen kopyalar; kaydedilene kadar sunucuya gitmez. */
@@ -235,7 +242,14 @@ const suggestionWarnings = ref<string[]>([])
 
 const isLoading = ref(false)
 const isSaving = ref(false)
-const filters = ref({ global: { value: null as string | null, matchMode: 'contains' } })
+// DataTable'ın arama kutusu iki yönlü; store'daki `companyHoursSearch` ile
+// senkron kalması için OKUNABİLİR + YAZILABİLİR computed olarak sunulur.
+const filters = computed<DataTableFilterMeta>({
+  get: () => buildGlobalFilter(companyHoursSearch.value),
+  set: (next) => {
+    companyHoursSearch.value = extractGlobalFilterValue(next)
+  },
+})
 
 const hasSuggestion = computed(() => snapshot.value !== null)
 

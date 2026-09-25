@@ -103,11 +103,15 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { termsApi } from '../api/terms'
 import type { CreateTermResult } from '../api/terms'
 import { labels } from '../i18n/labels'
-import { activeTerm, setActiveTerm, loadTerms } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
+
+const termStore = useTermStore()
+const { activeTerm } = storeToRefs(termStore)
 
 interface TermRow {
   term: string
@@ -174,7 +178,7 @@ async function load(): Promise<void> {
 async function makeActive(term: string): Promise<void> {
   activatingTerm.value = term
   try {
-    await setActiveTerm(term)
+    await termStore.setActiveTerm(term)
     // Aktif yapmak `settings.active_term`'ı yazar; `get_known_terms` bu
     // sütunu da tarar, dolayısıyla önceden HİÇBİR tabloda verisi olmayan bir
     // dönem artık bu ekranın kendi listesinde de görünür hâle gelir.
@@ -238,7 +242,7 @@ async function create(): Promise<void> {
     // Bu ekranın kendi listesi VE üst çubuktaki dönem seçicisinin önbelleği
     // aynı kaynağa (`get_known_terms`) bakar; ikisi de tazelenmezse yeni
     // dönem (satır kopyalandıysa) seçicide görünmez.
-    await Promise.all([load(), loadTerms()])
+    await Promise.all([load(), termStore.loadTerms()])
     reportCreateResult(result)
     newTerm.value = ''
     copyEnabled.value = false
@@ -253,7 +257,7 @@ async function create(): Promise<void> {
 onMounted(async () => {
   // Üst çubuktaki dönem seçicisi de aynı kaynağa bakar; burada tazelemek
   // biraz önce oluşturulan bir dönemin seçicide de görünmesini sağlar.
-  await Promise.all([load(), loadTerms()])
+  await Promise.all([load(), termStore.loadTerms()])
 })
 </script>
 

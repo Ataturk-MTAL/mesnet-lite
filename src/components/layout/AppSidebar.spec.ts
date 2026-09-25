@@ -1,17 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import OpenVue from 'openvue/config'
 import Aura from '@openvue/themes/aura'
 import AppSidebar from './AppSidebar.vue'
 import { labels } from '../../i18n/labels'
-
-// Dönem listesi Tauri komutlarından gelir; testte backend yoktur.
-vi.mock('../../composables/useTerm', () => ({
-  activeTerm: { value: '2026-2027/1' },
-  terms: { value: ['2026-2027/1'] },
-  loadTerms: vi.fn().mockResolvedValue(undefined),
-  setActiveTerm: vi.fn().mockResolvedValue(undefined),
-}))
+import { useTermStore } from '../../stores/term'
 
 // OpenVue bileşenleri yapılandırma enjeksiyonuna ihtiyaç duyar; stub yerine
 // gerçek eklentiyi kurmak bileşenlerin gerçekten render olduğunu da doğrular.
@@ -28,6 +21,16 @@ function mountSidebar() {
     },
   })
 }
+
+beforeEach(() => {
+  // Dönem listesi Tauri komutlarından gelir; testte backend yoktur. Store
+  // önceden doldurulur, `onMounted`'daki gerçek `loadTerms` API'ye gitmesin
+  // diye casuslanır.
+  const termStore = useTermStore()
+  termStore.activeTerm = '2026-2027/1'
+  termStore.terms = ['2026-2027/1']
+  vi.spyOn(termStore, 'loadTerms').mockResolvedValue(undefined)
+})
 
 describe('AppSidebar', () => {
   it('tüm ana menü başlıklarını Türkçe olarak gösterir', () => {

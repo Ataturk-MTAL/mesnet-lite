@@ -19,7 +19,7 @@
         size="small"
         :aria-label="labels.asOfDate.today"
         data-testid="as-of-today-button"
-        @click="goToToday"
+        @click="asOfDateStore.goToToday"
       />
     </div>
     <Message v-if="isReadOnly" severity="warn" :closable="false">{{ labels.asOfDate.readOnlyNote }}</Message>
@@ -28,18 +28,20 @@
 
 <script setup lang="ts">
 import { computed, useId } from 'vue'
+import { storeToRefs } from 'pinia'
 import { labels } from '../../i18n/labels'
-import { useAsOfDate } from '../../composables/useAsOfDate'
+import { useAsOfDateStore } from '../../stores/asOfDate'
 import { dateToIso, isoToDate } from '../../utils/isoDate'
 
 const inputId = useId()
-const { asOfDate, isToday, isReadOnly, setAsOfDate, goToToday } = useAsOfDate()
+const asOfDateStore = useAsOfDateStore()
+const { asOfDate, isToday, isReadOnly } = storeToRefs(asOfDateStore)
 
 const dateValue = computed({
   get: () => isoToDate(asOfDate.value),
   set: (value) => {
     const iso = dateToIso(value)
-    if (iso) setAsOfDate(iso)
+    if (iso) asOfDateStore.setAsOfDate(iso)
   },
 })
 </script>

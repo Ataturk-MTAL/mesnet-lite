@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
@@ -13,6 +12,7 @@ import type { Company, CompanyRemoval, TermWithDates } from '../types/models'
 import type { SettingsMap } from '../api/settings'
 import type { GeocodeSummary } from '../api/files'
 import type { CompanyMergeSummary } from '../api/companies'
+import { useTermStore } from '../stores/term'
 
 const listMock = vi.fn<() => Promise<Company[]>>()
 const removeMock = vi.fn<(id: number) => Promise<CompanyRemoval>>()
@@ -49,10 +49,6 @@ vi.mock('../api/files', () => ({
 const listTermsWithDatesMock = vi.fn<() => Promise<TermWithDates[]>>()
 vi.mock('../api/terms', () => ({
   listTermsWithDates: () => listTermsWithDatesMock(),
-}))
-
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
 }))
 
 // CompaniesView `<Toast />`'u kendi içinde barındırmaz (App.vue'da yaşar); Rust
@@ -133,6 +129,7 @@ beforeEach(() => {
   toastAddMock.mockReset()
   confirmRequireMock.mockReset()
   document.body.replaceChildren()
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('CompaniesView tablo sütunları', () => {
@@ -226,6 +223,30 @@ describe('CompaniesView arama', () => {
     // Assert
     expect(wrapper.get('input[type="text"]').attributes('placeholder')).toBe(labels.company.searchPlaceholder)
     wrapper.unmount()
+  })
+
+  it('arama metni yeniden mount edilince korunur ve tabloya uygulanır (Pinia store)', async () => {
+    // Arrange
+    const wrapper = await mountView([
+      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Serbest Bölge' }),
+      companyFixture({ id: 2, name: 'Firma B', addressText: 'Adana Sanayi Sitesi' }),
+    ])
+    await wrapper.get('input[type="text"]').setValue('Mersin')
+    await flushPromises()
+    wrapper.unmount()
+
+    // Act: sayfa değişip geri dönülmüş gibi ikinci bir mount.
+    const wrapper2 = await mountView([
+      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Serbest Bölge' }),
+      companyFixture({ id: 2, name: 'Firma B', addressText: 'Adana Sanayi Sitesi' }),
+    ])
+
+    // Assert: arama kutusu dolu gelir ve filtre tabloya hâlâ uygulanır.
+    expect((wrapper2.get('input[type="text"]').element as HTMLInputElement).value).toBe('Mersin')
+    const bodyRows = wrapper2.findAll('tbody tr')
+    expect(bodyRows).toHaveLength(1)
+    expect(bodyRows[0].text()).toContain('Firma A')
+    wrapper2.unmount()
   })
 })
 
