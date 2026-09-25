@@ -36,7 +36,21 @@ Veriler yalnız kendi bilgisayarınızda, yerel bir SQLite dosyasında tutulur; 
 | macOS (Apple Silicon / Intel) | `.dmg` |
 | Linux | `.AppImage`, `.deb` ya da `.rpm` |
 
-macOS paketleri imzasızdır; ilk açılışta uygulamaya sağ tıklayıp **Aç** seçin.
+### Windows: kurulum ve antivirüs uyarısı
+
+Kurulum **yönetici olarak** yapılır (Program Files altına, bilgisayardaki tüm kullanıcılar için); kurulum başlarken Windows yönetici izni ister.
+
+Kurulum dosyaları **dijital olarak imzalı değildir**. Bu yüzden:
+
+- **Windows SmartScreen** "Windows bilgisayarınızı korudu" diyebilir → **Ek bilgi → Yine de çalıştır**.
+- **Avast, AVG vb.** dosyayı şüpheli sayıp engelleyebilir. Bu bir **yanlış alarmdır (false positive)**: dosyalar bu depodaki açık kaynak koddan GitHub Actions ile otomatik derlenir; imzasız, yeni ve az indirilmiş kurulum dosyaları sezgisel olarak işaretlenir.
+  1. Antivirüsün karantinasında MESNET.Lite dosyası varsa geri yükleyin ya da silin.
+  2. İndirilen kurulum dosyasını antivirüsün **İstisnalar** listesine ekleyin (Avast: *Menü → Ayarlar → Genel → İstisnalar*).
+  3. Önceki yarım kalmış kurulum varsa *Ayarlar → Uygulamalar*'dan kaldırın, kurulum dosyasını **yeniden indirip** çalıştırın.
+- Dosyanın bu depodan geldiğini doğrulamak için Sürümler sayfasında her dosyanın yanında gösterilen **SHA-256** özetini kontrol edebilirsiniz: `Get-FileHash .\MESNET.Lite_*_x64-setup.exe`.
+- Yanlış alarmı bildirmek: [Avast](https://www.avast.com/false-positive-file-form.php) · [Microsoft Defender](https://www.microsoft.com/en-us/wdsi/filesubmission).
+
+macOS paketleri de imzasızdır; ilk açılışta uygulamaya sağ tıklayıp **Aç** seçin.
 
 ## Geliştirme
 
@@ -72,21 +86,6 @@ Tüm veriler yalnız kendi bilgisayarınızdaki yerel SQLite dosyasında tutulur
 > This program will not transfer any information to other networked systems unless specifically requested by the user.
 
 Kaldırma: Windows'ta *Ayarlar → Uygulamalar*, macOS'ta uygulamayı Çöp Kutusu'na taşıma, Linux'ta paket yöneticisi. Veriler ayrı klasörde kalır (Windows: `%APPDATA%\ai.alplab.mesnet-lite`, macOS: `~/Library/Application Support/ai.alplab.mesnet-lite`, Linux: `~/.local/share/ai.alplab.mesnet-lite`); tamamen silmek için bu klasörü de silin.
-
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
-
-Windows installers are built from this repository's source by GitHub Actions ([`release.yml`](.github/workflows/release.yml)) and signed only after a manual approval.
-
-> Durum: SignPath Foundation başvurusu aşamasında. Onaydan önceki sürümler (`v0.1.0`) imzasızdır.
-
-| Role | Members |
-|---|---|
-| Committers and reviewers | [@hkngln](https://github.com/hkngln) |
-| Approvers | [@hkngln](https://github.com/hkngln) |
-
-All team members use multi-factor authentication for GitHub and SignPath. Privacy: see [Gizlilik](#gizlilik) above.
 
 ## Yazar
 
