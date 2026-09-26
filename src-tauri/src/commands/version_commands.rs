@@ -24,10 +24,17 @@ pub async fn list_versions(app: AppHandle, state: State<'_, AppState>) -> AppRes
 
 /// Kullanıcının bir ad vererek elle aldığı sürüm. Veri değişmemiş olsa bile
 /// HER ZAMAN yeni bir sürüm açar (bkz. `services::versions::create_version`).
+/// `as_of` isteğe bağlıdır; verilirse aktif dönemin `[start, end]` aralığında
+/// olmalıdır (`ReadAt::resolve`), aksi hâlde Türkçe `Validation` döner.
 #[tauri::command]
-pub async fn create_version(app: AppHandle, state: State<'_, AppState>, name: String) -> AppResult<Version> {
+pub async fn create_version(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    as_of: Option<String>,
+) -> AppResult<Version> {
     let dir = versions::versions_dir(&resolve_app_data_dir(&app)?);
-    versions::create_version(&state.pool, &dir, &name, VersionKind::Manual, None, now_local()).await
+    versions::create_version(&state.pool, &dir, &name, VersionKind::Manual, None, as_of, now_local()).await
 }
 
 /// Bir sürümü siler: dosyasını ve satırını.

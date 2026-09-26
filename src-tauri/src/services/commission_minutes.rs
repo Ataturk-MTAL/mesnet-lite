@@ -14,7 +14,7 @@ use crate::db::assignments::{self, Assignment};
 use crate::db::company_hours::{self, CompanyTermHours};
 use crate::db::read_at::ReadAt;
 use crate::db::teachers::TeacherWithLoadAsOf;
-use crate::db::{companies, settings, students, teachers, teaching_load};
+use crate::db::{companies, settings, students, teachers};
 use crate::domain::models::{ChiefType, Company, Student, Teacher};
 use crate::error::{AppError, AppResult};
 use crate::services::pdf_report::day_name;
@@ -265,7 +265,7 @@ struct Source {
     students: HashMap<i64, Vec<Student>>,
 }
 
-async fn load_source(pool: &SqlitePool, term: &str) -> AppResult<Source> {
+async fn load_source(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Source> {
     // `list_all`: tutanak resmî bir belgedir, dönem ortasında pasifleşen bir
     // işletme (`ordered_companies` zaten yalnız o dönem öğrencisi/ataması
     // olanları seçiyor) tutanaktan sessizce düşmemeli.
@@ -277,21 +277,22 @@ async fn load_source(pool: &SqlitePool, term: &str) -> AppResult<Source> {
         .into_iter()
         .map(|t| (t.id, t))
         .collect();
-    // Rapor her zaman GÜNCEL duruma göre üretilir (`ReadAt::Latest`); tarihe
-    // göre komisyon tutanağı bu işin kapsamı dışındadır (spec §6, plan R5d).
-    let hours = company_hours::list(pool, term, &ReadAt::Latest)
+    // Kenar çubuğunda seçilen tarihe göre üretilir (kullanıcı kararı, bkz.
+    // `db::read_at::ReadAt`): `Latest` bugünkü açık satırı, `AsOf(d)` o
+    // gündeki satırı okur.
+    let hours = company_hours::list(pool, term, read_at)
         .await?
         .into_iter()
         .map(|h| (h.company_id, h))
         .collect();
-    let assignments = assignments::list(pool, term, &ReadAt::Latest)
+    let assignments = assignments::list(pool, term, read_at)
         .await?
         .into_iter()
         .map(|a| (a.company_id, a))
         .collect();
 
     let mut students: HashMap<i64, Vec<Student>> = HashMap::new();
-    for student in students::list_by_term(pool, term, &ReadAt::Latest).await? {
+    for student in students::list_by_term(pool, term, read_at).await? {
         if let Some(company_id) = student.company_id {
             students.entry(company_id).or_default().push(student);
         }
@@ -551,8 +552,11 @@ fn or_placeholder(value: &str, placeholder: &str) -> String {
     }
 }
 
-/// Dönemin komisyon tutanağı verisini toplar.
-pub async fn build_minutes_data(pool: &SqlitePool, term: &str) -> AppResult<MinutesData> {
+/// Dönemin komisyon tutanağı verisini toplar. `read_at`, kenar çubuğunda
+/// seçilen tarihtir (`Latest` = güncel durum); tablo satırları VE imza şeridi
+/// (öğretmen yükü/şeflik dahil) AYNI günü kullanır — ikisinin farklı günlere
+/// bakması tutarsız bir belge üretirdi.
+pub async fn build_minutes_data(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<MinutesData> {
     let (academic_year, start_year) = parse_academic_year(term)?;
 
     let school_name = optional_setting(pool, SCHOOL_NAME_KEY).await?;
@@ -565,14 +569,16 @@ pub async fn build_minutes_data(pool: &SqlitePool, term: &str) -> AppResult<Minu
     let field_name = optional_setting(pool, FIELD_NAME_KEY).await?;
     let principal_name = optional_setting(pool, PRINCIPAL_NAME_KEY).await?;
 
-    let source = load_source(pool, term).await?;
+    let source = load_source(pool, term, read_at).await?;
     let table = build_table(&source);
 
     // İmza şeridi ayrı bir okuma: kapasite hesaplayan her yerin (`teacher_
-    // commands`, `dashboard_commands`) kullandığı aynı "bugün geçerli"
-    // deseni (`current_as_of` + `list_with_load_as_of`), çünkü şeflik burada
-    // da projeksiyondan gelmeli, eski sütundan değil.
-    let as_of = teaching_load::current_as_of(pool, term).await?;
+    // commands`, `dashboard_commands`) kullandığı aynı desen
+    // (`hours_as_of` + `list_with_load_as_of`), çünkü şeflik burada da
+    // projeksiyondan gelmeli, eski sütundan değil. `read_at.hours_as_of`,
+    // `Latest`te `teaching_load::current_as_of`e (bugün), `AsOf(d)`te
+    // doğrudan `d`ye eşittir.
+    let as_of = read_at.hours_as_of(pool, term).await?;
     let teachers_with_load = teachers::list_with_load_as_of(pool, term, as_of).await?;
     let (chief_name, field_teachers) = build_signature_block(teachers_with_load);
 
@@ -610,6 +616,7 @@ pub async fn build_minutes_data(pool: &SqlitePool, term: &str) -> AppResult<Minu
 mod tests {
     use super::*;
     use crate::services::commission_minutes_test_support::*;
+    use chrono::NaiveDate;
 
     #[test]
     fn turkish_uppercase_maps_dotted_and_dotless_i_correctly() {
@@ -662,7 +669,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(data.rows.len(), 8);
         let indexes: Vec<usize> = data.rows.iter().map(|r| r.index).collect();
@@ -677,7 +684,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let pairs: Vec<(&str, &str)> = data
             .rows
             .iter()
@@ -711,7 +718,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         // Öztürk: satır 0–1 (Acar, İyi); Yılmaz: satır 2–6 (Çiftçi, Şirin).
         assert_eq!(spans(&data.teacher_groups), vec![(0, 2), (2, 5)]);
@@ -736,7 +743,7 @@ mod tests {
             seed_assignment(&pool, teacher, company, 1 + i as i64, 1).await;
         }
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let order: Vec<&str> = data.rows.iter().map(|r| r.teacher.as_str()).collect();
 
         assert_eq!(
@@ -753,7 +760,7 @@ mod tests {
         let aaa = seed_company(&pool, "Aaa Atanmamış", None).await;
         seed_student(&pool, Some(aaa), "Kemal", "Sunal").await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let tail: Vec<(&str, &str)> = data.rows[7..]
             .iter()
             .map(|r| (r.company_name.as_str(), r.teacher.as_str()))
@@ -773,7 +780,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         for company in &data.groups {
             let end = company.start + company.len;
@@ -798,7 +805,7 @@ mod tests {
         let company = seed_company(&pool, "Yalnız", None).await;
         seed_student(&pool, Some(company), "Bir", "Kişi").await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(data.rows.len(), 1);
         assert!(data.teacher_groups.is_empty());
@@ -809,7 +816,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let sirin = &data.rows[4];
 
         assert_eq!(sirin.teacher, "Ayşe YILMAZ");
@@ -827,7 +834,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let zeytin = data.rows.last().unwrap();
 
         assert_eq!(zeytin.company_name, "Zeytin Bobinaj");
@@ -843,7 +850,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(data.rows[2].hours_label, "Fahri");
         assert_eq!(data.rows[3].hours_label, "Fahri");
@@ -854,7 +861,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         // Tek yön 2.2 → 4.4 ve 8.6 → 17.2: saat kuralları gidiş-dönüşe bakar ve
         // referanstaki örnekler (4.4 km → 6 saat, 17.2 km → 8 saat) ancak böyle uyar.
@@ -877,7 +884,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let printed: Vec<&str> = data
             .rows
             .iter()
@@ -902,7 +909,7 @@ mod tests {
         // Öğrencisiz ve atanmamış: tutanakta yer almamalı.
         seed_company(&pool, "Unutulmuş İşletme", None).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(data.rows.len(), 1);
         assert_eq!(data.rows[0].company_name, "Boş İşletme");
@@ -916,7 +923,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_student(&pool, None, "Yer", "Siz").await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(data.rows.is_empty());
     }
@@ -925,7 +932,7 @@ mod tests {
     async fn empty_term_yields_valid_data_with_no_rows() {
         let (_dir, pool) = test_pool().await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(data.rows.is_empty());
         assert!(data.groups.is_empty());
@@ -936,7 +943,7 @@ mod tests {
     async fn header_uses_dotted_placeholders_when_optional_settings_are_empty() {
         let (_dir, pool) = test_pool().await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(data.year_line, "2026-2027 EĞİTİM ÖĞRETİM YILI");
         assert_eq!(data.school_line, "ATATÜRK MESLEKİ VE TEKNİK ANADOLU LİSESİ");
@@ -967,7 +974,7 @@ mod tests {
             .await
             .unwrap();
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(data
             .field_line
@@ -989,7 +996,7 @@ mod tests {
             .await
             .unwrap();
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(data.approval_line, "Uygundur");
         assert_eq!(data.principal_name, "ÖMER YİĞİT");
@@ -1003,7 +1010,7 @@ mod tests {
     async fn approval_block_keeps_the_placeholder_when_principal_name_is_empty() {
         let (_dir, pool) = test_pool().await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(data.principal_name, "…………………");
     }
@@ -1013,7 +1020,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         settings::set(&pool, FIELD_NAME_KEY, "   ").await.unwrap();
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(data.field_line.starts_with("............ ALANI"));
     }
@@ -1022,7 +1029,7 @@ mod tests {
     async fn fixed_texts_match_the_school_template_verbatim() {
         let (_dir, pool) = test_pool().await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(
             data.note_text,
@@ -1040,7 +1047,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         settings::set(&pool, SCHOOL_NAME_KEY, "").await.unwrap();
 
-        let err = build_minutes_data(&pool, TERM).await.unwrap_err();
+        let err = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap_err();
 
         assert!(matches!(err, AppError::Validation(_)));
         assert!(err.to_string().contains("Ayarlar"));
@@ -1050,7 +1057,7 @@ mod tests {
     async fn unreadable_active_term_is_rejected() {
         let (_dir, pool) = test_pool().await;
 
-        let err = build_minutes_data(&pool, "").await.unwrap_err();
+        let err = build_minutes_data(&pool, "", &ReadAt::Latest).await.unwrap_err();
 
         assert!(matches!(err, AppError::Validation(_)));
     }
@@ -1118,7 +1125,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_signature_scenario(&pool).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(data.chief_name, "Ayşe YILMAZ");
         assert_eq!(data.field_teachers.len(), 11, "12 aktif öğretmen - 1 alan şefi");
@@ -1168,7 +1175,7 @@ mod tests {
             seed_teacher_with_chief(&pool, first, last, ChiefType::None).await;
         }
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(data.chief_name, "", "alan şefi yoksa başlık altı boş kalır");
         assert_eq!(data.field_teachers.len(), 12);
@@ -1181,7 +1188,7 @@ mod tests {
         let inactive = seed_teacher_with_chief(&pool, "Pasif", "Kişi", ChiefType::WorkshopLab).await;
         deactivate_teacher(&pool, inactive).await;
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(data.chief_name, "Ayşe YILMAZ");
         assert!(
@@ -1213,7 +1220,7 @@ mod tests {
             seed_teacher_with_chief(&pool, first, last, ChiefType::None).await;
         }
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let order: Vec<&str> = data.field_teachers.iter().map(|t| t.name.as_str()).collect();
 
         assert_eq!(
@@ -1239,7 +1246,7 @@ mod tests {
             .await
             .unwrap();
 
-        let data = build_minutes_data(&pool, TERM).await.unwrap();
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(
             data.chief_name, "",
@@ -1247,5 +1254,53 @@ mod tests {
         );
         assert_eq!(data.field_teachers.len(), 1);
         assert_eq!(data.field_teachers[0].title, "Öğretmen");
+    }
+
+    /// Kenar çubuğunda seçilen tarihe göre üretim (kullanıcı kararı, spec §6):
+    /// tablo satırının ÜCRET hücresi `AsOf(değişiklikten önce)`de 4,
+    /// `Latest`te (açık satır) 8 olmalı.
+    #[tokio::test]
+    async fn as_of_table_row_shows_the_hours_in_effect_on_that_date() {
+        let (_dir, pool) = test_pool().await;
+        let (company_id, before) = seed_two_period_hours_scenario(&pool).await;
+
+        let as_of_data = build_minutes_data(&pool, TERM, &ReadAt::AsOf(before)).await.unwrap();
+        let latest_data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
+
+        let as_of_row = as_of_data
+            .rows
+            .iter()
+            .find(|r| r.company_name == "Tarihli İşletme")
+            .unwrap_or_else(|| panic!("işletme satırı bulunamadı: {:?}", as_of_data.rows));
+        let latest_row = latest_data
+            .rows
+            .iter()
+            .find(|r| r.company_name == "Tarihli İşletme")
+            .unwrap_or_else(|| panic!("işletme satırı bulunamadı: {:?}", latest_data.rows));
+
+        assert_eq!(as_of_row.hours_label, "4", "AsOf değişiklikten önceki saati görmeli");
+        assert_eq!(latest_row.hours_label, "8", "Latest güncel saati görmeli");
+        let _ = company_id;
+    }
+
+    /// İmza şeridi de AYNI günü kullanmalı (bkz. `build_minutes_data`
+    /// belgesi): bir bölüm şefliği `2026-09-20`den itibaren sona ererse,
+    /// `AsOf(değişiklikten önce)` şefi hâlâ görmeli. `Latest`,
+    /// `teaching_load::current_as_of`in GERÇEK bugünü (test ortamında
+    /// 2026-09-26, değişiklikten SONRA) kullandığı için şefi artık görmemeli
+    /// — bu satır `db::teaching_load_test_support` başlığındaki AYNI kabul
+    /// edilmiş desene dayanır (bkz. `teacher_commands.rs`teki benzer testler).
+    #[tokio::test]
+    async fn as_of_signature_block_still_sees_a_chief_role_that_later_ended() {
+        let (_dir, pool) = test_pool().await;
+        let teacher_id = seed_teacher_with_chief(&pool, "Ayşe", "Yılmaz", ChiefType::Department).await;
+        end_chief_role_from(&pool, teacher_id, NaiveDate::from_ymd_opt(2026, 9, 20).unwrap()).await;
+
+        let before = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+        let as_of_data = build_minutes_data(&pool, TERM, &ReadAt::AsOf(before)).await.unwrap();
+        let latest_data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
+
+        assert_eq!(as_of_data.chief_name, "Ayşe YILMAZ", "AsOf, rolün hâlâ sürdüğü günü görmeli");
+        assert_eq!(latest_data.chief_name, "", "Latest, rolün sona erdiği günü görmeli");
     }
 }

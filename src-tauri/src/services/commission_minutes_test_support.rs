@@ -2,7 +2,10 @@
 //! PDF testleri aynı senaryoyu paylaşır; böylece "üç çıktı aynı veriyi
 //! gösterir" varsayımı ayrı ayrı uydurma fixture'lara dayanmaz.
 
+use crate::commands::hours_commands::save_hours_for_term;
+use crate::db::company_hours::HoursInput;
 use crate::db::legacy_seed_test_support::{seed_coordinator, seed_hours as seed_hours_event};
+use crate::db::teaching_load_test_support::change_chief_type_in_planning;
 use crate::db::{companies, init_pool, teachers};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewStudentInput, NewTeacherProfile};
 use crate::domain::history::events::TeacherLoad;
@@ -258,4 +261,61 @@ pub async fn seed_long_table(pool: &SqlitePool) {
         )
         .await;
     }
+}
+
+/// GERÇEK yazma yoluyla (`execute_change` → `SetCompanyHours`) bir işletmenin
+/// saatini `effective_date`ten itibaren değiştirir. `seed_hours`in (tepedeki
+/// `legacy_seed_test_support` sarmalayıcısı) AKSİNE bu, `company_hour_periods`te
+/// GERÇEKTEN iki ayrı satır açar — `AsOf`/`Latest` farkını sınamak, aynı
+/// işletmenin farklı tarihlerde farklı bir açık/kapalı aralığa sahip olmasını
+/// gerektirir; tek olaylık bir sahne iki kipte de aynı görünür.
+pub async fn set_hours_via_real_path(
+    pool: &SqlitePool,
+    company_id: i64,
+    awarded_hours: i64,
+    effective_date: Option<&str>,
+    today: NaiveDate,
+) {
+    let row = HoursInput {
+        company_id,
+        max_hours_snapshot: 1000,
+        awarded_hours,
+        is_honorary: false,
+        is_locked: false,
+        notes: String::new(),
+    };
+    save_hours_for_term(pool, TERM, &[row], effective_date.map(str::to_string), None, today)
+        .await
+        .unwrap();
+}
+
+/// Bir öğretmene atanmış, öğrencili bir işletme kurar; işletmenin saati dönem
+/// başında 4, 2026-10-05'ten itibaren 8'e çıkar. Dönen `(company_id, tarih)`
+/// çiftindeki tarih, ikinci değişiklikten ÖNCEki bir gündür: `AsOf` bu günde
+/// 4, `Latest` (açık satır) 8 görmeli. Üç çıktının da (PDF/Excel/veri
+/// katmanı) `read_at` parametresini gerçekten kullandığını sınamak için ortak.
+pub async fn seed_two_period_hours_scenario(pool: &SqlitePool) -> (i64, NaiveDate) {
+    let teacher_id = seed_teacher(pool, "Test", "Vance").await;
+    let company_id = seed_company(pool, "Tarihli İşletme", Some(6.8)).await;
+    seed_student(pool, Some(company_id), "Ada", "Quill").await;
+    seed_assignment(pool, teacher_id, company_id, 2, 3).await;
+    set_hours_via_real_path(pool, company_id, 4, None, planning_today()).await;
+    set_hours_via_real_path(
+        pool,
+        company_id,
+        8,
+        Some("2026-10-05"),
+        NaiveDate::from_ymd_opt(2026, 10, 5).unwrap(),
+    )
+    .await;
+    (company_id, NaiveDate::from_ymd_opt(2026, 9, 15).unwrap())
+}
+
+/// Bir bölüm şefinin türünü `date` gününden itibaren `None`'a çevirir; önceki
+/// aralık o gün kapanır (`teacher_load_periods` projeksiyonunda). İmza şeridi
+/// `AsOf`/`Latest` farkını sınamak için kullanılır: `AsOf(date'ten önce)` şefi
+/// hâlâ görür, `Latest` (gerçek bugün `date`ten sonra olduğu sürece, bkz.
+/// `db::teaching_load_test_support` başlığı) görmez.
+pub async fn end_chief_role_from(pool: &SqlitePool, teacher_id: i64, date: NaiveDate) {
+    change_chief_type_in_planning(pool, teacher_id, ChiefType::None, date).await;
 }

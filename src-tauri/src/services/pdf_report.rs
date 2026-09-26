@@ -132,7 +132,7 @@ struct ReportContext {
     students_by_company: HashMap<i64, Vec<Student>>,
 }
 
-async fn load_context(pool: &SqlitePool, term: &str) -> AppResult<ReportContext> {
+async fn load_context(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<ReportContext> {
     let teachers = teachers::list(pool)
         .await?
         .into_iter()
@@ -147,16 +147,17 @@ async fn load_context(pool: &SqlitePool, term: &str) -> AppResult<ReportContext>
         .map(|c| (c.id, c))
         .collect();
 
-    // Rapor her zaman GÜNCEL duruma göre üretilir (`ReadAt::Latest`); tarihe
-    // göre rapor üretimi bu işin kapsamı dışındadır (spec §6, plan R5d).
-    let hours = company_hours::list(pool, term, &ReadAt::Latest)
+    // Kenar çubuğunda seçilen tarihe göre üretilir (kullanıcı kararı, bkz.
+    // `db::read_at::ReadAt`): `Latest` bugünkü açık satırı, `AsOf(d)` o
+    // gündeki satırı okur.
+    let hours = company_hours::list(pool, term, read_at)
         .await?
         .into_iter()
         .map(|h| (h.company_id, h))
         .collect();
 
     let mut students_by_company: HashMap<i64, Vec<Student>> = HashMap::new();
-    for student in students::list_by_term(pool, term, &ReadAt::Latest).await? {
+    for student in students::list_by_term(pool, term, read_at).await? {
         if let Some(company_id) = student.company_id {
             students_by_company.entry(company_id).or_default().push(student);
         }
@@ -289,11 +290,12 @@ struct AssignmentSheetData {
 }
 
 /// Koordinatör Görevlendirme Çizelgesi'ni üretir (MADDE 15/2: okul müdürlüğünce
-/// hazırlanıp millî eğitim müdürlüğünce onaylanacak program).
-pub async fn build_assignment_sheet(pool: &SqlitePool, term: &str) -> AppResult<Vec<u8>> {
+/// hazırlanıp millî eğitim müdürlüğünce onaylanacak program). `read_at`,
+/// kenar çubuğunda seçilen tarihtir (`Latest` = güncel durum).
+pub async fn build_assignment_sheet(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<u8>> {
     let school_name = settings::get(pool, "school_name").await?.unwrap_or_default();
-    let ctx = load_context(pool, term).await?;
-    let assignment_list = assignments::list(pool, term, &ReadAt::Latest).await?;
+    let ctx = load_context(pool, term, read_at).await?;
+    let assignment_list = assignments::list(pool, term, read_at).await?;
 
     let mut has_forced_rows = false;
     let mut grand_total_hours = 0i64;
@@ -380,11 +382,12 @@ struct VisitListData {
 }
 
 /// Öğretmen başına bir sayfa olacak şekilde Ziyaret Listeleri'ni üretir.
-/// Satırlar gün, ardından saat sırasına göre dizilir.
-pub async fn build_visit_lists(pool: &SqlitePool, term: &str) -> AppResult<Vec<u8>> {
+/// Satırlar gün, ardından saat sırasına göre dizilir. `read_at`, kenar
+/// çubuğunda seçilen tarihtir (`Latest` = güncel durum).
+pub async fn build_visit_lists(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<u8>> {
     let school_name = settings::get(pool, "school_name").await?.unwrap_or_default();
-    let ctx = load_context(pool, term).await?;
-    let assignment_list = assignments::list(pool, term, &ReadAt::Latest).await?;
+    let ctx = load_context(pool, term, read_at).await?;
+    let assignment_list = assignments::list(pool, term, read_at).await?;
 
     let teacher_pages = group_by_teacher(&ctx, &assignment_list)
         .into_iter()
@@ -489,6 +492,60 @@ mod tests {
         NaiveDate::from_ymd_opt(2026, 8, 15).unwrap()
     }
 
+    /// GERÇEK yazma yoluyla (`execute_change` → `SetCompanyHours`) bir
+    /// işletmenin saatini `effective_date`ten itibaren değiştirir —
+    /// `services/versions_tests.rs`teki `set_company_hours_via_real_path` ile
+    /// aynı desen. `legacy_seed_test_support::seed_hours`in aksine bu, GERÇEKTEN
+    /// iki ayrı `company_hour_periods` satırı açar; `AsOf`/`Latest` farkını
+    /// sınamak bunu gerektirir (tek satırlık sahne iki kipte de aynı görünür).
+    async fn set_hours_via_real_path(
+        pool: &SqlitePool,
+        company_id: i64,
+        awarded_hours: i64,
+        effective_date: Option<&str>,
+        today: NaiveDate,
+    ) {
+        let row = crate::db::company_hours::HoursInput {
+            company_id,
+            max_hours_snapshot: 1000,
+            awarded_hours,
+            is_honorary: false,
+            is_locked: false,
+            notes: String::new(),
+        };
+        crate::commands::hours_commands::save_hours_for_term(
+            pool,
+            TERM,
+            &[row],
+            effective_date.map(str::to_string),
+            None,
+            today,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Bir öğretmene atanmış, öğrencili bir işletme kurar; işletmenin saati
+    /// dönem başında 4, 2026-10-05'ten itibaren 8'e çıkar. Dönüşteki tarih,
+    /// ikinci değişiklikten ÖNCEki bir gündür — `AsOf` bu günde 4, `Latest`
+    /// (açık satır) 8 görmeli.
+    async fn seed_two_period_hours_scenario(pool: &SqlitePool) -> NaiveDate {
+        let teacher_id = seed_teacher(pool, "Vance").await;
+        let company_id = seed_company(pool, "Tarihli İşletme").await;
+        seed_student(pool, company_id, "Ada", "Quill").await;
+        seed_coordinator(pool, TERM, company_id, teacher_id, 2, 3, false, None).await;
+        set_hours_via_real_path(pool, company_id, 4, None, planning_today()).await;
+        set_hours_via_real_path(
+            pool,
+            company_id,
+            8,
+            Some("2026-10-05"),
+            NaiveDate::from_ymd_opt(2026, 10, 5).unwrap(),
+        )
+        .await;
+        NaiveDate::from_ymd_opt(2026, 9, 15).unwrap()
+    }
+
     /// GERÇEK yazma yolunu (`execute_change`) kullanır: yerleştirmenin tek
     /// doğruluk kaynağı `student_placements` projeksiyonudur (bkz.
     /// `domain::models::NewStudent` başındaki yorum) — ham `students::create`
@@ -525,10 +582,10 @@ mod tests {
     async fn empty_term_produces_a_valid_pdf() {
         let (_dir, pool) = test_pool().await;
 
-        let pdf = build_assignment_sheet(&pool, TERM).await.unwrap();
+        let pdf = build_assignment_sheet(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert!(pdf.starts_with(b"%PDF"), "PDF imzasıyla başlamalı");
 
-        let pdf2 = build_visit_lists(&pool, TERM).await.unwrap();
+        let pdf2 = build_visit_lists(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert!(pdf2.starts_with(b"%PDF"), "PDF imzasıyla başlamalı");
     }
 
@@ -538,7 +595,7 @@ mod tests {
     async fn seeded_term_produces_a_larger_valid_pdf() {
         let (_dir, pool) = test_pool().await;
 
-        let empty_pdf = build_assignment_sheet(&pool, TERM).await.unwrap();
+        let empty_pdf = build_assignment_sheet(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         let teacher_id = seed_teacher(&pool, "Yılmaz").await;
         let company_id = seed_company(&pool, "Test İşletme A").await;
@@ -546,14 +603,14 @@ mod tests {
         seed_hours(&pool, company_id, 6).await;
         seed_coordinator(&pool, TERM, company_id, teacher_id, 2, 3, false, None).await;
 
-        let filled_pdf = build_assignment_sheet(&pool, TERM).await.unwrap();
+        let filled_pdf = build_assignment_sheet(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert!(filled_pdf.starts_with(b"%PDF"));
         assert!(
             filled_pdf.len() > empty_pdf.len(),
             "dolu çizelge boş çizelgeden büyük olmalı"
         );
 
-        let visit_pdf = build_visit_lists(&pool, TERM).await.unwrap();
+        let visit_pdf = build_visit_lists(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert!(visit_pdf.starts_with(b"%PDF"));
     }
 
@@ -589,7 +646,7 @@ mod tests {
         seed_hours(&pool, company_id, 6).await;
         seed_coordinator(&pool, TERM, company_id, teacher_id, 3, 4, false, None).await;
 
-        let ctx = load_context(&pool, TERM).await.unwrap();
+        let ctx = load_context(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
@@ -609,7 +666,7 @@ mod tests {
         seed_hours_event(&pool, TERM, company_id, 8, true).await;
         seed_coordinator(&pool, TERM, company_id, teacher_id, 4, 2, false, None).await;
 
-        let ctx = load_context(&pool, TERM).await.unwrap();
+        let ctx = load_context(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
@@ -640,7 +697,7 @@ mod tests {
         seed_hours(&pool, company_id, 4).await;
         seed_coordinator(&pool, TERM, company_id, teacher_id, 1, 1, true, Some("Ulaşım zorunluluğu".into())).await;
 
-        let ctx = load_context(&pool, TERM).await.unwrap();
+        let ctx = load_context(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
@@ -649,7 +706,7 @@ mod tests {
         assert!(row.is_forced, "zorlanmış atama işaretlenmeli");
 
         // Uçtan uca: üretilen PDF de sorunsuz derlenmeli (uyarı bandı devrede).
-        let pdf = build_assignment_sheet(&pool, TERM).await.unwrap();
+        let pdf = build_assignment_sheet(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert!(pdf.starts_with(b"%PDF"));
     }
 
@@ -664,7 +721,7 @@ mod tests {
         seed_hours_event(&pool, TERM, company_id, 8, true).await;
         seed_coordinator(&pool, TERM, company_id, teacher_id, 4, 2, false, None).await;
 
-        let ctx = load_context(&pool, TERM).await.unwrap();
+        let ctx = load_context(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
@@ -697,10 +754,45 @@ mod tests {
         seed_hours(&pool, company_id, 6).await;
         seed_coordinator(&pool, TERM, company_id, teacher_id, 3, 4, true, Some("Güzergâh zorunluluğu".into())).await;
 
-        let pdf = build_assignment_sheet(&pool, TERM).await.unwrap();
+        let pdf = build_assignment_sheet(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert!(pdf.starts_with(b"%PDF"));
         // Boş/uç bir PDF değil: gerçekten sayfa çizilmiş olmalı.
         assert!(pdf.len() > 2_000, "PDF beklenenden küçük: {} bayt", pdf.len());
+    }
+
+    /// Kenar çubuğunda seçilen tarihe göre üretim (kullanıcı kararı, spec §6):
+    /// `AsOf(değişiklikten önce)` değişiklikten ÖNCEki saati (4), `Latest`
+    /// (projeksiyonun açık satırı) SONRAki saati (8) basmalı — bu yüzden aynı
+    /// veriden üretilen iki çizelge FARKLI baytlar taşımalı.
+    #[tokio::test]
+    async fn as_of_assignment_sheet_reflects_the_hours_in_effect_on_that_date() {
+        let (_dir, pool) = test_pool().await;
+        let before = seed_two_period_hours_scenario(&pool).await;
+
+        let as_of_pdf = build_assignment_sheet(&pool, TERM, &ReadAt::AsOf(before)).await.unwrap();
+        let latest_pdf = build_assignment_sheet(&pool, TERM, &ReadAt::Latest).await.unwrap();
+
+        assert!(as_of_pdf.starts_with(b"%PDF") && latest_pdf.starts_with(b"%PDF"));
+        assert_ne!(
+            as_of_pdf, latest_pdf,
+            "AsOf ve Latest farklı saat basmalı, çıktı baytları aynı olmamalı"
+        );
+    }
+
+    /// `build_visit_lists` için aynı senaryo ve aynı iddia.
+    #[tokio::test]
+    async fn as_of_visit_lists_reflects_the_hours_in_effect_on_that_date() {
+        let (_dir, pool) = test_pool().await;
+        let before = seed_two_period_hours_scenario(&pool).await;
+
+        let as_of_pdf = build_visit_lists(&pool, TERM, &ReadAt::AsOf(before)).await.unwrap();
+        let latest_pdf = build_visit_lists(&pool, TERM, &ReadAt::Latest).await.unwrap();
+
+        assert!(as_of_pdf.starts_with(b"%PDF") && latest_pdf.starts_with(b"%PDF"));
+        assert_ne!(
+            as_of_pdf, latest_pdf,
+            "AsOf ve Latest farklı saat basmalı, çıktı baytları aynı olmamalı"
+        );
     }
 
     /// Gömülü iki fontun da Türkçe'ye özgü her kod noktası için gerçek bir glifi
