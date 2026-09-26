@@ -8,40 +8,47 @@
         dateFormat="dd.mm.yy"
         showIcon
         iconDisplay="input"
+        :minDate="minDateValue"
+        :maxDate="maxDateValue"
         :aria-label="labels.asOfDate.label"
         data-testid="as-of-date-picker"
       />
       <Button
-        v-if="!isToday"
+        v-if="isReadOnly"
         :label="labels.asOfDate.today"
         severity="secondary"
         outlined
         size="small"
         :aria-label="labels.asOfDate.today"
         data-testid="as-of-today-button"
-        @click="goToToday"
+        @click="asOfDateStore.goToToday"
       />
     </div>
-    <Message v-if="isReadOnly" severity="warn" :closable="false">{{ labels.asOfDate.readOnlyNote }}</Message>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, useId } from 'vue'
+import { storeToRefs } from 'pinia'
 import { labels } from '../../i18n/labels'
-import { useAsOfDate } from '../../composables/useAsOfDate'
+import { useAsOfDateStore } from '../../stores/asOfDate'
 import { dateToIso, isoToDate } from '../../utils/isoDate'
 
 const inputId = useId()
-const { asOfDate, isToday, isReadOnly, setAsOfDate, goToToday } = useAsOfDate()
+const asOfDateStore = useAsOfDateStore()
+const { asOfDate, isReadOnly, termStartDate, termEndDate } = storeToRefs(asOfDateStore)
 
 const dateValue = computed({
   get: () => isoToDate(asOfDate.value),
   set: (value) => {
     const iso = dateToIso(value)
-    if (iso) setAsOfDate(iso)
+    if (iso) asOfDateStore.setAsOfDate(iso)
   },
 })
+
+// Seçilebilir aralık dönem başı–sonu ile sınırlanır.
+const minDateValue = computed(() => isoToDate(termStartDate.value) ?? undefined)
+const maxDateValue = computed(() => isoToDate(termEndDate.value) ?? undefined)
 </script>
 
 <style scoped>

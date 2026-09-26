@@ -292,6 +292,18 @@ export type ChangeCommand =
   | { type: 'revoke'; changeSetId: number }
   | { type: 'correct'; changeSetId: number; replacement: ChangeCommand }
 
+/**
+ * Doğrudan yazım komutlarına (saat kaydı, atama/çıkarma, toplu silme) eklenen
+ * isteğe bağlı yürürlük tarihi ve gerekçe. Bu komutlar `preview_change` /
+ * `commit_change` akışından GEÇMEZ; arka uç kaydı kendi içinde tarihçeye
+ * yazar. Dönem planlama evresindeyse (`isPlanning === true`) ikisi de `null`
+ * gönderilir.
+ */
+export interface EffectiveChangeInput {
+  effectiveDate: string | null
+  reason: string | null
+}
+
 /** `preview_change` / `commit_change` isteği. */
 export interface ChangeRequest {
   term: string
@@ -417,4 +429,29 @@ export interface UpdateTermDatesInput {
   startDate: string
   endDate: string
   confirm: boolean
+}
+
+/** Bir sürümü doğuran çıktı türü; `export_*` komutlarının otomatik kaydettiği tetikleyici. */
+export type ExportTrigger =
+  | 'assignmentSheet'
+  | 'visitLists'
+  | 'commissionMinutesPdf'
+  | 'commissionMinutesXlsx'
+  | 'workbook'
+
+/**
+ * `list_versions` / `create_version` yanıtındaki tek kayıtlı sürüm.
+ * Bir sürüm, oluşturulduğu andaki veritabanının tam kopyasıdır.
+ */
+export interface Version {
+  id: number
+  name: string
+  kind: 'auto' | 'manual'
+  /** Elle kayıtlarda `null`; otomatik kayıtlarda hangi çıktının tetiklediği. */
+  trigger: ExportTrigger | null
+  term: string
+  /** 'YYYY-MM-DDTHH:MM:SS' biçiminde, Türkiye saati. */
+  createdAt: string
+  /** Veritabanı kopyası diskten silinmiş/taşınmışsa false; çıktı alınamaz. */
+  isAvailable: boolean
 }

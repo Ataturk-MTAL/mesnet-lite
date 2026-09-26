@@ -1,4 +1,5 @@
 use crate::db::assignments::NewAssignment;
+use crate::db::read_at::ReadAt;
 use crate::db::{
     assignments, availability, class_days, companies, company_hours, settings, students, teachers,
     teaching_load, AppState,
@@ -6,10 +7,14 @@ use crate::db::{
 use crate::domain::allocation::{
     propose, AllocationProposal, CompanyInput, TeacherInput,
 };
+use crate::domain::history::decide::{ChangeCommand, ChangeRequest, CoordinatorRow};
 use crate::domain::scheduling::{visit_span, Slot, MAX_HOURS_PER_DAY};
+use crate::domain::terms::{parse_date, today_local};
 use crate::domain::validation::{check_pool, check_teacher_totals, Violation};
 use crate::domain::workload::{statutory_cap, teacher_capacity, InstitutionType};
 use crate::error::AppResult;
+use crate::services::change_service::commit_legacy_change;
+use chrono::NaiveDate;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use tauri::State;
@@ -118,7 +123,7 @@ fn violation_to_warning(violation: &Violation) -> String {
     }
 }
 
-async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
+async fn load_board(state: &AppState, read_at: &ReadAt) -> AppResult<AssignmentBoard> {
     let pool = &state.pool;
     let all_settings = settings::get_all(pool).await?;
     let term = all_settings.get("active_term").cloned().unwrap_or_default();
@@ -137,9 +142,11 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
 
     // Havuz `settings` ayarlarından değil, döneme bağlı `term_branch_hours`
     // (bkz. migration 0005) ile şeflik projeksiyonundan hesaplanır; şeflik
-    // saatleri dahil TAM havuzdur (OÖKY MADDE 88/2-ç).
-    let as_of = teaching_load::current_as_of(pool, &term).await?;
-    let pool_hours = teaching_load::total_pool_hours(pool, &term, as_of).await?;
+    // saatleri dahil TAM havuzdur (OÖKY MADDE 88/2-ç). `hours_as_of`,
+    // `read_at`e göre çözülür (spec §6): `Latest`te bugünün döneme
+    // sıkıştırılmış hâli, `AsOf(d)`te doğrudan `d`.
+    let hours_as_of = read_at.hours_as_of(pool, &term).await?;
+    let pool_hours = teaching_load::total_pool_hours(pool, &term, hours_as_of).await?;
     let (day_start_hour, day_end_hour) = settings::lesson_hour_bounds(&all_settings);
 
     let mut board = AssignmentBoard {
@@ -153,14 +160,14 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
     // --- İşletmeler ---
     // `list` (süzülmüş): dağıtım havuzu bir yönetim ekranıdır, pasif işletme yeniden atanamaz.
     let all_companies = companies::list(pool).await?;
-    let all_students = students::list_by_term(pool, &term).await?;
+    let all_students = students::list_by_term(pool, &term, read_at).await?;
     let class_day_map = class_days::map_by_grade(pool, &term).await?;
-    let hours_map: BTreeMap<i64, _> = company_hours::list(pool, &term)
+    let hours_map: BTreeMap<i64, _> = company_hours::list(pool, &term, read_at)
         .await?
         .into_iter()
         .map(|row| (row.company_id, row))
         .collect();
-    let assignment_map: BTreeMap<i64, _> = assignments::list(pool, &term)
+    let assignment_map: BTreeMap<i64, _> = assignments::list(pool, &term, read_at)
         .await?
         .into_iter()
         .map(|row| (row.company_id, row))
@@ -222,20 +229,21 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
     // eski `teachers.chief_type`/yük sütunları artık burada okunmaz, çünkü
     // yük değişiklikleri artık yalnız kapıdan (`SetTeacherLoad`) geçer ve o
     // sütunlara dokunmaz.
-    let all_teachers: Vec<_> = teachers::list_with_load_as_of(pool, &term, as_of)
+    let all_teachers: Vec<_> = teachers::list_with_load_as_of(pool, &term, hours_as_of)
         .await?
         .into_iter()
         .filter(|entry| entry.teacher.is_active == 1)
         .collect();
-    let free_slots = availability::list_all(pool, &term).await?;
-    let hours_by_teacher: BTreeMap<i64, i64> = assignments::awarded_hours_by_teacher(pool, &term)
-        .await?
-        .into_iter()
-        .collect();
+    let free_slots = availability::list_all(pool, &term, read_at).await?;
+    let hours_by_teacher: BTreeMap<i64, i64> =
+        assignments::awarded_hours_by_teacher(pool, &term, read_at)
+            .await?
+            .into_iter()
+            .collect();
 
     let mut per_day: BTreeMap<(i64, i64), i64> = BTreeMap::new();
     for (teacher_id, day, hours) in
-        assignments::awarded_hours_by_teacher_and_day(pool, &term).await?
+        assignments::awarded_hours_by_teacher_and_day(pool, &term, read_at).await?
     {
         per_day.insert((teacher_id, day), hours);
     }
@@ -300,7 +308,7 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
         .sort_by(|a, b| a.teacher_name.cmp(&b.teacher_name));
 
     // --- Sayaçlar ---
-    board.assigned_hours = assignments::total_assigned_hours(pool, &term).await?;
+    board.assigned_hours = assignments::total_assigned_hours(pool, &term, read_at).await?;
     board.remaining_hours = board.pool_hours - board.assigned_hours;
     board.assigned_company_count = board
         .companies
@@ -362,16 +370,26 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
     Ok(board)
 }
 
+/// `asOf` eksikse `ReadAt::Latest` (bugünkü davranışın birebir aynısı);
+/// verilirse `YYYY-MM-DD` ayrıştırılır ve aktif dönemin aralığında olması
+/// zorunludur (spec §6) — sınırda doğrulama, dış veri asla kullanılmadan önce
+/// doğrulanmadan geçmez.
 #[tauri::command]
-pub async fn get_assignment_board(state: State<'_, AppState>) -> AppResult<AssignmentBoard> {
-    load_board(&state).await
+pub async fn get_assignment_board(
+    state: State<'_, AppState>,
+    as_of: Option<String>,
+) -> AppResult<AssignmentBoard> {
+    let term = settings::get_active_term(&state.pool).await?;
+    let read_at = ReadAt::resolve(&state.pool, &term, as_of).await?;
+    load_board(&state, &read_at).await
 }
 
 /// Atanmamış işletmeler için yerleşim önerisi üretir. Hiçbir şey kaydedilmez;
-/// kullanıcı öneriyi görüp uygulamaya karar verir.
+/// kullanıcı öneriyi görüp uygulamaya karar verir. Öneri her zaman BUGÜNKÜ
+/// duruma göre çalışır (tarihe göre öneri anlamsızdır).
 #[tauri::command]
 pub async fn propose_assignments(state: State<'_, AppState>) -> AppResult<AllocationProposal> {
-    let board = load_board(&state).await?;
+    let board = load_board(&state, &ReadAt::Latest).await?;
 
     let companies: Vec<CompanyInput> = board
         .companies
@@ -427,207 +445,132 @@ fn parse_slot_key(key: &str) -> Option<Slot> {
     Some(Slot::new(day.parse().ok()?, hour.parse().ok()?))
 }
 
+/// Atama artık tarihçe kapısından (`change_service::execute_change`) yazılır:
+/// eski `assignments::assign`, canlı okunan `assignments` tablosuna yazıyordu
+/// ama tarihçe yalnız `coordination_periods` projeksiyonunu güncelliyordu —
+/// ikisi hiç eşleşmiyordu (brief teşhisi). Slot çakışması, müsaitlik ve
+/// zorlama-gerekçesi kontrolleri `decide::company::assign_coordinators` ve
+/// `change_input::validate_command`de yaşar; burada ikinci bir kopyası
+/// TUTULMAZ (DRY).
 #[tauri::command]
 pub async fn assign_company(
     state: State<'_, AppState>,
     input: NewAssignment,
+    effective_date: Option<String>,
+    reason: Option<String>,
 ) -> AppResult<AssignmentBoard> {
-    let term = settings::get_active_term(&state.pool).await?;
-    assignments::assign(&state.pool, &term, &input).await?;
-    load_board(&state).await
+    // `today`, komut sınırında BİR kez hesaplanır (bkz. `services::company_merge`
+    // içindeki aynı desen): asıl yazma adımı `today`yi parametre alır, testler
+    // gerçek takvim gününe bağlı kalmadan sabit bir "bugün" ile sınayabilir.
+    assign_company_for_term(&state, input, effective_date, reason, today_local()).await?;
+    load_board(&state, &ReadAt::Latest).await
 }
 
+pub(crate) async fn assign_company_for_term(
+    state: &AppState,
+    input: NewAssignment,
+    effective_date: Option<String>,
+    reason: Option<String>,
+    today: NaiveDate,
+) -> AppResult<()> {
+    let term = settings::get_active_term(&state.pool).await?;
+    let request = coordinator_request(&term, &input, effective_date, reason)?;
+    commit_legacy_change(&state.pool, request, today).await
+}
+
+fn coordinator_request(
+    term: &str,
+    input: &NewAssignment,
+    effective_date: Option<String>,
+    reason: Option<String>,
+) -> AppResult<ChangeRequest> {
+    let effective_date = effective_date.map(|raw| parse_date(&raw)).transpose()?;
+    let row = CoordinatorRow {
+        company_id: input.company_id,
+        teacher_id: input.teacher_id,
+        visit_day: input.visit_day,
+        visit_hour: input.visit_hour,
+        is_forced: input.is_forced,
+        force_reason: input.force_reason.clone(),
+    };
+    Ok(ChangeRequest {
+        term: term.to_string(),
+        effective_date,
+        document_date: None,
+        reason: reason.unwrap_or_default(),
+        command: ChangeCommand::AssignCoordinators { rows: vec![row] },
+    })
+}
+
+/// Eski `assignments::unassign` atama YOKSA sessizce geçerdi (idempotent);
+/// `decide::company::end_coordination` ise önceki durum yoksa `FactNotTrueAtDate`
+/// ile REDDEDER. Kaybı önlemek için (brief: "doğrulama kaybı yok") aynı
+/// idempotentliği burada koruruz: açık bir atama yoksa kapıya hiç girmeden
+/// panoyu olduğu gibi döneriz.
 #[tauri::command]
 pub async fn unassign_company(
     state: State<'_, AppState>,
     company_id: i64,
+    effective_date: Option<String>,
+    reason: Option<String>,
 ) -> AppResult<AssignmentBoard> {
-    let term = settings::get_active_term(&state.pool).await?;
-    assignments::unassign(&state.pool, company_id, &term).await?;
-    load_board(&state).await
+    unassign_company_for_term(&state, company_id, effective_date, reason, today_local()).await?;
+    load_board(&state, &ReadAt::Latest).await
 }
 
-/// Dönemdeki tüm atamaları siler. Geri alınamaz.
-#[tauri::command]
-pub async fn clear_assignments(state: State<'_, AppState>) -> AppResult<AssignmentBoard> {
+async fn unassign_company_for_term(
+    state: &AppState,
+    company_id: i64,
+    effective_date: Option<String>,
+    reason: Option<String>,
+    today: NaiveDate,
+) -> AppResult<()> {
     let term = settings::get_active_term(&state.pool).await?;
-    assignments::clear_term(&state.pool, &term).await?;
-    load_board(&state).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db::init_pool;
-    use crate::db::teaching_load::TermBranchHoursInput;
-    use crate::db::teaching_load_test_support::{seed_teacher, TERM};
-    use crate::domain::models::ChiefType;
-    use chrono::NaiveDate;
-
-    #[test]
-    fn occupied_cells_by_teacher_expands_a_multi_hour_block() {
-        // Öğretmen 1, 2. gün 3. saatten başlayıp 3 hücre kaplayan bir blokla dolu.
-        let placements = [(1, 2, 3, 5, 100)];
-        let occupied = occupied_cells_by_teacher(&placements);
-
-        let teacher_cells = &occupied[&1];
-        assert_eq!(teacher_cells.len(), 3);
-        assert_eq!(teacher_cells["2-3"], 100);
-        assert_eq!(teacher_cells["2-4"], 100);
-        assert_eq!(teacher_cells["2-5"], 100);
-    }
-
-    /// Fahri ziyaret (başlangıç = bitiş) tek hücre kaplar.
-    #[test]
-    fn occupied_cells_by_teacher_handles_a_single_cell_block() {
-        let placements = [(1, 1, 9, 9, 200)];
-        let occupied = occupied_cells_by_teacher(&placements);
-
-        assert_eq!(occupied[&1].len(), 1);
-        assert_eq!(occupied[&1]["1-9"], 200);
-    }
-
-    #[test]
-    fn occupied_cells_by_teacher_keeps_teachers_separate() {
-        let placements = [(1, 1, 9, 10, 100), (2, 1, 9, 9, 200)];
-        let occupied = occupied_cells_by_teacher(&placements);
-
-        assert_eq!(occupied.len(), 2);
-        assert_eq!(occupied[&1]["1-9"], 100);
-        assert_eq!(occupied[&2]["1-9"], 200);
-    }
-
-    #[test]
-    fn occupied_cells_by_teacher_is_empty_for_no_placements() {
-        assert!(occupied_cells_by_teacher(&[]).is_empty());
-    }
-
-    /// Atama tahtasındaki işletme kartı ilçeyi taşımalı — İşletme Dağıtımı
-    /// ekranı atanmamış işletmeleri ilçe bazlı gruplayacak (kaynak talep).
-    #[tokio::test]
-    async fn board_company_carries_the_district_field() {
-        use crate::domain::models::NewCompany;
-
-        let dir = tempfile::tempdir().unwrap();
-        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
-        companies::create(
-            &pool,
-            &NewCompany {
-                name: "Test İşletme".into(),
-                contact_first_name: String::new(),
-                contact_last_name: String::new(),
-                phone: String::new(),
-                email: String::new(),
-                address_text: "33130 Akdeniz/Mersin".into(),
-                latitude: None,
-                longitude: None,
-                one_way_distance_km: Some(5.0),
-                district: String::new(),
-                notes: String::new(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let board = load_board(&AppState { pool }).await.unwrap();
-
-        assert_eq!(board.companies.len(), 1);
-        assert_eq!(board.companies[0].district, "Akdeniz");
-    }
-
-    /// Atama tahtasının saat aralığı da AYNI türetmeden gelir
-    /// (`settings::lesson_hour_bounds`); "Gün Başlangıç Saati" ayarı kalktı.
-    #[tokio::test]
-    async fn board_hours_default_to_one_through_ten_when_max_daily_lessons_is_unset() {
-        let dir = tempfile::tempdir().unwrap();
-        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
-
-        let board = load_board(&AppState { pool }).await.unwrap();
-
-        assert_eq!(board.day_start_hour, 1);
-        assert_eq!(board.day_end_hour, 10);
-    }
-
-    #[tokio::test]
-    async fn board_hours_follow_the_max_daily_lessons_setting() {
-        let dir = tempfile::tempdir().unwrap();
-        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
-        settings::set(&pool, "max_daily_lessons", "6").await.unwrap();
-
-        let board = load_board(&AppState { pool }).await.unwrap();
-
-        assert_eq!(board.day_start_hour, 1);
-        assert_eq!(board.day_end_hour, 7);
-    }
-
-    #[test]
-    fn slot_keys_round_trip() {
-        assert_eq!(parse_slot_key("3-10"), Some(Slot::new(3, 10)));
-        assert_eq!(parse_slot_key("1-8"), Some(Slot::new(1, 8)));
-    }
-
-    /// Bozuk anahtar panik yerine None vermeli.
-    #[test]
-    fn malformed_slot_keys_are_ignored() {
-        assert_eq!(parse_slot_key("bozuk"), None);
-        assert_eq!(parse_slot_key("a-b"), None);
-        assert_eq!(parse_slot_key(""), None);
-    }
-
-
-    /// Atama tahtasındaki havuz sayacı da TAM havuzdur: şeflik saatleri
-    /// (alan şefi 10) Σ(saat × grup)'a eklenir.
-    #[tokio::test]
-    async fn assignment_board_pool_includes_chief_hours() {
-        let dir = tempfile::tempdir().unwrap();
-        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
-        let row = TermBranchHoursInput {
-            grade: "12/C".into(),
-            branch: "Dal".into(),
-            weekly_hours: 24,
-            group_count: 2,
-            is_group_manual: true,
+    if assignments::get_for_company(&state.pool, company_id, &term).await?.is_some() {
+        let effective_date = effective_date.map(|raw| parse_date(&raw)).transpose()?;
+        let request = ChangeRequest {
+            term,
+            effective_date,
+            document_date: None,
+            reason: reason.unwrap_or_default(),
+            command: ChangeCommand::EndCoordination { company_id },
         };
-        teaching_load::replace_for_term(&pool, TERM, &[row]).await.unwrap();
-        seed_teacher(&pool, "Alan", ChiefType::Department).await;
-
-        let board = load_board(&AppState { pool }).await.unwrap();
-
-        assert_eq!(board.pool_hours, 24 * 2 + 10);
+        commit_legacy_change(&state.pool, request, today).await?;
     }
-
-    /// Kilit test (spec R5c, "üç yer"in biri): öğretmen kapasitesi de
-    /// projeksiyondan okunur. `change_chief_type` yalnız kapıdan yazar; eski
-    /// `teachers.chief_type` sütunu değişmese bile tahtadaki kapasite
-    /// yeni şefliğe göre değişmeli.
-    #[tokio::test]
-    async fn teacher_capacity_on_the_board_follows_the_projection_not_the_legacy_column() {
-        use crate::db::teaching_load_test_support::change_chief_type_in_planning;
-
-        let dir = tempfile::tempdir().unwrap();
-        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
-        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
-
-        let before = load_board(&AppState { pool: pool.clone() }).await.unwrap();
-        // Varsayılan ayar (migration 0001): "other" + büyükşehir => tavan 20.
-        // Şefsizken bütçe (24) tavanı aştığı için kapasite tavanda KLİPLENİR: 20.
-        assert_eq!(before.teachers[0].capacity, 20);
-
-        // Dönem başından hemen sonraki bir tarih: gerçek "bugün"den önce
-        // kalır, bu yüzden `current_as_of` (gerçek bugünü kullanır) her
-        // koşulda bu değişikliği görür.
-        change_chief_type_in_planning(&pool, teacher_id, ChiefType::Department, NaiveDate::from_ymd_opt(2026, 9, 5).unwrap()).await;
-
-        let after = load_board(&AppState { pool: pool.clone() }).await.unwrap();
-        // Bölüm şefi 10 saat düşürür: bütçe 24-10=14, artık tavanın (20)
-        // ALTINDA kaldığı için kapasite tam 14'e düşer (klipleme kalkar).
-        assert_eq!(after.teachers[0].capacity, 14, "bölüm şefi 10 saat düşürmeli");
-
-        let legacy: String = sqlx::query_scalar("SELECT chief_type FROM teachers WHERE id = ?1")
-            .bind(teacher_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(legacy, "none", "eski sütun donuk kalmalı; okuma ona bakmıyor");
-    }
+    Ok(())
 }
+
+/// Dönemdeki tüm atamaları siler. Geri alınamaz. `ClearCoordination` tasarım
+/// gereği YALNIZ planlama evresinde çalışır (spec §5); dönem başladıysa bu,
+/// eski davranıştan (her zaman izinliydi) BİLİNÇLİ bir kısıtlamadır — brief
+/// "dönem başladıysa servis ne diyorsa o".
+#[tauri::command]
+pub async fn clear_assignments(
+    state: State<'_, AppState>,
+    effective_date: Option<String>,
+    reason: Option<String>,
+) -> AppResult<AssignmentBoard> {
+    clear_assignments_for_term(&state, effective_date, reason, today_local()).await?;
+    load_board(&state, &ReadAt::Latest).await
+}
+
+async fn clear_assignments_for_term(
+    state: &AppState,
+    effective_date: Option<String>,
+    reason: Option<String>,
+    today: NaiveDate,
+) -> AppResult<()> {
+    let term = settings::get_active_term(&state.pool).await?;
+    let effective_date = effective_date.map(|raw| parse_date(&raw)).transpose()?;
+    let request = ChangeRequest {
+        term,
+        effective_date,
+        document_date: None,
+        reason: reason.unwrap_or_default(),
+        command: ChangeCommand::ClearCoordination,
+    };
+    commit_legacy_change(&state.pool, request, today).await
+}
+#[cfg(test)]
+#[path = "assignment_commands_tests.rs"]
+mod tests;

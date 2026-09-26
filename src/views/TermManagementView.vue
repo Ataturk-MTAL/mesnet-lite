@@ -4,6 +4,26 @@
 
     <Message severity="secondary" :closable="false">{{ labels.termManagement.subtitle }}</Message>
 
+    <!-- Aktif dönemin tarihleri onaylanmadıkça varsayılan tarihler kullanılır;
+         bu durum ek ders puantajı ve tarihçe kurallarını doğrudan etkiler. -->
+    <Message
+      v-if="activeTermDates && !activeTermDates.datesConfirmed"
+      severity="warn"
+      :closable="false"
+      data-testid="term-dates-unconfirmed-banner"
+    >
+      <div class="banner-with-action">
+        <span>{{ labels.termManagement.datesUnconfirmedWarning }}</span>
+        <Button
+          :label="labels.termManagement.editDates"
+          size="small"
+          severity="warn"
+          data-testid="term-dates-warning-edit-button"
+          @click="openEditDates(activeTermDates)"
+        />
+      </div>
+    </Message>
+
     <!-- Yeni oluşturulan dönem hiçbir tabloya veri yazılmadan da "oluşabilir";
          devir yapılmadıysa `get_known_terms` sonucunda görünmez. Kullanıcıya
          sessizce kaybolmasın diye kalıcı bir uyarı + hızlı aksiyon gösterilir. -->
@@ -13,7 +33,7 @@
       :closable="true"
       @close="pendingEmptyTerm = null"
     >
-      <div class="empty-term-warning">
+      <div class="banner-with-action">
         <span><strong>{{ pendingEmptyTerm }}</strong>: {{ labels.termManagement.createdEmptyWarning }}</span>
         <Button
           :label="labels.termManagement.makeActive"
@@ -27,19 +47,44 @@
     <Card>
       <template #title>{{ labels.termManagement.knownTermsSection }}</template>
       <template #content>
-        <DataTable :value="termRows" :loading="isLoading" dataKey="term" stripedRows>
+        <DataTable :value="termDates" :loading="isLoading" dataKey="term" stripedRows>
           <template #empty>{{ labels.termManagement.emptyTermsNote }}</template>
 
           <Column field="term" :header="labels.term.label" />
 
           <Column :header="labels.termManagement.active">
-            <template #body="{ data }: { data: TermRow }">
+            <template #body="{ data }: { data: TermWithDates }">
               <Tag v-if="data.term === activeTerm" :value="labels.termManagement.active" severity="success" />
             </template>
           </Column>
 
+          <Column field="startDate" :header="labels.termManagement.startDate" />
+          <Column field="endDate" :header="labels.termManagement.endDate" />
+
+          <Column :header="labels.termManagement.datesConfirmed">
+            <template #body="{ data }: { data: TermWithDates }">
+              <Tag
+                :value="data.datesConfirmed ? labels.termManagement.datesConfirmed : labels.termManagement.datesUnconfirmed"
+                :severity="data.datesConfirmed ? 'success' : 'warn'"
+              />
+            </template>
+          </Column>
+
           <Column>
-            <template #body="{ data }: { data: TermRow }">
+            <template #body="{ data }: { data: TermWithDates }">
+              <Button
+                :label="labels.termManagement.editDates"
+                size="small"
+                severity="secondary"
+                outlined
+                data-testid="term-dates-edit-button"
+                @click="openEditDates(data)"
+              />
+            </template>
+          </Column>
+
+          <Column>
+            <template #body="{ data }: { data: TermWithDates }">
               <Button
                 v-if="data.term !== activeTerm"
                 :label="labels.termManagement.makeActive"
@@ -98,20 +143,29 @@
         </div>
       </template>
     </Card>
+
+    <TermDatesDialog
+      v-model:visible="isDatesDialogOpen"
+      :term="editingTerm"
+      :saving="isSavingDates"
+      @save="handleSaveDates"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
-import { termsApi } from '../api/terms'
+import { termsApi, listTermsWithDates, updateTermDates } from '../api/terms'
 import type { CreateTermResult } from '../api/terms'
+import TermDatesDialog from '../components/term/TermDatesDialog.vue'
 import { labels } from '../i18n/labels'
-import { activeTerm, setActiveTerm, loadTerms } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
+import type { TermWithDates } from '../types/models'
 
-interface TermRow {
-  term: string
-}
+const termStore = useTermStore()
+const { activeTerm, activeTermDates } = storeToRefs(termStore)
 
 /** Rust'taki `validate_term_format`in bire bir istemci tarafı karşılığı:
  *  YYYY-YYYY/N, ikinci yıl birincinin bir fazlası, N: 1 veya 2. */
@@ -120,6 +174,9 @@ const TERM_FORMAT = /^(\d{4})-(\d{4})\/([12])$/
 const toast = useToast()
 
 const knownTerms = ref<string[]>([])
+/** "Bilinen Dönemler" tablosunun kaynağı; `terms` satırı olmayan bir dönem
+ *  burada görünmez — bu arka uçta çözüldü (her yeni dönem bir satır alır). */
+const termDates = ref<TermWithDates[]>([])
 const isLoading = ref(false)
 const activatingTerm = ref<string | null>(null)
 
@@ -129,7 +186,9 @@ const copySourceTerm = ref<string | null>(null)
 const isCreating = ref(false)
 const pendingEmptyTerm = ref<string | null>(null)
 
-const termRows = computed<TermRow[]>(() => knownTerms.value.map((term) => ({ term })))
+const isDatesDialogOpen = ref(false)
+const editingTerm = ref<TermWithDates | null>(null)
+const isSavingDates = ref(false)
 
 /** Kullanıcı YAZARKEN görsün diye canlı hesaplanır — yalnızca `Oluştur`a
  *  basınca değil. Alan boşken hata gösterilmez. */
@@ -163,7 +222,9 @@ function validateTermFormat(term: string): string | null {
 async function load(): Promise<void> {
   isLoading.value = true
   try {
-    knownTerms.value = await termsApi.list()
+    const [terms, dates] = await Promise.all([termsApi.list(), listTermsWithDates()])
+    knownTerms.value = terms
+    termDates.value = dates
   } catch (error: unknown) {
     showError(error)
   } finally {
@@ -171,10 +232,40 @@ async function load(): Promise<void> {
   }
 }
 
+function openEditDates(term: TermWithDates | null): void {
+  if (!term) return
+  editingTerm.value = term
+  isDatesDialogOpen.value = true
+}
+
+async function handleSaveDates(payload: { startDate: string; endDate: string; confirmed: boolean }): Promise<void> {
+  const term = editingTerm.value
+  if (!term) return
+  isSavingDates.value = true
+  try {
+    await updateTermDates({
+      term: term.term,
+      startDate: payload.startDate,
+      endDate: payload.endDate,
+      confirm: payload.confirmed,
+    })
+    toast.add({ severity: 'success', summary: labels.termManagement.datesSaved, life: 2500 })
+    isDatesDialogOpen.value = false
+    // Tablo VE üst çubuktaki dönem seçicisinin `activeTermDates` önbelleği aynı
+    // kaynağa (`list_terms_with_dates`) bakar; ikisi de tazelenmezse Dağıtım
+    // ve Saat Ayarları ekranları eski `isPlanning`/tarih değerleriyle kalır.
+    await Promise.all([load(), termStore.loadTerms()])
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isSavingDates.value = false
+  }
+}
+
 async function makeActive(term: string): Promise<void> {
   activatingTerm.value = term
   try {
-    await setActiveTerm(term)
+    await termStore.setActiveTerm(term)
     // Aktif yapmak `settings.active_term`'ı yazar; `get_known_terms` bu
     // sütunu da tarar, dolayısıyla önceden HİÇBİR tabloda verisi olmayan bir
     // dönem artık bu ekranın kendi listesinde de görünür hâle gelir.
@@ -238,7 +329,7 @@ async function create(): Promise<void> {
     // Bu ekranın kendi listesi VE üst çubuktaki dönem seçicisinin önbelleği
     // aynı kaynağa (`get_known_terms`) bakar; ikisi de tazelenmezse yeni
     // dönem (satır kopyalandıysa) seçicide görünmez.
-    await Promise.all([load(), loadTerms()])
+    await Promise.all([load(), termStore.loadTerms()])
     reportCreateResult(result)
     newTerm.value = ''
     copyEnabled.value = false
@@ -253,7 +344,7 @@ async function create(): Promise<void> {
 onMounted(async () => {
   // Üst çubuktaki dönem seçicisi de aynı kaynağa bakar; burada tazelemek
   // biraz önce oluşturulan bir dönemin seçicide de görünmesini sağlar.
-  await Promise.all([load(), loadTerms()])
+  await Promise.all([load(), termStore.loadTerms()])
 })
 </script>
 
@@ -266,7 +357,7 @@ onMounted(async () => {
 label { font-size: 0.875rem; font-weight: 500; }
 .hint { color: var(--p-text-muted-color); }
 .actions { display: flex; justify-content: flex-end; margin-top: 1rem; }
-.empty-term-warning {
+.banner-with-action {
   display: flex;
   align-items: center;
   justify-content: space-between;

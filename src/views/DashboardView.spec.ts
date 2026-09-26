@@ -1,24 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import { ref } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import Aura from '@openvue/themes/aura'
 import DashboardView from './DashboardView.vue'
 import { labels } from '../i18n/labels'
+import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
 import type { DashboardStats } from '../api/dashboard'
 
-// Aktif dönem `watch()` ile izlendiği için gerçek bir `ref` olmalı.
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
-}))
-
-const getStatsMock = vi.fn<() => Promise<DashboardStats>>()
+const getStatsMock = vi.fn<(asOf: string | null) => Promise<DashboardStats>>()
 vi.mock('../api/dashboard', () => ({
   dashboardApi: {
-    get: () => getStatsMock(),
+    get: (asOf: string | null = null) => getStatsMock(asOf),
   },
 }))
 
@@ -77,6 +73,7 @@ function textOf(wrapper: VueWrapper, testId: string): string {
 beforeEach(() => {
   getStatsMock.mockReset()
   document.body.replaceChildren()
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('DashboardView alan koordinatörlük ders yükü kartı', () => {
@@ -121,6 +118,27 @@ describe('DashboardView alan koordinatörlük ders yükü kartı', () => {
     // Assert
     expect(wrapper.text()).toContain(labels.dashboard.totalCapacity)
     expect(labels.dashboard.totalCapacity).toBe('Takdir Edilebilecek Koordinatörlük Saati')
+    wrapper.unmount()
+  })
+})
+
+describe('DashboardView tarihteki durum (asOf)', () => {
+  it('varsayılan tarihte istatistikler `null` ile istenir ve başlık görünmez', async () => {
+    getStatsMock.mockResolvedValue(statsFixture())
+    const wrapper = await mountView()
+
+    expect(getStatsMock).toHaveBeenCalledWith(null)
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('geçmiş bir tarih seçilince istatistikler o tarihle istenir ve başlık görünür', async () => {
+    useAsOfDateStore().setAsOfDate('2026-09-10')
+    getStatsMock.mockResolvedValue(statsFixture())
+    const wrapper = await mountView()
+
+    expect(getStatsMock).toHaveBeenCalledWith('2026-09-10')
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })

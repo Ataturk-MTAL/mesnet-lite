@@ -7,7 +7,7 @@ import Aura from '@openvue/themes/aura'
 import InputNumber from 'openvue/inputnumber'
 import SettingsView from './SettingsView.vue'
 import { labels } from '../i18n/labels'
-import { currentUser, signIn, signOut } from '../composables/useAuth'
+import { useAuthStore } from '../stores/auth'
 import { usersApi } from '../api/users'
 import type { SettingsMap } from '../api/settings'
 import type { BackupStatus, User } from '../types/models'
@@ -133,8 +133,8 @@ beforeEach(() => {
   listUsersMock.mockResolvedValue([])
   backupStatusMock.mockResolvedValue(defaultBackupStatus)
   document.body.innerHTML = ''
-  // `useAuth` modül düzeyinde tekil durum taşır; testler arasında oturum sızmasın.
-  signOut()
+  // Oturum Pinia store'unda tutulur; testler arasında oturum sızmasın.
+  useAuthStore().signOut()
 })
 
 describe('SettingsView principal and field name', () => {
@@ -524,8 +524,9 @@ describe('SettingsView — oturumdaki kullanıcı kendini yeniden adlandırınca
       knownUsers = knownUsers.map((user) => (user.id === id ? { ...user, name } : user))
     })
 
-    await signIn(1, '1234')
-    expect(currentUser.value?.name).toBe('Eski Ad')
+    const authStore = useAuthStore()
+    await authStore.signIn(1, '1234')
+    expect(authStore.currentUser?.name).toBe('Eski Ad')
 
     const wrapper = mountView()
     await flushPromises()
@@ -546,7 +547,7 @@ describe('SettingsView — oturumdaki kullanıcı kendini yeniden adlandırınca
     document.body.querySelector<HTMLButtonElement>('[data-testid="user-rename-save-button"]')!.click()
     await flushPromises()
 
-    expect(currentUser.value?.name).toBe('Yeni Ad')
+    expect(authStore.currentUser?.name).toBe('Yeni Ad')
     expect(wrapper.text()).toContain('Yeni Ad')
 
     wrapper.unmount()

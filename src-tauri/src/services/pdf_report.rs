@@ -7,6 +7,7 @@
 
 use crate::db::assignments::Assignment;
 use crate::db::company_hours::CompanyTermHours;
+use crate::db::read_at::ReadAt;
 use crate::db::{assignments, companies, company_hours, settings, students, teachers};
 use crate::domain::models::{Company, Student, Teacher};
 use crate::error::{AppError, AppResult};
@@ -146,14 +147,16 @@ async fn load_context(pool: &SqlitePool, term: &str) -> AppResult<ReportContext>
         .map(|c| (c.id, c))
         .collect();
 
-    let hours = company_hours::list(pool, term)
+    // Rapor her zaman GÜNCEL duruma göre üretilir (`ReadAt::Latest`); tarihe
+    // göre rapor üretimi bu işin kapsamı dışındadır (spec §6, plan R5d).
+    let hours = company_hours::list(pool, term, &ReadAt::Latest)
         .await?
         .into_iter()
         .map(|h| (h.company_id, h))
         .collect();
 
     let mut students_by_company: HashMap<i64, Vec<Student>> = HashMap::new();
-    for student in students::list_by_term(pool, term).await? {
+    for student in students::list_by_term(pool, term, &ReadAt::Latest).await? {
         if let Some(company_id) = student.company_id {
             students_by_company.entry(company_id).or_default().push(student);
         }
@@ -290,7 +293,7 @@ struct AssignmentSheetData {
 pub async fn build_assignment_sheet(pool: &SqlitePool, term: &str) -> AppResult<Vec<u8>> {
     let school_name = settings::get(pool, "school_name").await?.unwrap_or_default();
     let ctx = load_context(pool, term).await?;
-    let assignment_list = assignments::list(pool, term).await?;
+    let assignment_list = assignments::list(pool, term, &ReadAt::Latest).await?;
 
     let mut has_forced_rows = false;
     let mut grand_total_hours = 0i64;
@@ -381,7 +384,7 @@ struct VisitListData {
 pub async fn build_visit_lists(pool: &SqlitePool, term: &str) -> AppResult<Vec<u8>> {
     let school_name = settings::get(pool, "school_name").await?.unwrap_or_default();
     let ctx = load_context(pool, term).await?;
-    let assignment_list = assignments::list(pool, term).await?;
+    let assignment_list = assignments::list(pool, term, &ReadAt::Latest).await?;
 
     let teacher_pages = group_by_teacher(&ctx, &assignment_list)
         .into_iter()
@@ -416,8 +419,8 @@ pub async fn build_visit_lists(pool: &SqlitePool, term: &str) -> AppResult<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::company_hours::HoursInput;
     use crate::db::init_pool;
+    use crate::db::legacy_seed_test_support::{seed_coordinator, seed_hours as seed_hours_event};
     use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewStudentInput};
     use crate::domain::models::{NewCompany, NewTeacher};
     use crate::services::change_service::{execute_change, ChangeMode, ChangeOutcome};
@@ -476,20 +479,7 @@ mod tests {
     }
 
     async fn seed_hours(pool: &SqlitePool, company_id: i64, awarded: i64) {
-        company_hours::upsert(
-            pool,
-            TERM,
-            &HoursInput {
-                company_id,
-                max_hours_snapshot: 12,
-                awarded_hours: awarded,
-                is_honorary: false,
-                is_locked: false,
-                notes: String::new(),
-            },
-        )
-        .await
-        .unwrap();
+        seed_hours_event(pool, TERM, company_id, awarded, false).await;
     }
 
     /// Dönem başlamadan önceki "bugün" (`ChangeRequest::effective_date`
@@ -554,20 +544,7 @@ mod tests {
         let company_id = seed_company(&pool, "Test İşletme A").await;
         seed_student(&pool, company_id, "Ahmet", "Öztürk").await;
         seed_hours(&pool, company_id, 6).await;
-        assignments::assign(
-            &pool,
-            TERM,
-            &assignments::NewAssignment {
-                teacher_id,
-                company_id,
-                visit_day: 2,
-                visit_hour: 3,
-                is_forced: false,
-                force_reason: None,
-            },
-        )
-        .await
-        .unwrap();
+        seed_coordinator(&pool, TERM, company_id, teacher_id, 2, 3, false, None).await;
 
         let filled_pdf = build_assignment_sheet(&pool, TERM).await.unwrap();
         assert!(filled_pdf.starts_with(b"%PDF"));
@@ -610,23 +587,10 @@ mod tests {
         let teacher_id = seed_teacher(&pool, "Aydın").await;
         let company_id = seed_company(&pool, "Test İşletme D").await;
         seed_hours(&pool, company_id, 6).await;
-        assignments::assign(
-            &pool,
-            TERM,
-            &assignments::NewAssignment {
-                teacher_id,
-                company_id,
-                visit_day: 3,
-                visit_hour: 4,
-                is_forced: false,
-                force_reason: None,
-            },
-        )
-        .await
-        .unwrap();
+        seed_coordinator(&pool, TERM, company_id, teacher_id, 3, 4, false, None).await;
 
         let ctx = load_context(&pool, TERM).await.unwrap();
-        let assignment_list = assignments::list(&pool, TERM).await.unwrap();
+        let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
         let row = build_row(&ctx, rows[0]);
@@ -642,37 +606,11 @@ mod tests {
 
         let teacher_id = seed_teacher(&pool, "Koç").await;
         let company_id = seed_company(&pool, "Test İşletme E").await;
-        company_hours::upsert(
-            &pool,
-            TERM,
-            &HoursInput {
-                company_id,
-                max_hours_snapshot: 8,
-                awarded_hours: 8,
-                is_honorary: true,
-                is_locked: false,
-                notes: String::new(),
-            },
-        )
-        .await
-        .unwrap();
-        assignments::assign(
-            &pool,
-            TERM,
-            &assignments::NewAssignment {
-                teacher_id,
-                company_id,
-                visit_day: 4,
-                visit_hour: 2,
-                is_forced: false,
-                force_reason: None,
-            },
-        )
-        .await
-        .unwrap();
+        seed_hours_event(&pool, TERM, company_id, 8, true).await;
+        seed_coordinator(&pool, TERM, company_id, teacher_id, 4, 2, false, None).await;
 
         let ctx = load_context(&pool, TERM).await.unwrap();
-        let assignment_list = assignments::list(&pool, TERM).await.unwrap();
+        let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
         let row = build_row(&ctx, rows[0]);
@@ -700,23 +638,10 @@ mod tests {
         let teacher_id = seed_teacher(&pool, "Demir").await;
         let company_id = seed_company(&pool, "Test İşletme B").await;
         seed_hours(&pool, company_id, 4).await;
-        assignments::assign(
-            &pool,
-            TERM,
-            &assignments::NewAssignment {
-                teacher_id,
-                company_id,
-                visit_day: 1,
-                visit_hour: 1,
-                is_forced: true,
-                force_reason: Some("Ulaşım zorunluluğu".into()),
-            },
-        )
-        .await
-        .unwrap();
+        seed_coordinator(&pool, TERM, company_id, teacher_id, 1, 1, true, Some("Ulaşım zorunluluğu".into())).await;
 
         let ctx = load_context(&pool, TERM).await.unwrap();
-        let assignment_list = assignments::list(&pool, TERM).await.unwrap();
+        let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
         let row = build_row(&ctx, rows[0]);
@@ -736,37 +661,11 @@ mod tests {
 
         let teacher_id = seed_teacher(&pool, "Kaya").await;
         let company_id = seed_company(&pool, "Test İşletme C").await;
-        company_hours::upsert(
-            &pool,
-            TERM,
-            &HoursInput {
-                company_id,
-                max_hours_snapshot: 8,
-                awarded_hours: 8,
-                is_honorary: true,
-                is_locked: false,
-                notes: String::new(),
-            },
-        )
-        .await
-        .unwrap();
-        assignments::assign(
-            &pool,
-            TERM,
-            &assignments::NewAssignment {
-                teacher_id,
-                company_id,
-                visit_day: 4,
-                visit_hour: 2,
-                is_forced: false,
-                force_reason: None,
-            },
-        )
-        .await
-        .unwrap();
+        seed_hours_event(&pool, TERM, company_id, 8, true).await;
+        seed_coordinator(&pool, TERM, company_id, teacher_id, 4, 2, false, None).await;
 
         let ctx = load_context(&pool, TERM).await.unwrap();
-        let assignment_list = assignments::list(&pool, TERM).await.unwrap();
+        let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
         let row = build_row(&ctx, rows[0]);
@@ -796,20 +695,7 @@ mod tests {
         let company_id = seed_company(&pool, "ÇELİK ÖĞÜT SANAYİ A.Ş. — Gıda ve Şişeleme").await;
         seed_student(&pool, company_id, "Gökçe", "Ünlü").await;
         seed_hours(&pool, company_id, 6).await;
-        assignments::assign(
-            &pool,
-            TERM,
-            &assignments::NewAssignment {
-                teacher_id,
-                company_id,
-                visit_day: 3,
-                visit_hour: 4,
-                is_forced: true,
-                force_reason: Some("Güzergâh zorunluluğu".into()),
-            },
-        )
-        .await
-        .unwrap();
+        seed_coordinator(&pool, TERM, company_id, teacher_id, 3, 4, true, Some("Güzergâh zorunluluğu".into())).await;
 
         let pdf = build_assignment_sheet(&pool, TERM).await.unwrap();
         assert!(pdf.starts_with(b"%PDF"));

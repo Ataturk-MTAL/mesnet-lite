@@ -11,17 +11,20 @@
           icon="pi pi-plus"
           severity="secondary"
           outlined
+          :disabled="isReadOnly"
           @click="addRow"
         />
         <Button
           :label="labels.teachingLoad.save"
           icon="pi pi-check"
-          :disabled="!isDirty"
+          :disabled="!isDirty || isReadOnly"
           :loading="isSaving"
           @click="save"
         />
       </div>
     </div>
+
+    <AsOfReadOnlyBanner />
 
     <Message severity="secondary" :closable="false">{{ labels.teachingLoad.subtitle }}</Message>
     <Message severity="info" :closable="false" data-test="group-note">
@@ -73,6 +76,7 @@
           <InputText
             fluid
             :model-value="data.grade"
+            :disabled="isReadOnly"
             :aria-label="labels.teachingLoad.grade"
             @update:model-value="(value: string | undefined) => updateRow(data.key, { grade: value ?? '' })"
           />
@@ -84,6 +88,7 @@
           <InputText
             fluid
             :model-value="data.branch"
+            :disabled="isReadOnly"
             :aria-label="labels.teachingLoad.branch"
             @update:model-value="(value: string | undefined) => updateRow(data.key, { branch: value ?? '' })"
           />
@@ -98,6 +103,7 @@
               :model-value="data.weeklyHours"
               :min="0"
               showButtons
+              :disabled="isReadOnly"
               :aria-label="labels.teachingLoad.weeklyHours"
               @update:model-value="(value: number | null) => updateRow(data.key, { weeklyHours: value ?? 0 })"
             />
@@ -114,6 +120,7 @@
                 :model-value="data.groupCount"
                 :min="0"
                 showButtons
+                :disabled="isReadOnly"
                 :aria-label="labels.teachingLoad.groupCount"
                 @update:model-value="(value: number | null) => setGroupCount(data.key, value ?? 0)"
               />
@@ -131,6 +138,7 @@
                 text
                 rounded
                 size="small"
+                :disabled="isReadOnly"
                 data-test="group-reset"
                 :aria-label="labels.teachingLoad.groupResetToAuto"
                 v-tooltip.top="labels.teachingLoad.groupResetToAuto"
@@ -166,6 +174,7 @@
             outlined
             rounded
             size="small"
+            :disabled="isReadOnly"
             :aria-label="labels.teachingLoad.removeRow"
             v-tooltip.top="labels.teachingLoad.removeRow"
             @click="removeRow(data.key)"
@@ -195,12 +204,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import { teachingLoadApi } from '../api/teachingLoad'
 import type { TeachingLoadBoard, TeachingLoadInput, TeachingLoadRow } from '../api/teachingLoad'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
+import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
+
+const { activeTerm } = storeToRefs(useTermStore())
+const { requestAsOf, isReadOnly } = storeToRefs(useAsOfDateStore())
+
 
 /** Ekranda düzenlenen satır. `key` yalnızca yerel `v-for` kimliği içindir,
  *  sunucuya gitmez — `id === null` olan hem öneri hem de yeni eklenen boş
@@ -282,23 +298,27 @@ function patchRow(key: string, patch: Partial<DraftRow>): void {
 }
 
 function updateRow(key: string, patch: RowPatch): void {
+  if (isReadOnly.value) return
   patchRow(key, patch)
 }
 
 /** Sayı gerçekten değişince satır elle işaretlenir; değer aynıysa hiçbir şey yazılmaz. */
 function setGroupCount(key: string, value: number): void {
+  if (isReadOnly.value) return
   const current = draftRows.value.find((row) => row.key === key)
   if (!current || current.groupCount === value) return
   patchRow(key, { groupCount: value, isGroupManual: true })
 }
 
 function resetGroupToAuto(key: string): void {
+  if (isReadOnly.value) return
   const current = draftRows.value.find((row) => row.key === key)
   if (!current) return
   patchRow(key, { groupCount: current.autoGroupCount, isGroupManual: false })
 }
 
 function addRow(): void {
+  if (isReadOnly.value) return
   draftRows.value = [
     ...draftRows.value,
     {
@@ -317,6 +337,7 @@ function addRow(): void {
 }
 
 function removeRow(key: string): void {
+  if (isReadOnly.value) return
   draftRows.value = draftRows.value.filter((row) => row.key !== key)
 }
 
@@ -367,7 +388,7 @@ function applyBoard(next: TeachingLoadBoard): void {
 async function load(): Promise<void> {
   isLoading.value = true
   try {
-    applyBoard(await teachingLoadApi.get())
+    applyBoard(await teachingLoadApi.get(requestAsOf.value))
   } catch (error: unknown) {
     showError(error)
   } finally {
@@ -376,6 +397,7 @@ async function load(): Promise<void> {
 }
 
 async function save(): Promise<void> {
+  if (isReadOnly.value) return
   const errors = validateRows(draftRows.value)
   if (errors.length > 0) {
     validationErrors.value = errors
@@ -428,7 +450,7 @@ onBeforeRouteLeave(async () => {
 // (veri karışması), diğer tüm ekranlarla aynı kurala uyulur: dönem
 // değişince taslak sorgusuz tazelenir. Kaydedilmemiş değişikliğe karşı asıl
 // koruma `onBeforeRouteLeave` ile sayfadan ÇIKARKEN devreye girer.
-watch(activeTerm, load)
+watch([activeTerm, requestAsOf], load)
 
 onMounted(load)
 </script>

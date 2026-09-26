@@ -7,6 +7,8 @@
       </div>
     </div>
 
+    <AsOfReadOnlyBanner />
+
     <Message severity="secondary" :closable="false">{{ labels.availability.subtitle }}</Message>
 
     <Message
@@ -49,7 +51,7 @@
               severity="secondary"
               outlined
               size="small"
-              :disabled="!selectedTeacher"
+              :disabled="!selectedTeacher || isReadOnly"
               @click="selectAllSlots"
             />
             <Button
@@ -57,7 +59,7 @@
               severity="secondary"
               outlined
               size="small"
-              :disabled="!selectedTeacher"
+              :disabled="!selectedTeacher || isReadOnly"
               @click="clearAllSlots"
             />
             <Button
@@ -105,10 +107,11 @@
                     v-for="day in DAYS"
                     :key="`${day}-${hour}`"
                     class="grid-cell"
-                    :class="{ 'grid-cell--free': isFree(day, hour) }"
+                    :class="{ 'grid-cell--free': isFree(day, hour), 'grid-cell--readonly': isReadOnly }"
                     role="button"
                     tabindex="0"
                     :aria-pressed="isFree(day, hour)"
+                    :aria-disabled="isReadOnly"
                     @mousedown="startPainting(day, hour)"
                     @mouseenter="paintOver(day, hour)"
                     @mouseup="isPainting = false"
@@ -130,6 +133,7 @@
       :teacher-id="selectedTeacherId"
       :term="term.term"
       :refresh-token="historyRefreshToken"
+      :read-only="isReadOnly"
       @edit="startCorrection"
       @changed="onHistoryChanged"
     />
@@ -154,6 +158,7 @@
                 optionLabel="label"
                 optionValue="value"
                 multiple
+                :disabled="isReadOnly"
                 @update:model-value="(value: number[]) => setClassDays(data.grade, value)"
               />
             </template>
@@ -164,7 +169,7 @@
                 :label="labels.availability.saveClass"
                 icon="pi pi-check"
                 size="small"
-                :disabled="!isClassDirty(data)"
+                :disabled="!isClassDirty(data) || isReadOnly"
                 @click="saveClass(data.grade)"
               />
             </template>
@@ -189,7 +194,7 @@
             icon="pi pi-copy"
             severity="secondary"
             outlined
-            :disabled="!copySourceTerm"
+            :disabled="!copySourceTerm || isReadOnly"
             @click="copyFromTerm"
           />
         </div>
@@ -214,24 +219,32 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { availabilityApi } from '../api/availability'
 import type { AvailabilityBoard, ClassDays, SlotInput } from '../api/availability'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 import { listTermsWithDates } from '../api/terms'
+import { useSelectionStore } from '../stores/selection'
+import { useAsOfDateStore } from '../stores/asOfDate'
 import { useChange } from '../composables/useChange'
 import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
 import ImpactDialog from '../components/history/ImpactDialog.vue'
 import TeacherScheduleHistory from '../components/history/TeacherScheduleHistory.vue'
+import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
 import type { ChangeCommand, ChangeRequest, HistoryChangeSetEntry, TermWithDates } from '../types/models'
 
 const DAYS = [1, 2, 3, 4, 5] as const
 
 const toast = useToast()
+const selection = useSelectionStore()
+// Dağıtım ekranıyla PAYLAŞILAN öğretmen seçimi.
+const { selectedTeacherId } = storeToRefs(selection)
+const { activeTerm } = storeToRefs(useTermStore())
+const { requestAsOf, isReadOnly } = storeToRefs(useAsOfDateStore())
 
 const board = ref<AvailabilityBoard | null>(null)
-const selectedTeacherId = ref<number | null>(null)
 const isSavingTeacher = ref(false)
 const copySourceTerm = ref<string | null>(null)
 
@@ -288,7 +301,11 @@ const teacherDirty = computed(() => {
  * gerekçe düğmeye bağlı değildir; dönem başladıysa kaydederken pencerede sorulur.
  */
 const canSaveTeacher = computed(
-  () => selectedTeacher.value !== null && term.value !== null && (teacherDirty.value || isCorrecting.value),
+  () =>
+    !isReadOnly.value &&
+    selectedTeacher.value !== null &&
+    term.value !== null &&
+    (teacherDirty.value || isCorrecting.value),
 )
 
 function slotKey(day: number, hour: number): string {
@@ -311,10 +328,12 @@ function setSlot(day: number, hour: number, value: boolean): void {
 }
 
 function toggleSlot(day: number, hour: number): void {
+  if (isReadOnly.value) return
   setSlot(day, hour, !isFree(day, hour))
 }
 
 function startPainting(day: number, hour: number): void {
+  if (isReadOnly.value) return
   // Boyama yönü ilk hücrenin TERSİ olur: dolu hücreden başlanırsa boşaltır.
   paintValue.value = !isFree(day, hour)
   isPainting.value = true
@@ -322,11 +341,12 @@ function startPainting(day: number, hour: number): void {
 }
 
 function paintOver(day: number, hour: number): void {
-  if (!isPainting.value) return
+  if (isReadOnly.value || !isPainting.value) return
   setSlot(day, hour, paintValue.value)
 }
 
 function selectAllSlots(): void {
+  if (isReadOnly.value) return
   const next = new Set<string>()
   for (const day of DAYS) {
     for (const hour of gridHours.value) {
@@ -337,6 +357,7 @@ function selectAllSlots(): void {
 }
 
 function clearAllSlots(): void {
+  if (isReadOnly.value) return
   draftSlots.value = new Set()
 }
 
@@ -351,9 +372,9 @@ function syncDraftFromBoard(): void {
 
 function applyBoard(next: AvailabilityBoard): void {
   board.value = next
-  if (selectedTeacherId.value === null && next.teachers.length > 0) {
-    selectedTeacherId.value = next.teachers[0].teacherId
-  }
+  // Seçim listede varsa korunur; yoksa (bayat ya da hiç seçilmemiş) ilk
+  // öğretmene düşer.
+  selection.syncTeacherSelection(next.teachers.map((t) => t.teacherId))
   syncDraftFromBoard()
   // Kaydedilmiş sınıf taslakları temizlenir; kaydedilmemişler korunur.
   for (const cls of next.classes) {
@@ -366,7 +387,7 @@ function applyBoard(next: AvailabilityBoard): void {
 
 async function load(): Promise<void> {
   try {
-    applyBoard(await availabilityApi.get())
+    applyBoard(await availabilityApi.get(requestAsOf.value))
   } catch (error: unknown) {
     showError(error)
   }
@@ -466,6 +487,7 @@ function isClassDirty(cls: ClassDays): boolean {
 }
 
 async function saveClass(grade: string): Promise<void> {
+  if (isReadOnly.value) return
   try {
     applyBoard(await availabilityApi.saveClassDays(grade, classDayDraft[grade] ?? []))
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
@@ -475,6 +497,7 @@ async function saveClass(grade: string): Promise<void> {
 }
 
 async function copyFromTerm(): Promise<void> {
+  if (isReadOnly.value) return
   const source = copySourceTerm.value
   if (!source) return
 
@@ -526,7 +549,7 @@ watch(selectedTeacherId, () => {
   syncDraftFromBoard()
 })
 
-watch(activeTerm, () => {
+watch([activeTerm, requestAsOf], () => {
   void load()
   void loadTerm()
 })
@@ -578,4 +601,5 @@ onMounted(async () => {
   color: var(--p-highlight-color);
   font-weight: 500;
 }
+.grid-cell--readonly { cursor: not-allowed; }
 </style>

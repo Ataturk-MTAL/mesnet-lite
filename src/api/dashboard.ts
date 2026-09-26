@@ -32,5 +32,6 @@ export interface DashboardStats {
 }
 
 export const dashboardApi = {
-  get: (): Promise<DashboardStats> => call('get_dashboard_stats'),
+  /** `asOf` `null` ise güncel kayıt; bir tarihse o güne göre okuma (salt okunur). */
+  get: (asOf: string | null = null): Promise<DashboardStats> => call('get_dashboard_stats', { asOf }),
 }

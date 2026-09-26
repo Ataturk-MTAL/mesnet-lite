@@ -2,8 +2,10 @@
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">{{ labels.teacher.title }}</h1>
-      <Button :label="labels.common.add" icon="pi pi-plus" @click="openCreate" />
+      <Button :label="labels.common.add" icon="pi pi-plus" :disabled="isReadOnly" @click="openCreate" />
     </div>
+
+    <AsOfReadOnlyBanner />
 
     <DataTable
       :value="teachers"
@@ -68,13 +70,15 @@
         <template #body="{ data }">
           <div class="row-actions">
             <Button icon="pi pi-pencil" severity="secondary" outlined size="small"
+                    :disabled="isReadOnly"
                     :aria-label="labels.common.edit" v-tooltip.top="labels.common.edit"
                     @click="openEdit(data)" />
             <Button icon="pi pi-sliders-h" severity="secondary" outlined size="small"
                     :aria-label="labels.teacherLoadChange.title" v-tooltip.top="labels.teacherLoadChange.title"
-                    :disabled="!term"
+                    :disabled="!term || isReadOnly"
                     @click="openLoadChange(data)" />
             <Button icon="pi pi-trash" severity="danger" outlined size="small"
+                    :disabled="isReadOnly"
                     :aria-label="labels.common.delete" v-tooltip.top="labels.common.delete"
                     @click="confirmRemove(data)" />
           </div>
@@ -101,7 +105,8 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import TeacherFormDialog from '../components/teacher/TeacherFormDialog.vue'
@@ -110,12 +115,16 @@ import { teachersApi } from '../api/teachers'
 import { studentsApi } from '../api/students'
 import { listTermsWithDates } from '../api/terms'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
+import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
 import { parseBranches } from '../types/models'
 import type { ChiefType, NewTeacher, TeacherWithCapacity, TermWithDates } from '../types/models'
 
 const toast = useToast()
 const confirm = useConfirm()
+const { activeTerm } = storeToRefs(useTermStore())
+const { requestAsOf, isReadOnly } = storeToRefs(useAsOfDateStore())
 
 const teachers = ref<TeacherWithCapacity[]>([])
 const knownBranches = ref<string[]>([])
@@ -141,7 +150,7 @@ function showError(error: unknown): void {
 async function load(): Promise<void> {
   isLoading.value = true
   try {
-    teachers.value = await teachersApi.listWithCapacity()
+    teachers.value = await teachersApi.listWithCapacity(requestAsOf.value)
   } catch (error: unknown) {
     showError(error)
   } finally {
@@ -165,11 +174,13 @@ async function loadKnownBranches(): Promise<void> {
 }
 
 function openCreate(): void {
+  if (isReadOnly.value) return
   selected.value = null
   isDialogOpen.value = true
 }
 
 function openEdit(teacher: TeacherWithCapacity): void {
+  if (isReadOnly.value) return
   selected.value = teacher
   isDialogOpen.value = true
 }
@@ -203,7 +214,7 @@ async function loadTerm(): Promise<void> {
 }
 
 function openLoadChange(teacher: TeacherWithCapacity): void {
-  if (!term.value) return
+  if (!term.value || isReadOnly.value) return
   loadSelected.value = teacher
   isLoadDialogOpen.value = true
 }
@@ -214,6 +225,7 @@ async function handleLoadSaved(): Promise<void> {
 }
 
 function confirmRemove(teacher: TeacherWithCapacity): void {
+  if (isReadOnly.value) return
   confirm.require({
     message: labels.teacher.deleteConfirm,
     header: `${teacher.firstName} ${teacher.lastName}`,
@@ -231,6 +243,9 @@ function confirmRemove(teacher: TeacherWithCapacity): void {
     },
   })
 }
+
+// Dönem ya da tarihteki durum değişince liste yeniden yüklenir.
+watch([activeTerm, requestAsOf], load)
 
 onMounted(async () => {
   await load()

@@ -11,7 +11,7 @@
           :icon="allRowsLocked ? 'pi pi-lock-open' : 'pi pi-lock'"
           severity="secondary"
           outlined
-          :disabled="rows.length === 0"
+          :disabled="rows.length === 0 || isReadOnly"
           v-tooltip.bottom="labels.hours.lockAllTooltip"
           @click="toggleAllLocks"
         />
@@ -20,7 +20,7 @@
           icon="pi pi-sparkles"
           severity="secondary"
           outlined
-          :disabled="rows.length === 0 || allRowsLocked"
+          :disabled="rows.length === 0 || allRowsLocked || isReadOnly"
           v-tooltip.bottom="autoDistributeTooltipText"
           @click="runAutoDistribute"
         />
@@ -30,18 +30,21 @@
           icon="pi pi-undo"
           severity="secondary"
           outlined
+          :disabled="isReadOnly"
           @click="undoSuggestion"
         />
         <Button
           :label="labels.hours.save"
           icon="pi pi-check"
           :badge="changedCount > 0 ? String(changedCount) : undefined"
-          :disabled="changedCount === 0"
+          :disabled="changedCount === 0 || isReadOnly"
           :loading="isSaving"
           @click="save"
         />
       </div>
     </div>
+
+    <AsOfReadOnlyBanner />
 
     <Message severity="secondary" :closable="false">{{ labels.hours.subtitle }}</Message>
 
@@ -109,7 +112,7 @@
       tableStyle="min-width: 56rem"
     >
       <template #header>
-        <InputText v-model="filters.global.value" :placeholder="labels.company.searchPlaceholder" />
+        <InputText v-model="companyHoursSearch" :placeholder="labels.company.searchPlaceholder" />
       </template>
       <template #empty>{{ labels.hours.empty }}</template>
 
@@ -158,7 +161,7 @@
         <template #body="{ data }">
           <ToggleSwitch
             :model-value="data.isHonorary"
-            :disabled="data.isLocked"
+            :disabled="data.isLocked || isReadOnly"
             :aria-label="labels.hours.honorary"
             v-tooltip.top="labels.hours.honoraryTooltip"
             @update:model-value="(value: boolean) => setHonorary(data, value)"
@@ -175,7 +178,7 @@
               :model-value="data.awardedHours"
               :min="0"
               :max="data.maxHours ?? 0"
-              :disabled="data.maxHours === null || data.isLocked"
+              :disabled="data.maxHours === null || data.isLocked || isReadOnly"
               showButtons
               :aria-label="labels.hours.awarded"
               @update:model-value="(value: number | null) => setAwarded(data, value)"
@@ -191,6 +194,7 @@
             :severity="data.isLocked ? 'warn' : 'secondary'"
             outlined
             size="small"
+            :disabled="isReadOnly"
             v-tooltip.top="labels.hours.lockedTooltip"
             :aria-label="labels.hours.locked"
             @click="toggleLock(data)"
@@ -213,18 +217,52 @@
         />
       </RouterLink>
     </div>
+
+    <ChangeDetailsDialog
+      v-if="activeTermDates"
+      :visible="isChangeDialogOpen"
+      :term="activeTermDates"
+      :title="labels.history.changeDetailsTitle"
+      :effective-date="lastChangeEffectiveDate"
+      reason=""
+      @confirm="confirmChangeDetails"
+      @cancel="cancelChangeDetails"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
+import type { DataTableFilterMeta } from 'openvue/datatable'
 import { hoursApi } from '../api/hours'
 import type { AutoDistributeRow, HoursBoard, HoursInput, HoursRow } from '../api/hours'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
+import { useSelectionStore } from '../stores/selection'
+import { useAsOfDateStore } from '../stores/asOfDate'
+import { useChangeDetailsDialog } from '../composables/useChangeDetailsDialog'
+import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
+import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
+import { buildGlobalFilter, extractGlobalFilterValue } from '../utils/dataTableFilters'
 
 const toast = useToast()
+const selection = useSelectionStore()
+const { companyHoursSearch } = storeToRefs(selection)
+const { activeTerm, activeTermDates } = storeToRefs(useTermStore())
+const { requestAsOf, isReadOnly } = storeToRefs(useAsOfDateStore())
+
+/** Dönem tarihleri henüz yüklenmediyse planlama evresi varsayılır — Kaydet
+ *  o kısa aralıkta engellenmez; gerçek yasak arka uçtan gelir. */
+const isPlanning = computed(() => activeTermDates.value?.isPlanning ?? true)
+const {
+  isOpen: isChangeDialogOpen,
+  lastEffectiveDate: lastChangeEffectiveDate,
+  requestDetails: requestChangeDetails,
+  confirm: confirmChangeDetails,
+  cancel: cancelChangeDetails,
+} = useChangeDetailsDialog(() => isPlanning.value)
 
 const board = ref<HoursBoard | null>(null)
 /** Ekranda düzenlenen kopyalar; kaydedilene kadar sunucuya gitmez. */
@@ -235,7 +273,14 @@ const suggestionWarnings = ref<string[]>([])
 
 const isLoading = ref(false)
 const isSaving = ref(false)
-const filters = ref({ global: { value: null as string | null, matchMode: 'contains' } })
+// DataTable'ın arama kutusu iki yönlü; store'daki `companyHoursSearch` ile
+// senkron kalması için OKUNABİLİR + YAZILABİLİR computed olarak sunulur.
+const filters = computed<DataTableFilterMeta>({
+  get: () => buildGlobalFilter(companyHoursSearch.value),
+  set: (next) => {
+    companyHoursSearch.value = extractGlobalFilterValue(next)
+  },
+})
 
 const hasSuggestion = computed(() => snapshot.value !== null)
 
@@ -282,7 +327,7 @@ function showError(error: unknown): void {
 function setHonorary(row: HoursRow, value: boolean): void {
   // Kilitli satır donmuş kabul edilir; girişler devre dışı olsa da ikinci kat
   // koruma olarak burada da erken dönülür.
-  if (row.isLocked) return
+  if (row.isLocked || isReadOnly.value) return
   row.isHonorary = value
   if (value) row.awardedHours = 0
 }
@@ -290,7 +335,7 @@ function setHonorary(row: HoursRow, value: boolean): void {
 function setAwarded(row: HoursRow, value: number | null): void {
   // Kilitli satır donmuş kabul edilir; girişler devre dışı olsa da ikinci kat
   // koruma olarak burada da erken dönülür.
-  if (row.isLocked) return
+  if (row.isLocked || isReadOnly.value) return
   const requested = value ?? 0
   const cap = row.maxHours ?? 0
   if (requested > cap) {
@@ -302,6 +347,7 @@ function setAwarded(row: HoursRow, value: number | null): void {
 }
 
 function toggleLock(row: HoursRow): void {
+  if (isReadOnly.value) return
   row.isLocked = !row.isLocked
 }
 
@@ -315,6 +361,7 @@ const autoDistributeTooltipText = computed(() =>
 
 /** Toplu kilit/aç — satır sayısı kadar YENİ nesne üretir, mevcutları yerinde değiştirmez. */
 function toggleAllLocks(): void {
+  if (isReadOnly.value) return
   const nextLocked = !allRowsLocked.value
   rows.value = rows.value.map((row) => ({ ...row, isLocked: nextLocked }))
 }
@@ -331,7 +378,7 @@ function applyBoard(next: HoursBoard): void {
 async function load(): Promise<void> {
   isLoading.value = true
   try {
-    applyBoard(await hoursApi.get())
+    applyBoard(await hoursApi.get(requestAsOf.value))
   } catch (error: unknown) {
     showError(error)
   } finally {
@@ -340,6 +387,7 @@ async function load(): Promise<void> {
 }
 
 async function runAutoDistribute(): Promise<void> {
+  if (isReadOnly.value) return
   // Öneri öncesi durum saklanır ki `Geri Al` çalışsın.
   snapshot.value = rows.value.map((row) => ({ ...row }))
 
@@ -387,6 +435,7 @@ async function runAutoDistribute(): Promise<void> {
  * (sonradan eklenmiş) satır olduğu gibi kalır.
  */
 function undoSuggestion(): void {
+  if (isReadOnly.value) return
   const snapshotRows = snapshot.value
   if (!snapshotRows) return
   rows.value = rows.value.map((row) => {
@@ -399,7 +448,16 @@ function undoSuggestion(): void {
   suggestionWarnings.value = []
 }
 
+/**
+ * Dönem başladıysa (`isPlanning === false`) önce yürürlük tarihi ve gerekçe
+ * sorulur; kullanıcı Vazgeç derse hiçbir şey kaydedilmez. Toplu satır kaydı
+ * TEK bir pencereden geçer, satır başına ayrı pencere açılmaz.
+ */
 async function save(): Promise<void> {
+  if (isReadOnly.value) return
+  const details = await requestChangeDetails()
+  if (details === null) return
+
   isSaving.value = true
   try {
     const payload: HoursInput[] = rows.value.map((row) => ({
@@ -410,7 +468,7 @@ async function save(): Promise<void> {
       isLocked: row.isLocked,
       notes: row.notes,
     }))
-    applyBoard(await hoursApi.save(payload))
+    applyBoard(await hoursApi.save(payload, details))
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
   } catch (error: unknown) {
     showError(error)
@@ -419,8 +477,8 @@ async function save(): Promise<void> {
   }
 }
 
-// Dönem değişince takdirler de değişir.
-watch(activeTerm, load)
+// Dönem ya da tarihteki durum değişince takdirler de değişir.
+watch([activeTerm, requestAsOf], load)
 
 onMounted(load)
 </script>

@@ -56,9 +56,9 @@ function respondWith(entries: HistoryChangeSetEntry[], next: number | null = nul
   listHistoryMock.mockResolvedValue({ entries, nextBeforeChangeSetId: next })
 }
 
-async function mountPanel(refreshToken = 0) {
+async function mountPanel(refreshToken = 0, readOnly = false) {
   const wrapper = mount(TeacherScheduleHistory, {
-    props: { teacherId: 7, term: '2026-2027/1', refreshToken },
+    props: { teacherId: 7, term: '2026-2027/1', refreshToken, readOnly },
     global: {
       plugins: [[OpenVue, { theme: { preset: Aura, options: { darkModeSelector: '.app-dark' } } }], ToastService],
     },
@@ -299,6 +299,18 @@ describe('TeacherScheduleHistory', () => {
       expect.objectContaining({ severity: 'error', detail: 'delete_change_set: Bu kayıt silinemez' }),
     )
     expect(wrapper.emitted('changed')).toBeUndefined()
+    wrapper.unmount()
+  })
+})
+
+describe('TeacherScheduleHistory readOnly', () => {
+  it('readOnly true iken düzelt, geri al ve sil düğmeleri devre dışı kalır', async () => {
+    respondWith([entry(2, { isDeletable: true }), entry(1)])
+    const wrapper = await mountPanel(0, true)
+
+    expect(wrapper.find('[data-testid="schedule-history-edit-button"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="schedule-history-revoke-button"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="schedule-history-delete-button"]').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 })

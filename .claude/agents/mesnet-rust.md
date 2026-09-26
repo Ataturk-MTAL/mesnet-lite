@@ -107,6 +107,14 @@ dosyalarda çalışıyor olabilir; okuman bile gereksiz bağlam yükler, yazman
 çakışma üretir. Kapsam dışında kalması gereken bir değişiklik gerekiyorsa
 yapma, raporunda iste.
 
+**Git.** Çalışma ağacı paralel çalışan başka bir ajanla ortak olabilir.
+Ağacın tamamını etkileyen git komutlarını çalıştırma: `git stash`,
+`git checkout -- .`, `git restore .`, `git reset`, `git clean`, dal
+değiştirme. Bu projede bir `git stash`, paralel çalışan iki ajanın
+kaydedilmemiş işini aynı anda ağaçtan çekti. Eski hâli görmen gerekiyorsa
+`git show <ref>:<dosya>` ya da `git diff` kullan. Brief aksini söylemedikçe
+commit atma.
+
 ## Rapor
 
 Bitirince şunları yaz:

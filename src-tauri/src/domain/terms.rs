@@ -4,7 +4,7 @@
 //! ilçeye gönderilir (spec §2 madde 3). Bu yüzden içinde bulunulan aydan
 //! önceki bir tarihe geçmişe dönük giriş yapılamaz: puantaj çoktan gitmiştir.
 
-use chrono::{Datelike, FixedOffset, NaiveDate, Utc};
+use chrono::{Datelike, FixedOffset, NaiveDate, NaiveDateTime, Utc};
 
 use super::history::rejection::{Rejection, RejectionCode};
 use crate::error::{AppError, AppResult};
@@ -131,6 +131,16 @@ pub fn today_local() -> NaiveDate {
     let offset = FixedOffset::east_opt(TURKEY_UTC_OFFSET_SECONDS)
         .expect("sabit +03:00 ofseti her zaman geçerlidir");
     Utc::now().with_timezone(&offset).date_naive()
+}
+
+/// `today_local`in saat bileşenli hâli: Türkiye yerel tarih-saati (sabit
+/// UTC+3). `services::versions::create_version`in `created_at` damgası için
+/// kullanılır — sürüm listesi kullanıcıya günün yalnızca tarihini değil saatini
+/// de göstermeli, çünkü aynı günde birden çok sürüm alınabilir.
+pub fn now_local() -> NaiveDateTime {
+    let offset = FixedOffset::east_opt(TURKEY_UTC_OFFSET_SECONDS)
+        .expect("sabit +03:00 ofseti her zaman geçerlidir");
+    Utc::now().with_timezone(&offset).naive_local()
 }
 
 /// `'YYYY-MM-DD'` dışındaki her girdiyi sınırda reddeder (dış veri asla

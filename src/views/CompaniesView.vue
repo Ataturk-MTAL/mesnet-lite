@@ -31,7 +31,7 @@
     >
       <template #header>
         <InputText
-          v-model="filters.global.value"
+          v-model="companySearch"
           :placeholder="labels.company.searchPlaceholder"
           class="search-input"
         />
@@ -140,9 +140,11 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
+import type { DataTableFilterMeta } from 'openvue/datatable'
 import CompanyFormDialog from '../components/company/CompanyFormDialog.vue'
 import CompanyMergeDialog from '../components/company/CompanyMergeDialog.vue'
 import LocationPickerMap from '../components/map/LocationPickerMap.vue'
@@ -151,13 +153,18 @@ import { settingsApi } from '../api/settings'
 import { filesApi } from '../api/files'
 import { listTermsWithDates } from '../api/terms'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
 import { roundTripDistanceKm } from '../types/models'
 import type { Company, GeocodeStatus, LatLng, NewCompany, TermWithDates } from '../types/models'
 import type { CompanyMergeInput } from '../api/companies'
+import { useSelectionStore } from '../stores/selection'
+import { buildGlobalFilter, extractGlobalFilterValue } from '../utils/dataTableFilters'
 
 const toast = useToast()
 const confirm = useConfirm()
+const selection = useSelectionStore()
+const { companySearch } = storeToRefs(selection)
+const { activeTerm } = storeToRefs(useTermStore())
 
 const companies = ref<Company[]>([])
 const isLoading = ref(false)
@@ -194,7 +201,14 @@ async function runGeocoding(): Promise<void> {
 }
 const isDialogOpen = ref(false)
 const selected = ref<Company | null>(null)
-const filters = ref({ global: { value: null as string | null, matchMode: 'contains' } })
+// DataTable'ın arama kutusu iki yönlü; store'daki `companySearch` ile senkron
+// kalması için OKUNABİLİR + YAZILABİLİR computed olarak sunulur.
+const filters = computed<DataTableFilterMeta>({
+  get: () => buildGlobalFilter(companySearch.value),
+  set: (next) => {
+    companySearch.value = extractGlobalFilterValue(next)
+  },
+})
 
 const isLocationDialogOpen = ref(false)
 const locationTarget = ref<Company | null>(null)

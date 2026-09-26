@@ -18,6 +18,23 @@ use crate::domain::history::decide::{decide, ChangeRequest, Decision, DecisionCo
 use crate::domain::history::rejection::{Rejection, RejectionCode};
 use crate::error::{AppError, AppResult};
 
+/// Panonun eski yazıcıları (`save_company_hours`, `assign_company`,
+/// `unassign_company`, `clear_assignments`) için ortak sarmalayıcı: HEP
+/// `Commit { expected_high_water: None }` ile çalışır — bu yazıcılar bayat
+/// kontrolü YAPMAZ (eski davranışları da yapmıyordu, panoyu her zaman yeniden
+/// yükleyip üzerine yazıyorlardı). `expected_high_water: None` iken
+/// `stale_outcome` HER ZAMAN `None` döner (bkz. yukarısı), bu yüzden `Stale`
+/// ve `Preview` bu yoldan asla gelmez; gelirse bu bir programlama hatasıdır.
+pub async fn commit_legacy_change(pool: &SqlitePool, request: ChangeRequest, today: NaiveDate) -> AppResult<()> {
+    match execute_change(pool, request, ChangeMode::Commit { expected_high_water: None }, today).await? {
+        ChangeOutcome::Committed { .. } => Ok(()),
+        ChangeOutcome::Rejected { reason, .. } => Err(AppError::Validation(reason)),
+        other => Err(AppError::Database(format!(
+            "Beklenmeyen değişiklik sonucu (yalnız Committed/Rejected olmalıydı): {other:?}"
+        ))),
+    }
+}
+
 const STALE_MESSAGE: &str = "Önizlemeden sonra kayıtlar değişti. Değişikliği yeniden önizleyip onaylayın.";
 
 /// `Preview` hiçbir şey yazmaz; `Commit`, önizlemenin gördüğü günlük

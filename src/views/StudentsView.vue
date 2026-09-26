@@ -5,8 +5,10 @@
         <h1 class="page-title">{{ labels.student.title }}</h1>
         <Tag v-if="activeTerm" :value="activeTerm" severity="secondary" icon="pi pi-calendar" />
       </div>
-      <Button :label="labels.common.add" icon="pi pi-plus" @click="openCreate" />
+      <Button :label="labels.common.add" icon="pi pi-plus" :disabled="isReadOnly" @click="openCreate" />
     </div>
+
+    <AsOfReadOnlyBanner />
 
     <Message severity="secondary" :closable="false">{{ labels.term.hint }}</Message>
 
@@ -22,7 +24,7 @@
       stripedRows
     >
       <template #header>
-        <InputText v-model="filters.global.value" :placeholder="labels.student.searchPlaceholder" />
+        <InputText v-model="studentSearch" :placeholder="labels.student.searchPlaceholder" />
       </template>
       <template #empty>{{ labels.student.empty }}</template>
 
@@ -45,15 +47,17 @@
         <template #body="{ data }">
           <div class="row-actions">
             <Button icon="pi pi-pencil" severity="secondary" outlined size="small"
+                    :disabled="isReadOnly"
                     :aria-label="labels.common.edit" v-tooltip.top="labels.common.edit"
                     @click="openEdit(data)" />
             <Button :icon="data.companyId === null ? 'pi pi-briefcase' : 'pi pi-arrow-right-arrow-left'"
                     severity="secondary" outlined size="small"
-                    :disabled="currentTerm === null"
+                    :disabled="currentTerm === null || isReadOnly"
                     :aria-label="data.companyId === null ? labels.studentChange.placeTitle : labels.studentChange.title"
                     v-tooltip.top="data.companyId === null ? labels.studentChange.placeTitle : labels.studentChange.title"
                     @click="openChangeDialog(data)" />
             <Button icon="pi pi-trash" severity="danger" outlined size="small"
+                    :disabled="isReadOnly"
                     :aria-label="labels.common.delete" v-tooltip.top="labels.common.delete"
                     @click="confirmRemove(data)" />
           </div>
@@ -78,8 +82,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
+import type { DataTableFilterMeta } from 'openvue/datatable'
 import StudentFormDialog from '../components/student/StudentFormDialog.vue'
 import StudentChangeDialog, { type StudentChangeSubject } from '../components/student/StudentChangeDialog.vue'
 import { studentsApi } from '../api/students'
@@ -87,10 +93,18 @@ import { companiesApi } from '../api/companies'
 import { listTermsWithDates } from '../api/terms'
 import { labels } from '../i18n/labels'
 import type { Company, NewStudent, Student, TermWithDates } from '../types/models'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
+import { useSelectionStore } from '../stores/selection'
+import { useAsOfDateStore } from '../stores/asOfDate'
+import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
+import { buildGlobalFilter, extractGlobalFilterValue } from '../utils/dataTableFilters'
 
 const toast = useToast()
 const confirm = useConfirm()
+const selection = useSelectionStore()
+const { studentSearch } = storeToRefs(selection)
+const { activeTerm } = storeToRefs(useTermStore())
+const { requestAsOf, isReadOnly } = storeToRefs(useAsOfDateStore())
 
 const students = ref<Student[]>([])
 const companies = ref<Company[]>([])
@@ -98,7 +112,14 @@ const termsWithDates = ref<TermWithDates[]>([])
 const isLoading = ref(false)
 const isDialogOpen = ref(false)
 const selected = ref<Student | null>(null)
-const filters = ref({ global: { value: null as string | null, matchMode: 'contains' } })
+// DataTable'ın arama kutusu iki yönlü; store'daki `studentSearch` ile senkron
+// kalması için OKUNABİLİR + YAZILABİLİR computed olarak sunulur.
+const filters = computed<DataTableFilterMeta>({
+  get: () => buildGlobalFilter(studentSearch.value),
+  set: (next) => {
+    studentSearch.value = extractGlobalFilterValue(next)
+  },
+})
 
 const isChangeDialogOpen = ref(false)
 const changeSubject = ref<StudentChangeSubject>({ id: 0, fullName: '', companyId: null, companyName: null })
@@ -136,7 +157,7 @@ async function load(): Promise<void> {
     // Üç liste birlikte yüklenir: öğrenci tablosu işletme adını göstermek için
     // işletme listesine, nakil/ayrılış diyaloğu da dönem tarihlerine ihtiyaç duyar.
     const [studentRows, companyRows, termRows] = await Promise.all([
-      studentsApi.list(),
+      studentsApi.list(requestAsOf.value),
       companiesApi.list(),
       listTermsWithDates(),
     ])
@@ -151,18 +172,21 @@ async function load(): Promise<void> {
 }
 
 function openCreate(): void {
+  if (isReadOnly.value) return
   selected.value = null
   isDialogOpen.value = true
 }
 
 function openEdit(student: Student): void {
+  if (isReadOnly.value) return
   selected.value = student
   isDialogOpen.value = true
 }
 
 function openChangeDialog(student: Student): void {
-  // Düğme zaten `currentTerm === null` iken devre dışıdır; bu yalnız savunma amaçlıdır.
-  if (currentTerm.value === null) return
+  // Düğmeler zaten `currentTerm === null` ya da salt okunurken devre dışıdır;
+  // bu yalnız savunma amaçlıdır.
+  if (currentTerm.value === null || isReadOnly.value) return
   changeSubject.value = {
     id: student.id,
     fullName: `${student.firstName} ${student.lastName}`,
@@ -187,6 +211,7 @@ async function handleSave(input: NewStudent): Promise<void> {
 }
 
 function confirmRemove(student: Student): void {
+  if (isReadOnly.value) return
   confirm.require({
     message: labels.common.deleteConfirm,
     header: `${student.firstName} ${student.lastName}`,
@@ -205,8 +230,8 @@ function confirmRemove(student: Student): void {
   })
 }
 
-// Üst çubuktan dönem değişince liste yeniden yüklenir.
-watch(activeTerm, load)
+// Üst çubuktan dönem ya da tarihteki durum değişince liste yeniden yüklenir.
+watch([activeTerm, requestAsOf], load)
 
 onMounted(load)
 </script>

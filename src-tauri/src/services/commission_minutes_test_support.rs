@@ -2,8 +2,7 @@
 //! PDF testleri aynı senaryoyu paylaşır; böylece "üç çıktı aynı veriyi
 //! gösterir" varsayımı ayrı ayrı uydurma fixture'lara dayanmaz.
 
-use crate::db::assignments::{self, NewAssignment};
-use crate::db::company_hours::{self, HoursInput};
+use crate::db::legacy_seed_test_support::{seed_coordinator, seed_hours as seed_hours_event};
 use crate::db::{companies, init_pool, teachers};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewStudentInput, NewTeacherProfile};
 use crate::domain::history::events::TeacherLoad;
@@ -107,20 +106,7 @@ pub async fn seed_student(pool: &SqlitePool, company_id: Option<i64>, first: &st
 }
 
 pub async fn seed_hours(pool: &SqlitePool, company_id: i64, awarded: i64, is_honorary: bool) {
-    company_hours::upsert(
-        pool,
-        TERM,
-        &HoursInput {
-            company_id,
-            max_hours_snapshot: 12,
-            awarded_hours: awarded,
-            is_honorary,
-            is_locked: false,
-            notes: String::new(),
-        },
-    )
-    .await
-    .unwrap();
+    seed_hours_event(pool, TERM, company_id, awarded, is_honorary).await;
 }
 
 pub async fn seed_assignment(
@@ -130,20 +116,7 @@ pub async fn seed_assignment(
     day: i64,
     hour: i64,
 ) {
-    assignments::assign(
-        pool,
-        TERM,
-        &NewAssignment {
-            teacher_id,
-            company_id,
-            visit_day: day,
-            visit_hour: hour,
-            is_forced: false,
-            force_reason: None,
-        },
-    )
-    .await
-    .unwrap();
+    seed_coordinator(pool, TERM, company_id, teacher_id, day, hour, false, None).await;
 }
 
 /// Her durumu içeren tek senaryo: çok öğrencili işletme, tek öğrencili

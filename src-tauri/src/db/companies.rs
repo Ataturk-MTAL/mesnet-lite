@@ -273,13 +273,16 @@ pub struct CompanyRemoval {
 /// - `student_placements`, `company_hour_periods`, `coordination_periods`
 ///   (tarihçe projeksiyonları, migration 0006 — BİLEREK FK'siz: bir satır
 ///   sahibinden uzun yaşayabilmeli, spec §4.1) — sert silme bunlarda
-///   sarkan `company_id` bırakırdı, teşhis edilen asıl zarar buydu.
-/// - `company_term_hours`, `assignments` (migration 0004'ün event-sourced
-///   OLMAYAN, hâlâ canlı okunan/yazılan eski çifti — bkz. db/company_hours.rs,
-///   db/assignments.rs). FK'leri `ON DELETE CASCADE` olsa da sert silme bu
-///   satırları SESSİZCE yok ederdi; kullanıcı veriyi kaybettiğini fark etmezdi.
+///   sarkan `company_id` bırakırdı, teşhis edilen asıl zarar buydu. Denetim
+///   satırın AÇIK olup olmadığına BAKMAZ: kapanmış bile olsa bir dönem
+///   satırı "geçmişi var" demektir ("hiç satırı var mı" anlamı korunur).
 /// - `change_events` (yalnız işletmenin özne olduğu `company_hours`/
 ///   `coordination` akışları; `subject_id` migration 0006'da BİLEREK FK'siz).
+///
+/// `company_term_hours` ve `assignments` artık BAKILMAZ: bu iş onları
+/// dondurdu (bkz. db/company_hours.rs, db/assignments.rs başlığı) — tek
+/// doğruluk kaynağı yukarıdaki iki projeksiyon oldu, ikinci bir kopya
+/// tutmak (DRY) hem gereksiz hem de zamanla projeksiyondan sapabilirdi.
 ///
 /// `students.company_id` BİLEREK DIŞARIDA bırakılır: migration 0006'dan beri
 /// donmuş, hiçbir yol onu okumaz/yazmaz (bkz. db/students.rs SELECT_COLUMNS
@@ -292,15 +295,11 @@ async fn has_history(conn: &mut SqliteConnection, id: i64) -> AppResult<bool> {
              EXISTS(SELECT 1 FROM student_placements WHERE company_id = ?1)
           OR EXISTS(SELECT 1 FROM company_hour_periods WHERE company_id = ?2)
           OR EXISTS(SELECT 1 FROM coordination_periods WHERE company_id = ?3)
-          OR EXISTS(SELECT 1 FROM company_term_hours WHERE company_id = ?4)
-          OR EXISTS(SELECT 1 FROM assignments WHERE company_id = ?5)
           OR EXISTS(
                  SELECT 1 FROM change_events
-                 WHERE subject_id = ?6 AND stream IN ('company_hours', 'coordination')
+                 WHERE subject_id = ?4 AND stream IN ('company_hours', 'coordination')
              )",
     )
-    .bind(id)
-    .bind(id)
     .bind(id)
     .bind(id)
     .bind(id)
@@ -399,14 +398,21 @@ async fn has_open_placement(conn: &mut SqliteConnection, id: i64, today: NaiveDa
     Ok(found != 0)
 }
 
-/// Aktif dönemde bu işletmeye yapılmış bir öğretmen ataması var mı?
+/// Aktif dönemde bu işletmeye yapılmış, HÂLÂ AÇIK bir öğretmen ataması var
+/// mı? ("şu an atanmış" anlamı — düzeltme: "herhangi bir dönem satırı"
+/// kuralı yalnız `has_history` içindi, burada değil.) `coordination_periods`
+/// geçmiş de tutar; bu dönem içinde atanıp SONRA çıkarılmış (kapanmış) bir
+/// işletme silme denetiminde "şu an atanmış" SAYILMAZ — geçmişi olduğu için
+/// `has_history` üzerinden yine de yumuşak silinir, ama sert silme burada
+/// REDDEDİLMEZ.
 async fn has_active_term_assignment(conn: &mut SqliteConnection, id: i64, active_term: &str) -> AppResult<bool> {
-    let found: i64 =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM assignments WHERE company_id = ?1 AND term = ?2)")
-            .bind(id)
-            .bind(active_term)
-            .fetch_one(&mut *conn)
-            .await?;
+    let found: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM coordination_periods WHERE company_id = ?1 AND term = ?2 AND valid_to IS NULL)",
+    )
+    .bind(id)
+    .bind(active_term)
+    .fetch_one(&mut *conn)
+    .await?;
     Ok(found != 0)
 }
 
@@ -473,9 +479,13 @@ pub async fn find_by_normalized_name_in(conn: &mut SqliteConnection, name: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::company_hours::{self, HoursInput};
+    use crate::db::company_hours;
+    use crate::db::legacy_seed_test_support::{seed_coordinator, seed_hours};
+    use crate::db::read_at::ReadAt;
     use crate::db::{init_pool, teachers};
+    use crate::domain::history::decide::{ChangeCommand, ChangeRequest};
     use crate::domain::models::NewTeacher;
+    use crate::services::change_service::{execute_change, ChangeMode, ChangeOutcome};
 
     /// Tüm geçmiş-tablosu testlerinin paylaştığı dönem; `terms` ve o dönem
     /// için bir `opening` `change_sets` satırı migration 0006'nın göç
@@ -728,21 +738,27 @@ mod tests {
         assert!(result.soft_deleted, "saat takdiri geçmişi olan işletme silinmemeli");
     }
 
+    /// BAŞKA (aktif olmayan) bir dönemin koordinasyon satırı kullanılır: amaç
+    /// `has_history`in projeksiyon dalını sınamaktır, `has_active_term_assignment`ın
+    /// (aktif dönem ataması) AYRI kuralını değil — o kural kendi testinde
+    /// (`remove_rejects_a_company_with_an_active_term_assignment`) sınanır.
     #[tokio::test]
     async fn remove_soft_deletes_a_company_with_a_coordination_period() {
         let (_dir, pool) = test_pool().await;
         let created = create(&pool, &sample_input("Koordinasyon Geçmişli A.Ş.")).await.unwrap();
         let teacher_id = a_teacher(&pool).await;
+        let other_term = "2024-2025/1";
+        crate::db::terms::ensure(&pool, other_term).await.unwrap();
 
         let mut conn = pool.acquire().await.unwrap();
         let event_id = seed_change_event(&mut conn, "coordination", created.id).await;
         sqlx::query(
             "INSERT INTO coordination_periods
                 (company_id, term, valid_from, valid_to, teacher_id, visit_day, visit_hour, source_event_id)
-             VALUES (?1, ?2, '2026-09-01', NULL, ?3, 1, 3, ?4)",
+             VALUES (?1, ?2, '2024-09-01', NULL, ?3, 1, 3, ?4)",
         )
         .bind(created.id)
-        .bind(TERM)
+        .bind(other_term)
         .bind(teacher_id)
         .bind(event_id)
         .execute(&mut *conn)
@@ -756,29 +772,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_soft_deletes_a_company_with_company_term_hours() {
+    async fn remove_soft_deletes_a_company_with_an_open_hours_period() {
         let (_dir, pool) = test_pool().await;
         let created = create(&pool, &sample_input("Takdir Geçmişli A.Ş.")).await.unwrap();
-        company_hours::upsert(
-            &pool,
-            TERM,
-            &HoursInput {
-                company_id: created.id,
-                max_hours_snapshot: 8,
-                awarded_hours: 6,
-                is_honorary: false,
-                is_locked: false,
-                notes: String::new(),
-            },
-        )
-        .await
-        .unwrap();
+        seed_hours(&pool, TERM, created.id, 6, false).await;
 
         let result = remove(&pool, created.id).await.unwrap();
 
-        assert!(result.soft_deleted, "company_term_hours satırı olan işletme silinmemeli");
+        assert!(result.soft_deleted, "açık saat takdiri satırı olan işletme silinmemeli");
         // Sert silinseydi FK ON DELETE CASCADE bu satırı SESSİZCE yok ederdi.
-        assert!(company_hours::get(&pool, created.id, TERM).await.unwrap().is_some());
+        assert_eq!(company_hours::list(&pool, TERM, &ReadAt::Latest).await.unwrap().len(), 1);
     }
 
     /// Aktif dönemde bu işletmeye yapılmış bir öğretmen ataması varsa silme
@@ -790,16 +793,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let created = create(&pool, &sample_input("Atama Geçmişli A.Ş.")).await.unwrap();
         let teacher_id = a_teacher(&pool).await;
-        sqlx::query(
-            "INSERT INTO assignments (teacher_id, company_id, term, visit_day, visit_hour, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 1, 3, '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')",
-        )
-        .bind(teacher_id)
-        .bind(created.id)
-        .bind(TERM)
-        .execute(&pool)
-        .await
-        .unwrap();
+        seed_coordinator(&pool, TERM, created.id, teacher_id, 1, 3, false, None).await;
 
         let err = remove(&pool, created.id).await.unwrap_err();
 
@@ -815,19 +809,38 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let created = create(&pool, &sample_input("Eski Dönem Atamalı A.Ş.")).await.unwrap();
         let teacher_id = a_teacher(&pool).await;
-        sqlx::query(
-            "INSERT INTO assignments (teacher_id, company_id, term, visit_day, visit_hour, created_at, updated_at)
-             VALUES (?1, ?2, '2024-2025/1', 1, 3, '2024-09-01T00:00:00Z', '2024-09-01T00:00:00Z')",
-        )
-        .bind(teacher_id)
-        .bind(created.id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        crate::db::terms::ensure(&pool, "2024-2025/1").await.unwrap();
+        seed_coordinator(&pool, "2024-2025/1", created.id, teacher_id, 1, 3, false, None).await;
 
         let result = remove(&pool, created.id).await.unwrap();
 
         assert!(result.soft_deleted, "başka dönemin ataması geçmiş sayılır, silme reddedilmemeli ama pasifleşmeli");
+    }
+
+    /// Düzeltme: aktif dönemde atanıp SONRA çıkarılmış (kapanmış) bir
+    /// işletme "şu an atanmış" DEĞİLDİR — eskisi gibi silinebilmeli
+    /// (geçmişi olduğu için sert değil, yumuşak silme).
+    #[tokio::test]
+    async fn remove_soft_deletes_a_company_assigned_then_unassigned_in_the_active_term() {
+        let (_dir, pool) = test_pool().await;
+        let created = create(&pool, &sample_input("Atanıp Çıkarılan A.Ş.")).await.unwrap();
+        let teacher_id = a_teacher(&pool).await;
+        seed_coordinator(&pool, TERM, created.id, teacher_id, 1, 3, false, None).await;
+
+        let end_date = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+        let req = ChangeRequest {
+            term: TERM.to_string(),
+            effective_date: Some(end_date),
+            document_date: None,
+            reason: "test".into(),
+            command: ChangeCommand::EndCoordination { company_id: created.id },
+        };
+        let outcome = execute_change(&pool, req, ChangeMode::Commit { expected_high_water: None }, end_date).await.unwrap();
+        assert!(matches!(outcome, ChangeOutcome::Committed { .. }), "koordinatörlük bitirilebilmeli: {outcome:?}");
+
+        let result = remove(&pool, created.id).await.unwrap();
+
+        assert!(result.soft_deleted, "atanıp çıkarılan işletme, geçmişi olduğu için yumuşak silinmeli, reddedilmemeli");
     }
 
     #[tokio::test]

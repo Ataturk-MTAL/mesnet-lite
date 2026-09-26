@@ -3217,16 +3217,18 @@ dependencies = [
 
 [[package]]
 name = "mesnet-lite"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "argon2",
  "calamine",
  "chrono",
  "csv",
+ "hex",
  "reqwest 0.12.28",
  "rust_xlsxwriter",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tauri",
  "tauri-build",

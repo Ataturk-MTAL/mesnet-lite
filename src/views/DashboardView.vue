@@ -5,6 +5,8 @@
       <Tag v-if="stats?.term" :value="stats.term" severity="secondary" icon="pi pi-calendar" />
     </div>
 
+    <AsOfReadOnlyBanner />
+
     <!-- Saat dengesi: dağıtılabilir azami, dağıtılmış, kalan -->
     <Card>
       <template #title>{{ labels.dashboard.hourBalance }}</template>
@@ -154,13 +156,18 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { dashboardApi } from '../api/dashboard'
 import type { DashboardStats } from '../api/dashboard'
 import { labels } from '../i18n/labels'
-import { activeTerm } from '../composables/useTerm'
+import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
+import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
 
 const toast = useToast()
+const { activeTerm } = storeToRefs(useTermStore())
+const { requestAsOf } = storeToRefs(useAsOfDateStore())
 const stats = ref<DashboardStats | null>(null)
 
 const isOverCapacity = computed(() => (stats.value?.remainingHours ?? 0) < 0)
@@ -224,15 +231,15 @@ const attentionItems = computed(() => {
 
 async function load(): Promise<void> {
   try {
-    stats.value = await dashboardApi.get()
+    stats.value = await dashboardApi.get(requestAsOf.value)
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : labels.common.error
     toast.add({ severity: 'error', summary: labels.common.error, detail, life: 6000 })
   }
 }
 
-// Dönem değişince sayılar da değişmeli.
-watch(activeTerm, load)
+// Dönem ya da tarihteki durum değişince sayılar da değişmeli.
+watch([activeTerm, requestAsOf], load)
 
 onMounted(load)
 </script>

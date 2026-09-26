@@ -1,4 +1,4 @@
-use crate::db::{settings, teaching_load, AppState};
+use crate::db::{settings, teaching_load, terms, AppState};
 use crate::error::{AppError, AppResult};
 use crate::services::commission_minutes;
 use serde::Serialize;
@@ -21,12 +21,22 @@ pub async fn save_settings(
 /// `save_settings`'in gerçek mantığı (bkz. `create_term_in_pool` ile aynı
 /// ayrım). Komisyon tutanağının müdür/alan adı ayarları başlığa basıldığından
 /// yazmadan önce doğrulanır; tek geçersiz değer bütün kaydı reddeder.
+///
+/// Kenar çubuğundaki dönem seçici serbest metin kabul eder ve `create_term`'i
+/// atlayarak doğrudan `active_term` ayarını yazabilir (bilinen kusur — bkz.
+/// brief). Bu yüzden yazımdan sonra `terms::ensure` çağrılır: kaydedilen
+/// dönem `terms` tablosunda yoksa varsayılan tarihlerle açılır, aksi hâlde
+/// `teaching_load::current_as_of` gibi dönem tarihine bağımlı her sorgu
+/// "Dönem bulunamadı" ile kırılır.
 async fn save_settings_in_pool(
     pool: &sqlx::SqlitePool,
     entries: &BTreeMap<String, String>,
 ) -> AppResult<BTreeMap<String, String>> {
     commission_minutes::validate_minutes_settings(entries)?;
     settings::set_many(pool, entries).await?;
+    if let Some(active_term) = entries.get("active_term") {
+        terms::ensure(pool, active_term).await?;
+    }
     settings::get_all(pool).await
 }
 
@@ -144,6 +154,12 @@ async fn create_term_in_pool(
 
     let known = settings::known_terms(pool).await?;
     let already_existed = known.iter().any(|known_term| known_term == &term);
+
+    // `terms` satırı olmadan dönem yalnızca "bilinir" görünür, tarihe bağımlı
+    // her sorgu (`teaching_load::current_as_of` vb.) "Dönem bulunamadı" ile
+    // kırılır. İdempotent: dönem zaten bilinse bile `ensure` mevcut satıra
+    // dokunmaz (bkz. `terms::ensure_in`).
+    terms::ensure(pool, &term).await?;
 
     let (teaching_load_rows_copied, teaching_load_copy_skipped) =
         match copy_teaching_load_from_term {
@@ -365,6 +381,98 @@ mod tests {
         let target = teaching_load::list_for_term(&pool, "2027-2028/1").await.unwrap();
         assert_eq!(target.len(), 1);
         assert_eq!(target[0].branch, "Zaten Var Olan Dal", "mevcut satır korunmalı");
+    }
+
+    /// Kök neden testi: `create_term` yalnızca dönemi "bilindik" yapmakla
+    /// kalmamalı, `terms` tablosuna da bir satır yazmalı — aksi hâlde
+    /// `teaching_load::current_as_of` gibi tarihe bağımlı her sorgu
+    /// "Dönem bulunamadı" ile kırılır (bkz. brief teşhisi).
+    #[tokio::test]
+    async fn create_term_creates_a_terms_row_with_default_dates() {
+        let (_dir, pool) = test_pool().await;
+
+        create_term_in_pool(&pool, "2027-2028/1".into(), None).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let fetched = terms::get_in(&mut conn, "2027-2028/1").await.unwrap();
+        let expected = crate::domain::terms::TermDates::default_for("2027-2028/1");
+        assert_eq!(fetched.start, expected.start);
+        assert_eq!(fetched.end, expected.end);
+        assert!(!fetched.dates_confirmed);
+    }
+
+    /// Regresyon: `create_term` ile açılan bir dönem, tarihe bağımlı
+    /// sorgular için hemen kullanılabilir olmalı — 0006'dan sonra açılan
+    /// hiçbir dönemde bu böyle DEĞİLDİ.
+    #[tokio::test]
+    async fn create_term_lets_teaching_load_current_as_of_resolve_the_new_term() {
+        let (_dir, pool) = test_pool().await;
+
+        create_term_in_pool(&pool, "2027-2028/1".into(), None).await.unwrap();
+
+        let as_of = teaching_load::current_as_of(&pool, "2027-2028/1").await.unwrap();
+        assert!(as_of >= crate::domain::terms::TermDates::default_for("2027-2028/1").start);
+    }
+
+    /// `create_term` zaten bilinen bir dönemi yeniden çağırdığında,
+    /// kullanıcının önceden onayladığı tarihlere ASLA dokunmamalı.
+    #[tokio::test]
+    async fn create_term_does_not_touch_confirmed_dates_of_an_existing_term() {
+        let (_dir, pool) = test_pool().await;
+        let confirmed = crate::domain::terms::TermDates {
+            term: "2026-2027/1".into(),
+            start: ymd(2026, 9, 15),
+            end: ymd(2027, 1, 20),
+            dates_confirmed: true,
+        };
+        {
+            let mut conn = pool.acquire().await.unwrap();
+            sqlx::query("UPDATE terms SET start_date = ?1, end_date = ?2, dates_confirmed = 1 WHERE term = ?3")
+                .bind(confirmed.start)
+                .bind(confirmed.end)
+                .bind(&confirmed.term)
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+
+        create_term_in_pool(&pool, "2026-2027/1".into(), None).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let fetched = terms::get_in(&mut conn, "2026-2027/1").await.unwrap();
+        assert_eq!(fetched, confirmed);
+    }
+
+    /// Yeni bir dönemi görünür kılan üçüncü yol: kenar çubuğundaki dönem
+    /// seçicisi `save_settings` ile doğrudan `active_term` yazar,
+    /// `create_term`'i hiç ÇAĞIRMAZ (bkz. brief teşhisi).
+    #[tokio::test]
+    async fn save_settings_writing_a_new_active_term_creates_a_terms_row() {
+        let (_dir, pool) = test_pool().await;
+        let mut entries = BTreeMap::new();
+        entries.insert("active_term".to_string(), "2027-2028/2".to_string());
+
+        save_settings_in_pool(&pool, &entries).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let fetched = terms::get_in(&mut conn, "2027-2028/2").await.unwrap();
+        assert!(!fetched.dates_confirmed);
+    }
+
+    fn ymd(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    /// `list_terms_with_dates`'in temeli `terms::list`tir; yeni açılan
+    /// dönem satırı oluşmadan orada hiç görünemezdi (bkz. brief teşhisi).
+    #[tokio::test]
+    async fn create_term_makes_the_new_term_appear_in_terms_list() {
+        let (_dir, pool) = test_pool().await;
+
+        create_term_in_pool(&pool, "2027-2028/1".into(), None).await.unwrap();
+
+        let listed = terms::list(&pool).await.unwrap();
+        assert!(listed.iter().any(|t| t.term == "2027-2028/1"));
     }
 
     #[tokio::test]

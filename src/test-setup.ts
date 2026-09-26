@@ -1,6 +1,16 @@
-import { vi } from 'vitest'
+import { beforeEach, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 
-// jsdom `matchMedia` sağlamaz; tema composable'ı sistem tercihini onunla okur.
+// Store artık bileşen ömründen uzun yaşıyor; her testten önce YENİ bir Pinia
+// etkinleştirilir ki testler arasında seçim durumu sızmasın. Bileşen
+// `mount()`'ları `global.plugins`'e Pinia eklemese de burada etkinleştirilen
+// örneğe düşer (Pinia, enjeksiyon bağlamında bulamazsa `activePinia`'ya
+// geri döner).
+beforeEach(() => {
+  setActivePinia(createPinia())
+})
+
+// jsdom `matchMedia` sağlamaz; tema store'u sistem tercihini onunla okur.
 // Varsayılan olarak açık tema döndürülür.
 if (typeof window.matchMedia !== 'function') {
   Object.defineProperty(window, 'matchMedia', {

@@ -9,7 +9,13 @@
 </template>
 
 <script setup lang="ts">
+import { storeToRefs } from 'pinia'
 import AppSidebar from './components/layout/AppSidebar.vue'
 import LoginView from './views/LoginView.vue'
-import { isAuthenticated } from './composables/useAuth'
+import { useAuthStore } from './stores/auth'
+
+// Oturum kapanınca ekran seçimleri (öğretmen seçimi, tarihçe filtreleri,
+// aramalar) `stores/auth.ts`ın `signOut` eyleminde sıfırlanır; başka bir
+// kullanıcı öncekinin filtrelerini devralmaz.
+const { isAuthenticated } = storeToRefs(useAuthStore())
 </script>

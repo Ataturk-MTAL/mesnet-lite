@@ -1,3 +1,4 @@
+use crate::db::read_at::ReadAt;
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -13,55 +14,75 @@ pub struct AvailabilitySlot {
     pub hour: i64,
 }
 
-/// Bir öğretmenin verilen dönemdeki boş saatleri (SON durum).
-///
-/// Okuma `teacher_schedule_periods`'ın AÇIK aralığından (`valid_to IS NULL`)
-/// yapılır: kullanıcı kararı "her halükarda son düzenleme etkin" — gelecek
-/// tarihli bir değişiklik de o öğretmenin son durumudur. Tarih itibarıyla
-/// okuma (`as_of`) bu işte yoktur. Programı olmayan öğretmen için boş liste
-/// döner (hata değil): "boş saat girilmemiş" geçerli bir durumdur.
+/// Bir öğretmenin verilen dönemdeki boş saatleri; her zaman `ReadAt::Latest`
+/// davranışı (SON durum): kullanıcı kararı "her halükarda son düzenleme
+/// etkin" — gelecek tarihli bir değişiklik de o öğretmenin son durumudur
+/// (bkz. `db::read_at::ReadAt` başlığı). `list_all`in aksine burada `AsOf`
+/// YOKTUR: bu fonksiyonun üretimde hiçbir çağıranı yok (yalnız testler);
+/// tarihe göre okuma ihtiyacı panolara zaten `list_all` üzerinden sağlanır
+/// (spec §6). Programı olmayan öğretmen için boş liste döner (hata değil):
+/// "boş saat girilmemiş" geçerli bir durumdur.
 pub async fn list_for_teacher(
     pool: &SqlitePool,
     teacher_id: i64,
     term: &str,
 ) -> AppResult<Vec<AvailabilitySlot>> {
-    Ok(sqlx::query_as::<_, AvailabilitySlot>(&format!(
-        "{OPEN_SLOTS_SQL} AND p.teacher_id = ?2 ORDER BY day_of_week, hour"
-    ))
-    .bind(term)
-    .bind(teacher_id)
-    .fetch_all(pool)
-    .await?)
+    // `&ReadAt::Latest` hiçbir `?N` üretmez (bkz. `condition_with_alias`),
+    // bu yüzden `?2` burada güvenle `teacher_id`ye ayrılabilir.
+    let sql = format!(
+        "{} AND p.teacher_id = ?2 ORDER BY day_of_week, hour",
+        open_slots_sql_as_of(&ReadAt::Latest, 2)
+    );
+    Ok(sqlx::query_as::<_, AvailabilitySlot>(&sql)
+        .bind(term)
+        .bind(teacher_id)
+        .fetch_all(pool)
+        .await?)
 }
 
-/// Dönemdeki tüm öğretmenlerin boş saatleri. Dağıtım motoru, atama panosu ve
-/// müsaitlik ekranı aynı okuyucudan beslenir; böylece biri eski, biri yeni
-/// veriye bakamaz.
-pub async fn list_all(pool: &SqlitePool, term: &str) -> AppResult<Vec<AvailabilitySlot>> {
-    Ok(sqlx::query_as::<_, AvailabilitySlot>(&format!(
-        "{OPEN_SLOTS_SQL} ORDER BY teacher_id, day_of_week, hour"
-    ))
-    .bind(term)
-    .fetch_all(pool)
-    .await?)
+/// Dönemdeki tüm öğretmenlerin boş saatleri, `read_at`e göre (spec §6).
+/// Dağıtım motoru, atama panosu ve müsaitlik ekranı aynı okuyucudan
+/// beslenir; böylece biri eski, biri yeni veriye bakamaz.
+///
+/// `Latest`, "her halükarda son düzenleme etkin" kararını korur: AÇIK
+/// (`valid_to IS NULL`) satır okunur, gelecek tarihli bir değişiklik de
+/// hemen görünür. `AsOf(d)` ise `d` gününde geçerli satırı okur — kullanıcı
+/// bugün DIŞINDA bir tarih seçtiğinde geçmişteki/gelecekteki GERÇEK program
+/// budur.
+pub async fn list_all(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<AvailabilitySlot>> {
+    let sql = format!(
+        "{} ORDER BY teacher_id, day_of_week, hour",
+        open_slots_sql_as_of(read_at, 2)
+    );
+    let mut query = sqlx::query_as::<_, AvailabilitySlot>(&sql).bind(term);
+    if let Some(date) = read_at.value() {
+        query = query.bind(date);
+    }
+    Ok(query.fetch_all(pool).await?)
 }
 
-/// `slots_json` (`[[gün, saat], ...]`, bkz. `EventPayload::ScheduleSet`)
-/// SQLite'ın `json_each`'iyle satırlara açılır; böylece dönüş biçimi
-/// (`teacher_id, day_of_week, hour`) eski tablodakiyle aynı kalır.
+/// `list_all` ve `list_for_teacher`in paylaştığı SQL gövdesi (DRY): `read_at`e
+/// göre WHERE koşulu üretir. `slots_json` (`[[gün, saat], ...]`, bkz.
+/// `EventPayload::ScheduleSet`) SQLite'ın `json_each`'iyle satırlara açılır;
+/// böylece dönüş biçimi (`teacher_id, day_of_week, hour`) eski tablodakiyle
+/// aynı kalır.
 ///
 /// `teachers` ile birleştirme bilinçlidir: projeksiyon tablosunda öğretmene
 /// FK yoktur, eski tablodaki `ON DELETE CASCADE`'in karşılığı burada
-/// sağlanır — silinen öğretmenin programı görünmez.
-/// `?1` her zaman dönemdir.
-const OPEN_SLOTS_SQL: &str = "SELECT DISTINCT
-        p.teacher_id AS teacher_id,
-        CAST(json_extract(slot.value, '$[0]') AS INTEGER) AS day_of_week,
-        CAST(json_extract(slot.value, '$[1]') AS INTEGER) AS hour
-     FROM teacher_schedule_periods p
-     JOIN teachers t ON t.id = p.teacher_id
-     JOIN json_each(p.slots_json) slot
-     WHERE p.term = ?1 AND p.valid_to IS NULL";
+/// sağlanır — silinen öğretmenin programı görünmez. `?1` her zaman dönemdir.
+fn open_slots_sql_as_of(read_at: &ReadAt, param: usize) -> String {
+    format!(
+        "SELECT DISTINCT
+            p.teacher_id AS teacher_id,
+            CAST(json_extract(slot.value, '$[0]') AS INTEGER) AS day_of_week,
+            CAST(json_extract(slot.value, '$[1]') AS INTEGER) AS hour
+         FROM teacher_schedule_periods p
+         JOIN teachers t ON t.id = p.teacher_id
+         JOIN json_each(p.slots_json) slot
+         WHERE p.term = ?1 AND {}",
+        read_at.condition_with_alias("p.", param)
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -212,7 +233,7 @@ mod tests {
         let teacher_id = a_teacher(&pool, "Yilmaz").await;
 
         assert!(list_for_teacher(&pool, teacher_id, TERM).await.unwrap().is_empty());
-        assert!(list_all(&pool, TERM).await.unwrap().is_empty());
+        assert!(list_all(&pool, TERM, &ReadAt::Latest).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -224,7 +245,7 @@ mod tests {
         set_schedule(&pool, second, &[(2, 4), (2, 3)], None, planning_today()).await;
         set_schedule(&pool, first, &[(1, 2)], None, planning_today()).await;
 
-        let all = list_all(&pool, TERM).await.unwrap();
+        let all = list_all(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert_eq!(
             all,
             vec![
@@ -233,7 +254,7 @@ mod tests {
                 AvailabilitySlot { teacher_id: second, day_of_week: 2, hour: 4 },
             ]
         );
-        assert!(list_all(&pool, "2027-2028/1").await.unwrap().is_empty(), "başka dönemin verisi karışmamalı");
+        assert!(list_all(&pool, "2027-2028/1", &ReadAt::Latest).await.unwrap().is_empty(), "başka dönemin verisi karışmamalı");
         assert_eq!(list_for_teacher(&pool, first, TERM).await.unwrap().len(), 1);
     }
 
@@ -247,7 +268,7 @@ mod tests {
 
         teachers::remove(&pool, teacher_id).await.unwrap();
 
-        assert!(list_all(&pool, TERM).await.unwrap().is_empty());
+        assert!(list_all(&pool, TERM, &ReadAt::Latest).await.unwrap().is_empty());
     }
 
     /// Gerçek veritabanı senaryosu: kullanıcının 0005 şemasında kayıtlı
@@ -300,6 +321,6 @@ mod tests {
         // migrations/0009_lesson_numbering.sql). Kayma -7: 9->2, 10->3, 15->8.
         let slots = list_for_teacher(&pool, teacher_id, TERM).await.unwrap();
         assert_eq!(pairs(&slots), vec![(1, 2), (1, 3), (5, 8)]);
-        assert_eq!(list_all(&pool, TERM).await.unwrap().len(), 3);
+        assert_eq!(list_all(&pool, TERM, &ReadAt::Latest).await.unwrap().len(), 3);
     }
 }

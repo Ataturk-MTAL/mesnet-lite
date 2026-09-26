@@ -1,4 +1,5 @@
 import { call } from './client'
+import type { EffectiveChangeInput } from '../types/models'
 
 /** MESNET'in `İşletme Saat Ayarları` tablosunun bir satırı. */
 export interface HoursRow {
@@ -67,8 +68,19 @@ export interface DistributionOutcome {
 }
 
 export const hoursApi = {
-  get: (): Promise<HoursBoard> => call('get_hours_board'),
-  save: (rows: HoursInput[]): Promise<HoursBoard> => call('save_company_hours', { rows }),
+  /** `asOf` `null` ise güncel kayıt (düzenlenebilir); bir tarihse o güne göre okuma (salt okunur). */
+  get: (asOf: string | null = null): Promise<HoursBoard> => call('get_hours_board', { asOf }),
+  /**
+   * Dönem başladıysa (`isPlanning === false`) `change` zorunlu etkiyle
+   * gönderilmelidir; arka uç tarihsiz yazımı reddeder. Planlamada `change`
+   * verilmezse ikisi de `null` gider.
+   */
+  save: (rows: HoursInput[], change?: EffectiveChangeInput): Promise<HoursBoard> =>
+    call('save_company_hours', {
+      rows,
+      effectiveDate: change?.effectiveDate ?? null,
+      reason: change?.reason ?? null,
+    }),
   /** Öneri üretir; kaydetmez. */
   autoDistribute: (rows: AutoDistributeRow[]): Promise<DistributionOutcome> =>
     call('auto_distribute_hours', { rows }),

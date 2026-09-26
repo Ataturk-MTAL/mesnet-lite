@@ -212,6 +212,8 @@ export const labels = {
     capacity: 'Kapasite',
     removeAssignment: 'Atamayı kaldır',
     clearAll: 'Tüm Atamaları Sil',
+    clearAllDisabledHint:
+      'Dönem başladıktan sonra tüm atamalar toplu silinemez; her atama tek tek, yürürlük tarihiyle çıkarılmalıdır.',
     clearConfirm:
       'Bu dönemdeki TÜM atamalar silinecek. Saat takdirleri korunur. Devam edilsin mi?',
     cleared: 'Atamalar silindi',
@@ -243,6 +245,9 @@ export const labels = {
     hoursSuffix: 'saat',
     assignedSection: 'Atanmış İşletmeler',
     districtUnknown: 'İlçe belirsiz',
+    overlapViolation: (companyName: string) =>
+      `Blok, ${companyName} işletmesinin bloğuyla çakışıyor.`,
+    unknownCompanyFallback: 'başka bir atama',
   },
   availability: {
     title: 'Öğretmen/Sınıf Programı',
@@ -331,6 +336,27 @@ export const labels = {
     button: 'Excel Olarak Kaydet',
     saved: 'Dosya kaydedildi',
     empty: 'Dışa aktarılacak kayıt yok.',
+  },
+  versions: {
+    title: 'Kayıtlı Sürümler',
+    note: 'Her çıktı alındığında bir sürüm otomatik kaydedilir. İstenirse elle de sürüm kaydedilebilir.',
+    empty: 'Henüz kayıtlı sürüm yok. Bir çıktı aldığınızda ilk sürüm otomatik kaydedilecek.',
+    name: 'Ad',
+    term: 'Dönem',
+    date: 'Tarih',
+    kind: 'Tür',
+    kindAuto: 'Otomatik',
+    kindManual: 'Elle',
+    actions: 'İşlemler',
+    exportAction: 'Çıktı Al',
+    unavailable: 'Bu sürümün veritabanı kopyası artık yok; çıktı alınamaz.',
+    deleteConfirm: 'Bu sürüm silinsin mi? Bu işlem geri alınamaz.',
+    deleted: 'Sürüm silindi',
+    save: 'Sürüm Kaydet',
+    saveDialogTitle: 'Sürüm Kaydet',
+    nameLabel: 'Sürüm Adı',
+    namePlaceholder: 'Örn. Kasım ayı puantajı öncesi',
+    saved: 'Sürüm kaydedildi',
   },
   geocoding: {
     title: 'Konumları Bul',
@@ -476,10 +502,13 @@ export const labels = {
     startDate: 'Dönem Başlangıcı',
     endDate: 'Dönem Bitişi',
     datesConfirmed: 'Onaylandı',
+    datesUnconfirmed: 'Onaylanmadı',
+    editDates: 'Tarihleri Düzenle',
+    confirmCheckbox: 'Tarihler onaylandı',
     saveDates: 'Tarihleri Kaydet',
     confirmDates: 'Tarihleri Onayla',
     datesUnconfirmedWarning:
-      'Dönem tarihleri henüz onaylanmadı; varsayılan tarihler kullanılıyor. Yanlışsa değişiklik penceresi de yanlış tarih sınırları uygular.',
+      'Bu dönem için varsayılan tarihler kullanılıyor; dönemin gerçek başlangıç ve bitiş tarihini girip onaylayın. Bugünkü ayın başından önceki günler, onaydan sonra bile geriye dönük değiştirilemez.',
     datesSaved: 'Dönem tarihleri kaydedildi',
     endDateBeforeStart: 'Bitiş tarihi başlangıç tarihinden önce olamaz.',
   },
@@ -559,7 +588,10 @@ export const labels = {
   asOfDate: {
     label: 'Tarihteki Durum',
     today: 'Bugün',
-    readOnlyNote: 'Bugünden farklı bir tarih görüntüleniyor; bu ekran salt okunur.',
+    readOnlyBanner: (date: string) => `${date} tarihindeki durum gösteriliyor; değişiklik yapılamaz.`,
+    readOnlyBannerNote:
+      'Sınıf günleri, ders yükü satırları, işletme ve öğretmen kayıtları gibi tarihçesi tutulmayan bilgiler güncel hâliyle gösterilir.',
+    backToDefault: 'Varsayılan tarihe dön',
   },
   effectiveDateField: {
     contractStart: 'Sözleşme başlangıç tarihi',

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import { ref } from 'vue'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
@@ -10,11 +9,14 @@ import Aura from '@openvue/themes/aura'
 import StudentsView from './StudentsView.vue'
 import { labels } from '../i18n/labels'
 import type { Company, Student, TermWithDates } from '../types/models'
+import { useSelectionStore } from '../stores/selection'
+import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
 
-const listStudentsMock = vi.fn<() => Promise<Student[]>>()
+const listStudentsMock = vi.fn<(asOf: string | null) => Promise<Student[]>>()
 vi.mock('../api/students', () => ({
   studentsApi: {
-    list: () => listStudentsMock(),
+    list: (asOf: string | null = null) => listStudentsMock(asOf),
     listTerms: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
@@ -37,10 +39,6 @@ vi.mock('../api/companies', () => ({
 const listTermsWithDatesMock = vi.fn<() => Promise<TermWithDates[]>>()
 vi.mock('../api/terms', () => ({
   listTermsWithDates: () => listTermsWithDatesMock(),
-}))
-
-vi.mock('../composables/useTerm', () => ({
-  activeTerm: ref('2026-2027/1'),
 }))
 
 function studentFixture(overrides: Partial<Student> = {}): Student {
@@ -92,6 +90,7 @@ beforeEach(() => {
   listCompaniesMock.mockReset()
   listTermsWithDatesMock.mockReset()
   document.body.replaceChildren()
+  useTermStore().activeTerm = '2026-2027/1'
 })
 
 describe('StudentsView — nakil/yerleştirme düğmesi', () => {
@@ -148,5 +147,47 @@ describe('StudentsView — nakil/yerleştirme düğmesi', () => {
     // Assert
     expect(document.body.textContent ?? '').toContain(labels.studentChange.placeTitle)
     wrapper.unmount()
+  })
+})
+
+describe('StudentsView seçim kalıcılığı (Pinia store)', () => {
+  it('arama metni yeniden mount edilince korunur', async () => {
+    // Arrange
+    const wrapper = await mountView([studentFixture()])
+    await wrapper.get('input[type="text"]').setValue('Ayşe')
+    await flushPromises()
+    wrapper.unmount()
+
+    // Act
+    const selection = useSelectionStore()
+    const wrapper2 = await mountView([studentFixture()])
+
+    // Assert
+    expect(selection.studentSearch).toBe('Ayşe')
+    expect((wrapper2.get('input[type="text"]').element as HTMLInputElement).value).toBe('Ayşe')
+    wrapper2.unmount()
+  })
+})
+
+describe('StudentsView tarihteki durum (asOf)', () => {
+  it('varsayılan tarihte liste `null` ile istenir ve yazma düğmeleri açıktır', async () => {
+    const wrapper = await mountView([studentFixture()])
+
+    expect(listStudentsMock).toHaveBeenCalledWith(null)
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(false)
+    const addButton = wrapper.findAll('button').find((b) => b.text() === labels.common.add)
+    expect(addButton?.attributes('disabled')).toBeUndefined()
+  })
+
+  it('geçmiş bir tarih seçilince liste o tarihle istenir, başlık görünür ve yazma düğmeleri kapanır', async () => {
+    useTermStore().activeTermDates = startedTerm
+    useAsOfDateStore().setAsOfDate('2026-09-15')
+    const wrapper = await mountView([studentFixture()])
+
+    expect(listStudentsMock).toHaveBeenCalledWith('2026-09-15')
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(true)
+    const addButton = wrapper.findAll('button').find((b) => b.text() === labels.common.add)
+    expect(addButton?.attributes('disabled')).toBeDefined()
+    expect(wrapper.find(`button[aria-label="${labels.common.edit}"]`).attributes('disabled')).toBeDefined()
   })
 })
