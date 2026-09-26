@@ -5,6 +5,8 @@
       <Tag v-if="activeTerm" :value="activeTerm" severity="secondary" icon="pi pi-calendar" />
     </div>
 
+    <AsOfReadOnlyBanner />
+
     <Message severity="info" :closable="false">{{ labels.importCsv.termNote }}</Message>
 
     <Card>
@@ -12,18 +14,22 @@
       <template #content>
         <div class="file-row">
           <!-- Dosya webview tarafında okunup metin olarak gönderilir; ayrı bir
-               dosya sistemi eklentisine ve izin tanımına gerek kalmaz. -->
+               dosya sistemi eklentisine ve izin tanımına gerek kalmaz. Seçili
+               tarih güncelden farklıysa (salt okunur) içe aktarma kapanır;
+               amaç yalnızca geçmişin çıktısını almaktır. -->
           <input
             ref="fileInput"
             type="file"
             accept=".csv,text/csv"
             class="file-input"
+            :disabled="isReadOnly"
             @change="onFileChange"
           />
           <Button
             :label="labels.importCsv.chooseFile"
             icon="pi pi-file-import"
             severity="secondary"
+            :disabled="isReadOnly"
             @click="fileInput?.click()"
           />
           <span v-if="fileName" class="file-name">{{ fileName }}</span>
@@ -103,6 +109,7 @@
             :label="labels.importCsv.apply"
             icon="pi pi-check"
             :loading="isApplying"
+            :disabled="isReadOnly"
             @click="applyImport"
           />
         </div>
@@ -120,6 +127,7 @@
             accept=".xls,application/vnd.ms-excel"
             multiple
             class="file-input"
+            :disabled="isReadOnly"
             data-testid="student-list-file-input"
             @change="onStudentListFilesChange"
           />
@@ -127,12 +135,13 @@
             :label="labels.studentListImport.chooseFiles"
             icon="pi pi-file-import"
             severity="secondary"
+            :disabled="isReadOnly"
             @click="studentListFileInput?.click()"
           />
           <Button
             :label="labels.studentListImport.previewButton"
             icon="pi pi-eye"
-            :disabled="studentListFiles.length === 0"
+            :disabled="isReadOnly || studentListFiles.length === 0"
             :loading="isPreviewingStudentList"
             data-testid="student-list-preview-button"
             @click="previewStudentList"
@@ -254,6 +263,7 @@
             :label="labels.studentListImport.apply"
             icon="pi pi-check"
             :loading="isLoadingChangeTerm || isApplyingStudentList"
+            :disabled="isReadOnly"
             data-testid="student-list-apply-button"
             @click="openStudentListApplyDialog"
           />
@@ -373,14 +383,17 @@ import {
 } from '../api/studentListImport'
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
 import { filesApi } from '../api/files'
 import { listTermsWithDates } from '../api/terms'
 import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
+import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
 import VersionsPanel from '../components/versions/VersionsPanel.vue'
 import type { TermWithDates } from '../types/models'
 
 const toast = useToast()
 const { activeTerm } = storeToRefs(useTermStore())
+const { requestAsOf, isReadOnly } = storeToRefs(useAsOfDateStore())
 
 // Normal bir çıktı alındıktan sonra yeni bir otomatik sürüm oluşmuş olabilir;
 // liste bu referans üzerinden tazelenir.
@@ -398,11 +411,22 @@ const isPrintingVisits = ref(false)
 const isPrintingMinutesPdf = ref(false)
 const isExportingMinutesXlsx = ref(false)
 
+/**
+ * Çıktı dosya adı: temel ad + dönem + (seçili tarih güncelden farklıysa) o
+ * tarih. Mevcut (sürümsüz, tarihsiz) desenle birebir uyumlu kalır; yalnız
+ * salt okunur durumda tarih eklenir.
+ */
+function buildReportFileName(baseName: string, extension: 'pdf' | 'xlsx'): string {
+  const termPart = activeTerm.value.replace('/', '-')
+  const datePart = requestAsOf.value ? `-${requestAsOf.value}` : ''
+  return `${baseName}-${termPart}${datePart}.${extension}`
+}
+
 async function exportExcel(): Promise<void> {
   isExporting.value = true
   try {
-    const name = `MESNET-${activeTerm.value.replace('/', '-')}.xlsx`
-    const path = await filesApi.exportWorkbook(name)
+    const name = buildReportFileName('MESNET', 'xlsx')
+    const path = await filesApi.exportWorkbook(name, null, requestAsOf.value)
     toast.add({ severity: 'success', summary: labels.export.saved, detail: path, life: 8000 })
     await versionsPanelRef.value?.reload()
   } catch (error: unknown) {
@@ -415,13 +439,13 @@ async function exportExcel(): Promise<void> {
 /** Rapor üretimi ile diske yazmayı tek yerde birleştirir. */
 async function saveReport(
   busy: typeof isPrintingSheet,
-  produce: (fileName: string) => Promise<string>,
+  produce: (fileName: string, asOf: string | null) => Promise<string>,
   baseName: string,
   extension: 'pdf' | 'xlsx' = 'pdf',
 ): Promise<void> {
   busy.value = true
   try {
-    const path = await produce(`${baseName}-${activeTerm.value.replace('/', '-')}.${extension}`)
+    const path = await produce(buildReportFileName(baseName, extension), requestAsOf.value)
     toast.add({ severity: 'success', summary: labels.export.saved, detail: path, life: 8000 })
     await versionsPanelRef.value?.reload()
   } catch (error: unknown) {
@@ -434,7 +458,7 @@ async function saveReport(
 function exportCommissionMinutesPdf(): void {
   void saveReport(
     isPrintingMinutesPdf,
-    filesApi.exportCommissionMinutesPdf,
+    (fileName, asOf) => filesApi.exportCommissionMinutesPdf(fileName, null, asOf),
     'Isletme-Belirleme-Komisyon-Tutanagi',
   )
 }
@@ -442,18 +466,26 @@ function exportCommissionMinutesPdf(): void {
 function exportCommissionMinutesXlsx(): void {
   void saveReport(
     isExportingMinutesXlsx,
-    filesApi.exportCommissionMinutesXlsx,
+    (fileName, asOf) => filesApi.exportCommissionMinutesXlsx(fileName, null, asOf),
     'Isletme-Belirleme-Komisyon-Tutanagi',
     'xlsx',
   )
 }
 
 function exportAssignmentSheet(): void {
-  void saveReport(isPrintingSheet, filesApi.exportAssignmentSheet, 'Gorevlendirme-Cizelgesi')
+  void saveReport(
+    isPrintingSheet,
+    (fileName, asOf) => filesApi.exportAssignmentSheet(fileName, null, asOf),
+    'Gorevlendirme-Cizelgesi',
+  )
 }
 
 function exportVisitLists(): void {
-  void saveReport(isPrintingVisits, filesApi.exportVisitLists, 'Ziyaret-Listeleri')
+  void saveReport(
+    isPrintingVisits,
+    (fileName, asOf) => filesApi.exportVisitLists(fileName, null, asOf),
+    'Ziyaret-Listeleri',
+  )
 }
 
 // Yalnızca mevcut kayıtla çakışan gruplar için anlamlıdır; belirtilmeyen

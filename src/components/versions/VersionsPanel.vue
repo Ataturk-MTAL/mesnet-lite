@@ -17,7 +17,18 @@
       <DataTable :value="versions" :loading="isLoading" dataKey="id" stripedRows :rowClass="rowClass">
         <template #empty>{{ labels.versions.empty }}</template>
 
-        <Column field="name" :header="labels.versions.name" />
+        <Column :header="labels.versions.name">
+          <template #body="{ data }: { data: Version }">
+            <span class="name-cell">
+              {{ data.name }}
+              <Tag
+                v-if="showAsOfTag(data)"
+                :value="labels.versions.asOfTag(formatAsOfDate(data.asOf as string))"
+                severity="info"
+              />
+            </span>
+          </template>
+        </Column>
         <Column field="term" :header="labels.versions.term" />
 
         <Column :header="labels.versions.date">
@@ -68,11 +79,17 @@
 
   <Menu ref="exportMenuRef" :model="exportMenuItems" :popup="true" />
 
-  <SaveVersionDialog v-model:visible="isSaveDialogOpen" :saving="isSavingVersion" @save="handleSaveVersion" />
+  <SaveVersionDialog
+    v-model:visible="isSaveDialogOpen"
+    :saving="isSavingVersion"
+    :as-of-date="requestAsOf"
+    @save="handleSaveVersion"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import type { MenuItem } from 'openvue/menuitem'
@@ -80,7 +97,8 @@ import type { MenuMethods } from 'openvue/menu'
 import { versionsApi } from '../../api/versions'
 import { filesApi } from '../../api/files'
 import { labels } from '../../i18n/labels'
-import { formatVersionTimestamp, versionDateForFileName } from '../../utils/versionDate'
+import { formatAsOfDate, formatVersionTimestamp, versionDateForFileName } from '../../utils/versionDate'
+import { useAsOfDateStore } from '../../stores/asOfDate'
 import type { ExportTrigger, Version } from '../../types/models'
 import SaveVersionDialog from './SaveVersionDialog.vue'
 
@@ -90,7 +108,7 @@ interface ReportDescriptor {
   label: string
   baseName: string
   extension: 'pdf' | 'xlsx'
-  exportFn: (fileName: string, versionId: number | null) => Promise<string>
+  exportFn: (fileName: string, versionId: number | null, asOf: string | null) => Promise<string>
 }
 
 // Mevcut dosya adı deseniyle birebir aynı temel adlar (bkz. ImportExportView.vue).
@@ -134,6 +152,7 @@ const REPORT_DESCRIPTORS: ReportDescriptor[] = [
 
 const toast = useToast()
 const confirm = useConfirm()
+const { requestAsOf } = storeToRefs(useAsOfDateStore())
 
 const versions = ref<Version[]>([])
 const isLoading = ref(false)
@@ -167,13 +186,24 @@ function rowClass(data: Version): Record<string, boolean> {
   return { 'row-unavailable': !data.isAvailable }
 }
 
-/** Bir sürümden tek bir çıktı üretir ve indirilenler klasörüne kaydeder. */
+/**
+ * Bir sürümün adı zaten "itibarıyla" içeriyorsa (otomatik sürümler bu eki
+ * arka uçta zaten alır) etiket tekrar gösterilmez.
+ */
+function showAsOfTag(version: Version): boolean {
+  return version.asOf !== null && !version.name.includes('itibarıyla')
+}
+
+/**
+ * Bir sürümden tek bir çıktı üretir ve indirilenler klasörüne kaydeder.
+ * `asOf` GÖNDERİLMEZ (`null`): arka uç sürümün kendi kayıtlı tarihini kullanır.
+ */
 async function exportVersion(version: Version, descriptor: ReportDescriptor): Promise<void> {
   exportingVersionId.value = version.id
   try {
     const versionSuffix = `surum-${versionDateForFileName(version.createdAt)}`
     const fileName = `${descriptor.baseName}-${version.term.replace('/', '-')}-${versionSuffix}.${descriptor.extension}`
-    const path = await descriptor.exportFn(fileName, version.id)
+    const path = await descriptor.exportFn(fileName, version.id, null)
     toast.add({ severity: 'success', summary: labels.export.saved, detail: path, life: 8000 })
   } catch (error: unknown) {
     showError(error)
@@ -219,7 +249,7 @@ function confirmDelete(version: Version): void {
 async function handleSaveVersion(name: string): Promise<void> {
   isSavingVersion.value = true
   try {
-    await versionsApi.create(name)
+    await versionsApi.create(name, requestAsOf.value)
     toast.add({ severity: 'success', summary: labels.versions.saved, life: 2500 })
     isSaveDialogOpen.value = false
     await load()
@@ -245,6 +275,7 @@ defineExpose({ reload: load })
 }
 .hint { color: var(--p-text-muted-color); font-size: 0.75rem; }
 .row-actions { display: flex; gap: 0.5rem; }
+.name-cell { display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 
 /* Veritabanı kopyası artık olmayan sürümler görsel olarak soluklaştırılır. */
 :deep(.row-unavailable) { opacity: 0.55; }

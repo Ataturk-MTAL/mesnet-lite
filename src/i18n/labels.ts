@@ -357,6 +357,8 @@ export const labels = {
     nameLabel: 'Sürüm Adı',
     namePlaceholder: 'Örn. Kasım ayı puantajı öncesi',
     saved: 'Sürüm kaydedildi',
+    saveAsOfNote: (date: string) => `Bu sürüm ${date} tarihindeki durumu yansıtacak.`,
+    asOfTag: (date: string) => `${date} itibarıyla`,
   },
   geocoding: {
     title: 'Konumları Bul',

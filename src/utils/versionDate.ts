@@ -15,3 +15,11 @@ export function versionDateForFileName(createdAt: string): string {
   const match = /^(\d{4}-\d{2}-\d{2})T/.exec(createdAt)
   return match ? match[1] : createdAt
 }
+
+/** `Version.asOf` gibi salt 'YYYY-MM-DD' tarihlerini 'dd.MM.yyyy' biçimine çevirir. */
+export function formatAsOfDate(asOf: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(asOf)
+  if (!match) return asOf
+  const [, year, month, day] = match
+  return `${day}.${month}.${year}`
+}
