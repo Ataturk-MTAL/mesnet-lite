@@ -18,3 +18,20 @@ pub mod student_list_commands;
 pub mod teacher_commands;
 pub mod term_commands;
 pub mod user_commands;
+pub mod version_commands;
+
+use std::path::PathBuf;
+
+use tauri::Manager;
+
+use crate::error::{AppError, AppResult};
+
+/// Uygulama veri dizinini bulur. `backup_commands` (yedek/geri yükleme) ve
+/// `version_commands`/beş dışa aktarım komutu (kayıtlı sürümler) AYNI
+/// dizinden AYNI şekilde türetir; iki yerde ayrı ayrı yazılmasın diye tek
+/// burada tanımlıdır.
+pub(crate) fn resolve_app_data_dir(app: &tauri::AppHandle) -> AppResult<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .map_err(|e| AppError::Io(format!("Uygulama veri klasörü bulunamadı: {e}")))
+}

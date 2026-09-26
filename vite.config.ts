@@ -49,6 +49,7 @@ export default defineConfig(() => ({
       "openvue/drawer",
       "openvue/inputnumber",
       "openvue/inputtext",
+      "openvue/menu",
       "openvue/message",
       "openvue/panel",
       "openvue/password",

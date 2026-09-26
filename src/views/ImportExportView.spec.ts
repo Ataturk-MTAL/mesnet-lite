@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
+import ConfirmationService from 'openvue/confirmationservice'
+import Tooltip from 'openvue/tooltip'
 import Aura from '@openvue/themes/aura'
 import ImportExportView from './ImportExportView.vue'
 import { labels } from '../i18n/labels'
@@ -24,10 +26,24 @@ vi.mock('openvue/usetoast', () => ({
 function mountView() {
   return mount(ImportExportView, {
     global: {
-      plugins: [[OpenVue, { theme: { preset: Aura, options: { darkModeSelector: '.app-dark' } } }], ToastService],
+      // ConfirmationService: VersionsPanel'in silme onayı `useConfirm()` gerektirir.
+      plugins: [
+        [OpenVue, { theme: { preset: Aura, options: { darkModeSelector: '.app-dark' } } }],
+        ToastService,
+        ConfirmationService,
+      ],
+      directives: { tooltip: Tooltip },
     },
     attachTo: document.body,
   })
+}
+
+/** VersionsPanel her montajda `list_versions` çağırır; testin asıl konusu bu
+ * olmadığında boş liste yeterlidir. */
+function withVersionsList(
+  handler: (command: string, args?: Record<string, unknown>) => unknown,
+): (command: string, args?: Record<string, unknown>) => Promise<unknown> {
+  return async (command, args) => (command === 'list_versions' ? [] : handler(command, args))
 }
 
 function clickButton(wrapper: ReturnType<typeof mountView>, testId: string): void {
@@ -58,17 +74,20 @@ describe('ImportExportView commission minutes', () => {
   })
 
   it('exports the PDF through export_commission_minutes_pdf and saves it', async () => {
-    callMock.mockImplementation(async (command) =>
-      command === 'export_commission_minutes_pdf' ? [1, 2, 3] : '/Downloads/dosya.pdf',
+    callMock.mockImplementation(
+      withVersionsList((command) =>
+        command === 'export_commission_minutes_pdf' ? [1, 2, 3] : '/Downloads/dosya.pdf',
+      ),
     )
     const wrapper = mountView()
+    await flushPromises() // sürüm listesinin ilk yüklemesi
 
     clickButton(wrapper, 'commission-minutes-pdf-button')
-    await vi.waitFor(() => expect(callMock).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(callMock.mock.calls.some((c) => c[0] === 'save_to_downloads')).toBe(true))
 
-    expect(callMock.mock.calls[0][0]).toBe('export_commission_minutes_pdf')
-    expect(callMock.mock.calls[1][0]).toBe('save_to_downloads')
-    const saveArgs = callMock.mock.calls[1][1] as { fileName: string; bytes: number[] }
+    expect(callMock.mock.calls.some((c) => c[0] === 'export_commission_minutes_pdf')).toBe(true)
+    const saveCall = callMock.mock.calls.find((c) => c[0] === 'save_to_downloads')!
+    const saveArgs = saveCall[1] as { fileName: string; bytes: number[] }
     expect(saveArgs.fileName).toBe('Isletme-Belirleme-Komisyon-Tutanagi-2026-2027-1.pdf')
     expect(saveArgs.bytes).toEqual([1, 2, 3])
 
@@ -76,17 +95,59 @@ describe('ImportExportView commission minutes', () => {
   })
 
   it('exports the workbook through export_commission_minutes_xlsx and saves it', async () => {
-    callMock.mockImplementation(async (command) =>
-      command === 'export_commission_minutes_xlsx' ? [9] : '/Downloads/dosya.xlsx',
+    callMock.mockImplementation(
+      withVersionsList((command) =>
+        command === 'export_commission_minutes_xlsx' ? [9] : '/Downloads/dosya.xlsx',
+      ),
     )
     const wrapper = mountView()
+    await flushPromises() // sürüm listesinin ilk yüklemesi
 
     clickButton(wrapper, 'commission-minutes-xlsx-button')
-    await vi.waitFor(() => expect(callMock).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(callMock.mock.calls.some((c) => c[0] === 'save_to_downloads')).toBe(true))
 
-    expect(callMock.mock.calls[0][0]).toBe('export_commission_minutes_xlsx')
-    const saveArgs = callMock.mock.calls[1][1] as { fileName: string }
+    expect(callMock.mock.calls.some((c) => c[0] === 'export_commission_minutes_xlsx')).toBe(true)
+    const saveCall = callMock.mock.calls.find((c) => c[0] === 'save_to_downloads')!
+    const saveArgs = saveCall[1] as { fileName: string }
     expect(saveArgs.fileName).toBe('Isletme-Belirleme-Komisyon-Tutanagi-2026-2027-1.xlsx')
+
+    wrapper.unmount()
+  })
+
+  it('exports the PDF from a chosen version without recording a new automatic version', async () => {
+    callMock.mockImplementation(
+      withVersionsList((command) =>
+        command === 'export_commission_minutes_pdf' ? [1, 2, 3] : '/Downloads/dosya.pdf',
+      ),
+    )
+    const wrapper = mountView()
+    await flushPromises()
+
+    clickButton(wrapper, 'commission-minutes-pdf-button')
+    await vi.waitFor(() => expect(callMock.mock.calls.some((c) => c[0] === 'save_to_downloads')).toBe(true))
+
+    const exportCall = callMock.mock.calls.find((c) => c[0] === 'export_commission_minutes_pdf')!
+    expect(exportCall[1]).toEqual({ versionId: null })
+
+    wrapper.unmount()
+  })
+
+  it('reloads the saved versions list after a normal export succeeds', async () => {
+    callMock.mockImplementation(
+      withVersionsList((command) =>
+        command === 'export_commission_minutes_pdf' ? [1, 2, 3] : '/Downloads/dosya.pdf',
+      ),
+    )
+    const wrapper = mountView()
+    await flushPromises()
+    const listCallsBeforeExport = callMock.mock.calls.filter((c) => c[0] === 'list_versions').length
+
+    clickButton(wrapper, 'commission-minutes-pdf-button')
+    await vi.waitFor(() =>
+      expect(callMock.mock.calls.filter((c) => c[0] === 'list_versions').length).toBeGreaterThan(
+        listCallsBeforeExport,
+      ),
+    )
 
     wrapper.unmount()
   })
@@ -94,6 +155,8 @@ describe('ImportExportView commission minutes', () => {
   it('shows the Rust error message and does not save when export fails', async () => {
     callMock.mockRejectedValue(new Error('Komisyon üyesi eksik'))
     const wrapper = mountView()
+    await flushPromises()
+    toastAddMock.mockClear() // mount sırasında sürüm listesi de aynı hatayı gösterir; asıl konu dışa aktarım
 
     clickButton(wrapper, 'commission-minutes-pdf-button')
     await flushPromises()
@@ -102,8 +165,8 @@ describe('ImportExportView commission minutes', () => {
       expect.objectContaining({ severity: 'error', detail: 'Komisyon üyesi eksik' }),
     )
 
-    expect(callMock).toHaveBeenCalledTimes(1)
-    expect(callMock.mock.calls[0][0]).toBe('export_commission_minutes_pdf')
+    expect(callMock.mock.calls.filter((c) => c[0] === 'export_commission_minutes_pdf')).toHaveLength(1)
+    expect(callMock.mock.calls.some((c) => c[0] === 'save_to_downloads')).toBe(false)
 
     wrapper.unmount()
   })
@@ -191,17 +254,19 @@ async function selectStudentListFile(wrapper: ReturnType<typeof mountView>, name
 
 describe('ImportExportView e-Okul sınıf listesi içe aktarma', () => {
   it('reads the selected file as raw bytes and calls preview_student_list_import with them', async () => {
-    callMock.mockImplementation(async (command) =>
-      command === 'preview_student_list_import' ? studentListPreviewFixture() : undefined,
+    callMock.mockImplementation(
+      withVersionsList((command) =>
+        command === 'preview_student_list_import' ? studentListPreviewFixture() : undefined,
+      ),
     )
     const wrapper = mountView()
 
     await selectStudentListFile(wrapper)
     clickButton(wrapper, 'student-list-preview-button')
-    await vi.waitFor(() => expect(callMock).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(callMock.mock.calls.some((c) => c[0] === 'preview_student_list_import')).toBe(true))
 
-    expect(callMock.mock.calls[0][0]).toBe('preview_student_list_import')
-    const args = callMock.mock.calls[0][1] as { files: Array<{ name: string; content: number[] }> }
+    const previewCall = callMock.mock.calls.find((c) => c[0] === 'preview_student_list_import')!
+    const args = previewCall[1] as { files: Array<{ name: string; content: number[] }> }
     expect(args.files).toEqual([{ name: '12-C.xls', content: [1, 2, 3] }])
 
     await flushPromises()

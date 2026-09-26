@@ -39,12 +39,14 @@ declare module 'vue' {
     InputNumber: typeof import('openvue/inputnumber')['default']
     InputText: typeof import('openvue/inputtext')['default']
     LocationPickerMap: typeof import('./src/components/map/LocationPickerMap.vue')['default']
+    Menu: typeof import('openvue/menu')['default']
     Message: typeof import('openvue/message')['default']
     Panel: typeof import('openvue/panel')['default']
     Password: typeof import('openvue/password')['default']
     ProgressBar: typeof import('openvue/progressbar')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SaveVersionDialog: typeof import('./src/components/versions/SaveVersionDialog.vue')['default']
     Select: typeof import('openvue/select')['default']
     SelectButton: typeof import('openvue/selectbutton')['default']
     StudentChangeDialog: typeof import('./src/components/student/StudentChangeDialog.vue')['default']
@@ -60,6 +62,7 @@ declare module 'vue' {
     UserCreateDialog: typeof import('./src/components/user/UserCreateDialog.vue')['default']
     UserPinDialog: typeof import('./src/components/user/UserPinDialog.vue')['default']
     UserRenameDialog: typeof import('./src/components/user/UserRenameDialog.vue')['default']
+    VersionsPanel: typeof import('./src/components/versions/VersionsPanel.vue')['default']
   }
   export interface GlobalDirectives {
     Tooltip: typeof import('openvue/tooltip')['default']
