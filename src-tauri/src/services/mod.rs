@@ -10,11 +10,13 @@ pub mod geocoding;
 pub mod history_delete;
 pub mod history_service;
 pub mod import_apply;
+pub mod legacy_reconcile;
 pub mod pdf_report;
 pub mod student_list_apply;
 pub mod student_list_import;
 
 mod change_input;
+mod legacy_reconcile_plan;
 
 #[cfg(test)]
 mod backup_tests;
@@ -32,5 +34,7 @@ mod company_merge_tests;
 mod history_delete_tests;
 #[cfg(test)]
 mod history_service_tests;
+#[cfg(test)]
+mod legacy_reconcile_tests;
 #[cfg(test)]
 mod real_export_fixture;

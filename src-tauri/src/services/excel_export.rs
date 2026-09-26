@@ -291,9 +291,8 @@ pub async fn build_workbook(pool: &SqlitePool, term: &str) -> AppResult<Vec<u8>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::assignments::NewAssignment;
-    use crate::db::company_hours::HoursInput;
     use crate::db::init_pool;
+    use crate::db::legacy_seed_test_support::{seed_coordinator, seed_hours};
     use crate::domain::models::{NewCompany, NewStudent, NewTeacher};
 
     const TERM: &str = "2026-2027/1";
@@ -374,35 +373,8 @@ mod tests {
         .await
         .unwrap();
 
-        company_hours::upsert(
-            &pool,
-            TERM,
-            &HoursInput {
-                company_id: company.id,
-                max_hours_snapshot: 8,
-                awarded_hours: 6,
-                is_honorary: false,
-                is_locked: false,
-                notes: String::new(),
-            },
-        )
-        .await
-        .unwrap();
-
-        assignments::assign(
-            &pool,
-            TERM,
-            &NewAssignment {
-                teacher_id: teacher.id,
-                company_id: company.id,
-                visit_day: 2,
-                visit_hour: 3,
-                is_forced: false,
-                force_reason: None,
-            },
-        )
-        .await
-        .unwrap();
+        seed_hours(&pool, TERM, company.id, 6, false).await;
+        seed_coordinator(&pool, TERM, company.id, teacher.id, 2, 3, false, None).await;
 
         let seeded_bytes = build_workbook(&pool, TERM).await.unwrap();
 

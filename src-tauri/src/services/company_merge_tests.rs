@@ -182,3 +182,37 @@ async fn preview_does_not_write_anything() {
     assert!(!preview.ends_coordination);
     assert_eq!(table_counts(&p.pool).await, before, "önizleme hiçbir tabloyu değiştirmemeli");
 }
+
+// ------------------------------------------------------ pano ↔ tarihçe kopukluğu regresyonu
+
+/// Regresyon (brief teşhisi): Saat Ayarları/Dağıtım panosunun komutları
+/// (`save_company_hours`, `assign_company`) artık AYNI tarihçe kapısından
+/// geçiyor; birleştirmenin okuduğu projeksiyon panodan girilen değerleri
+/// GÖRMELİDİR — eskiden pano `company_term_hours`/`assignments`e yazardı,
+/// birleştirme ise yalnız (hiç güncellenmeyen) projeksiyonu okurdu.
+#[tokio::test]
+async fn merge_sees_hours_and_coordinator_entered_through_the_board_commands() {
+    use crate::commands::assignment_commands::assign_company_for_term;
+    use crate::commands::hours_commands::save_hours_for_term;
+    use crate::db::assignments::NewAssignment;
+    use crate::db::company_hours::HoursInput;
+    use crate::db::AppState;
+
+    let (_dir, pool) = test_pool().await;
+    let today = planning_today();
+    let from = add_company(&pool, "örnek Mekatronik Sanayi A.Ş.", 3.0).await;
+    let into = add_company(&pool, "ÖRNEK MEKATRONİK SANAYİ", 3.0).await;
+    add_student(&pool, "Ada", Some(from), today).await;
+    let teacher = add_teacher(&pool, "Deniz", today).await;
+
+    let hours_row = HoursInput { company_id: from, max_hours_snapshot: 0, awarded_hours: 8, is_honorary: false, is_locked: false, notes: String::new() };
+    save_hours_for_term(&pool, TERM, &[hours_row], None, None, today).await.unwrap();
+
+    let state = AppState { pool: pool.clone() };
+    let assignment = NewAssignment { teacher_id: teacher, company_id: from, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None };
+    assign_company_for_term(&state, assignment, None, None, today).await.unwrap();
+
+    let preview = preview_company_merge(&pool, from, into).await.unwrap();
+    assert_eq!(preview.awarded_hours_to_clear, 8, "panodan girilen saat birleştirmede görünmeli");
+    assert!(preview.ends_coordination, "panodan girilen koordinatör birleştirmede görünmeli");
+}

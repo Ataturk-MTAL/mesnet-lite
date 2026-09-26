@@ -72,6 +72,21 @@ fn auto_backup_file_name(date: NaiveDate) -> String {
     format!("mesnet-lite-{}.db", date.format("%Y-%m-%d"))
 }
 
+/// Eski panodan tarihçeye tek seferlik aktarımdan (`services::legacy_reconcile`)
+/// HEMEN ÖNCE alınan, günlük otomatik yedekten AYRI adlandırılmış bir yedek.
+/// Aktarım gerçek veriyi (`company_term_hours`/`assignments`in içeriğini)
+/// olay günlüğüne YAZDIĞI için, o gün zaten alınmış bir otomatik yedeği
+/// (`create_daily_backup_if_missing`, dosya VARSA atlar) üzerine yazmaz —
+/// ayrı bir dosya adı kullanır ki her zaman GERÇEKTEN alınmış olsun.
+pub async fn create_pre_reconcile_backup(pool: &SqlitePool, backup_dir: &Path, today: NaiveDate) -> AppResult<()> {
+    std::fs::create_dir_all(backup_dir)?;
+    let target = backup_dir.join(format!("pre-legacy-reconcile-{}.db", today.format("%Y-%m-%d")));
+    if target.exists() {
+        return Ok(());
+    }
+    vacuum_into(pool, &target).await
+}
+
 /// Otomatik yedek klasörünün durumunu okur: yol, en yeni yedeğin tarihi,
 /// toplam sayı. Dosya sistemine dokunur ama SQLite dosyalarını AÇMAZ —
 /// yalnızca dosya adlarını ayrıştırır, bu yüzden senkron ve ucuzdur.
