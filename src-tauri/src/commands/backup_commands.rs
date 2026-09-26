@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
+use crate::commands::resolve_app_data_dir;
 use crate::db::AppState;
 use crate::error::{AppError, AppResult};
 use crate::services::backup::{self, BackupStatus};
@@ -49,12 +50,6 @@ pub async fn restore_backup(app: AppHandle, state: State<'_, AppState>, path: St
         app.restart();
     }
     result
-}
-
-fn resolve_app_data_dir(app: &AppHandle) -> AppResult<PathBuf> {
-    app.path()
-        .app_data_dir()
-        .map_err(|e| AppError::Io(format!("Uygulama veri klasörü bulunamadı: {e}")))
 }
 
 fn resolve_auto_backup_dir(app: &AppHandle) -> AppResult<PathBuf> {

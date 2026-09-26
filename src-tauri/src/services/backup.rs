@@ -142,7 +142,11 @@ fn prune_old_backups(backup_dir: &Path, keep: usize) -> AppResult<()> {
 /// çağrıcıları hedefin daha önce var OLMADIĞINI zaten garanti eder (tarih/
 /// saat damgalı benzersiz ad); bir çakışma orada sessizce üstüne yazılacak
 /// bir şey değil, araştırılması gereken gerçek bir hatadır.
-async fn vacuum_into(pool: &SqlitePool, target: &Path) -> AppResult<()> {
+///
+/// `pub(crate)`: `services::versions::create_version` de sürüm dosyasını
+/// AYNI şekilde alır — iki yerde ayrı ayrı `VACUUM INTO` yazılmasın diye
+/// buradan yeniden kullanılır (brief: "Yedekleme ... yeniden kullan").
+pub(crate) async fn vacuum_into(pool: &SqlitePool, target: &Path) -> AppResult<()> {
     let target_str = target.to_string_lossy().to_string();
     sqlx::query("VACUUM INTO ?1")
         .bind(target_str)

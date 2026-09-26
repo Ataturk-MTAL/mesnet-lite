@@ -90,6 +90,9 @@ pub fn run() {
             commands::backup_commands::backup_status,
             commands::backup_commands::create_backup,
             commands::backup_commands::restore_backup,
+            commands::version_commands::list_versions,
+            commands::version_commands::create_version,
+            commands::version_commands::delete_version,
         ])
         .run(tauri::generate_context!())
         .expect("Uygulama başlatılamadı");

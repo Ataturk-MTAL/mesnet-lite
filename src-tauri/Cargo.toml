@@ -42,9 +42,17 @@ typst-pdf = "0.15.1"
 # CSPRNG'sine (`OsRng`) ihtiyaç var, bu da `rand_core`nun `getrandom`
 # özelliğini gerektiriyor — varsayılan özellik kümesi bunu getirmiyor.
 argon2 = { version = "0.5", features = ["std"] }
+# Sürüm parmak izi (`services::versions`): kullanıcı tablolarının deterministik
+# içerik özeti. `argon2`nin zaten transitif olarak getirdiği sürümle (bkz.
+# Cargo.lock) aynı major/minor'a kilitlenir; PIN özetleme ile karıştırılmasın
+# diye ayrı, doğrudan bir bağımlılık olarak eklendi.
+sha2 = "0.10"
+hex = "0.4"
+# `services::versions::open_version` bir sürümü GEÇİCİ bir kopyaya açar; bu
+# artık yalnız testte değil üretimde de çalışıyor, bu yüzden burada.
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 # Gömülü fontların Türkçe gliflerini içerdiğini testte doğrulamak için.
 ttf-parser = "0.25"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

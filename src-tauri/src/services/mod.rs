@@ -14,12 +14,15 @@ pub mod legacy_reconcile;
 pub mod pdf_report;
 pub mod student_list_apply;
 pub mod student_list_import;
+pub mod versions;
 
 mod change_input;
 mod legacy_reconcile_plan;
 
 #[cfg(test)]
 mod backup_tests;
+#[cfg(test)]
+mod versions_tests;
 #[cfg(test)]
 mod change_service_p6_tests;
 #[cfg(test)]
