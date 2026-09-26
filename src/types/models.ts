@@ -430,3 +430,28 @@ export interface UpdateTermDatesInput {
   endDate: string
   confirm: boolean
 }
+
+/** Bir sürümü doğuran çıktı türü; `export_*` komutlarının otomatik kaydettiği tetikleyici. */
+export type ExportTrigger =
+  | 'assignmentSheet'
+  | 'visitLists'
+  | 'commissionMinutesPdf'
+  | 'commissionMinutesXlsx'
+  | 'workbook'
+
+/**
+ * `list_versions` / `create_version` yanıtındaki tek kayıtlı sürüm.
+ * Bir sürüm, oluşturulduğu andaki veritabanının tam kopyasıdır.
+ */
+export interface Version {
+  id: number
+  name: string
+  kind: 'auto' | 'manual'
+  /** Elle kayıtlarda `null`; otomatik kayıtlarda hangi çıktının tetiklediği. */
+  trigger: ExportTrigger | null
+  term: string
+  /** 'YYYY-MM-DDTHH:MM:SS' biçiminde, Türkiye saati. */
+  createdAt: string
+  /** Veritabanı kopyası diskten silinmiş/taşınmışsa false; çıktı alınamaz. */
+  isAvailable: boolean
+}

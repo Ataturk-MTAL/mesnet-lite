@@ -341,6 +341,8 @@
       </template>
     </Card>
 
+    <VersionsPanel ref="versionsPanelRef" />
+
     <Message v-if="summary" severity="success" :closable="false">
       {{ summary.companiesCreated }} {{ labels.importCsv.summaryCompanies }}
       {{ labels.importCsv.resultCreated }},
@@ -374,10 +376,15 @@ import { useTermStore } from '../stores/term'
 import { filesApi } from '../api/files'
 import { listTermsWithDates } from '../api/terms'
 import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
+import VersionsPanel from '../components/versions/VersionsPanel.vue'
 import type { TermWithDates } from '../types/models'
 
 const toast = useToast()
 const { activeTerm } = storeToRefs(useTermStore())
+
+// Normal bir çıktı alındıktan sonra yeni bir otomatik sürüm oluşmuş olabilir;
+// liste bu referans üzerinden tazelenir.
+const versionsPanelRef = ref<InstanceType<typeof VersionsPanel> | null>(null)
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const fileName = ref('')
@@ -397,6 +404,7 @@ async function exportExcel(): Promise<void> {
     const name = `MESNET-${activeTerm.value.replace('/', '-')}.xlsx`
     const path = await filesApi.exportWorkbook(name)
     toast.add({ severity: 'success', summary: labels.export.saved, detail: path, life: 8000 })
+    await versionsPanelRef.value?.reload()
   } catch (error: unknown) {
     showError(error)
   } finally {
@@ -415,6 +423,7 @@ async function saveReport(
   try {
     const path = await produce(`${baseName}-${activeTerm.value.replace('/', '-')}.${extension}`)
     toast.add({ severity: 'success', summary: labels.export.saved, detail: path, life: 8000 })
+    await versionsPanelRef.value?.reload()
   } catch (error: unknown) {
     showError(error)
   } finally {
