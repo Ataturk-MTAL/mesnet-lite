@@ -11,7 +11,7 @@
           :icon="allRowsLocked ? 'pi pi-lock-open' : 'pi pi-lock'"
           severity="secondary"
           outlined
-          :disabled="rows.length === 0"
+          :disabled="rows.length === 0 || isReadOnly"
           v-tooltip.bottom="labels.hours.lockAllTooltip"
           @click="toggleAllLocks"
         />
@@ -20,7 +20,7 @@
           icon="pi pi-sparkles"
           severity="secondary"
           outlined
-          :disabled="rows.length === 0 || allRowsLocked"
+          :disabled="rows.length === 0 || allRowsLocked || isReadOnly"
           v-tooltip.bottom="autoDistributeTooltipText"
           @click="runAutoDistribute"
         />
@@ -30,18 +30,21 @@
           icon="pi pi-undo"
           severity="secondary"
           outlined
+          :disabled="isReadOnly"
           @click="undoSuggestion"
         />
         <Button
           :label="labels.hours.save"
           icon="pi pi-check"
           :badge="changedCount > 0 ? String(changedCount) : undefined"
-          :disabled="changedCount === 0"
+          :disabled="changedCount === 0 || isReadOnly"
           :loading="isSaving"
           @click="save"
         />
       </div>
     </div>
+
+    <AsOfReadOnlyBanner />
 
     <Message severity="secondary" :closable="false">{{ labels.hours.subtitle }}</Message>
 
@@ -158,7 +161,7 @@
         <template #body="{ data }">
           <ToggleSwitch
             :model-value="data.isHonorary"
-            :disabled="data.isLocked"
+            :disabled="data.isLocked || isReadOnly"
             :aria-label="labels.hours.honorary"
             v-tooltip.top="labels.hours.honoraryTooltip"
             @update:model-value="(value: boolean) => setHonorary(data, value)"
@@ -175,7 +178,7 @@
               :model-value="data.awardedHours"
               :min="0"
               :max="data.maxHours ?? 0"
-              :disabled="data.maxHours === null || data.isLocked"
+              :disabled="data.maxHours === null || data.isLocked || isReadOnly"
               showButtons
               :aria-label="labels.hours.awarded"
               @update:model-value="(value: number | null) => setAwarded(data, value)"
@@ -191,6 +194,7 @@
             :severity="data.isLocked ? 'warn' : 'secondary'"
             outlined
             size="small"
+            :disabled="isReadOnly"
             v-tooltip.top="labels.hours.lockedTooltip"
             :aria-label="labels.hours.locked"
             @click="toggleLock(data)"
@@ -237,14 +241,17 @@ import type { AutoDistributeRow, HoursBoard, HoursInput, HoursRow } from '../api
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
 import { useSelectionStore } from '../stores/selection'
+import { useAsOfDateStore } from '../stores/asOfDate'
 import { useChangeDetailsDialog } from '../composables/useChangeDetailsDialog'
 import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
+import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
 import { buildGlobalFilter, extractGlobalFilterValue } from '../utils/dataTableFilters'
 
 const toast = useToast()
 const selection = useSelectionStore()
 const { companyHoursSearch } = storeToRefs(selection)
 const { activeTerm, activeTermDates } = storeToRefs(useTermStore())
+const { requestAsOf, isReadOnly } = storeToRefs(useAsOfDateStore())
 
 /** Dönem tarihleri henüz yüklenmediyse planlama evresi varsayılır — Kaydet
  *  o kısa aralıkta engellenmez; gerçek yasak arka uçtan gelir. */
@@ -320,7 +327,7 @@ function showError(error: unknown): void {
 function setHonorary(row: HoursRow, value: boolean): void {
   // Kilitli satır donmuş kabul edilir; girişler devre dışı olsa da ikinci kat
   // koruma olarak burada da erken dönülür.
-  if (row.isLocked) return
+  if (row.isLocked || isReadOnly.value) return
   row.isHonorary = value
   if (value) row.awardedHours = 0
 }
@@ -328,7 +335,7 @@ function setHonorary(row: HoursRow, value: boolean): void {
 function setAwarded(row: HoursRow, value: number | null): void {
   // Kilitli satır donmuş kabul edilir; girişler devre dışı olsa da ikinci kat
   // koruma olarak burada da erken dönülür.
-  if (row.isLocked) return
+  if (row.isLocked || isReadOnly.value) return
   const requested = value ?? 0
   const cap = row.maxHours ?? 0
   if (requested > cap) {
@@ -340,6 +347,7 @@ function setAwarded(row: HoursRow, value: number | null): void {
 }
 
 function toggleLock(row: HoursRow): void {
+  if (isReadOnly.value) return
   row.isLocked = !row.isLocked
 }
 
@@ -353,6 +361,7 @@ const autoDistributeTooltipText = computed(() =>
 
 /** Toplu kilit/aç — satır sayısı kadar YENİ nesne üretir, mevcutları yerinde değiştirmez. */
 function toggleAllLocks(): void {
+  if (isReadOnly.value) return
   const nextLocked = !allRowsLocked.value
   rows.value = rows.value.map((row) => ({ ...row, isLocked: nextLocked }))
 }
@@ -369,7 +378,7 @@ function applyBoard(next: HoursBoard): void {
 async function load(): Promise<void> {
   isLoading.value = true
   try {
-    applyBoard(await hoursApi.get())
+    applyBoard(await hoursApi.get(requestAsOf.value))
   } catch (error: unknown) {
     showError(error)
   } finally {
@@ -378,6 +387,7 @@ async function load(): Promise<void> {
 }
 
 async function runAutoDistribute(): Promise<void> {
+  if (isReadOnly.value) return
   // Öneri öncesi durum saklanır ki `Geri Al` çalışsın.
   snapshot.value = rows.value.map((row) => ({ ...row }))
 
@@ -425,6 +435,7 @@ async function runAutoDistribute(): Promise<void> {
  * (sonradan eklenmiş) satır olduğu gibi kalır.
  */
 function undoSuggestion(): void {
+  if (isReadOnly.value) return
   const snapshotRows = snapshot.value
   if (!snapshotRows) return
   rows.value = rows.value.map((row) => {
@@ -443,6 +454,7 @@ function undoSuggestion(): void {
  * TEK bir pencereden geçer, satır başına ayrı pencere açılmaz.
  */
 async function save(): Promise<void> {
+  if (isReadOnly.value) return
   const details = await requestChangeDetails()
   if (details === null) return
 
@@ -465,8 +477,8 @@ async function save(): Promise<void> {
   }
 }
 
-// Dönem değişince takdirler de değişir.
-watch(activeTerm, load)
+// Dönem ya da tarihteki durum değişince takdirler de değişir.
+watch([activeTerm, requestAsOf], load)
 
 onMounted(load)
 </script>

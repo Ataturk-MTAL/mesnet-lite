@@ -11,11 +11,12 @@ import { labels } from '../i18n/labels'
 import type { Company, Student, TermWithDates } from '../types/models'
 import { useSelectionStore } from '../stores/selection'
 import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
 
-const listStudentsMock = vi.fn<() => Promise<Student[]>>()
+const listStudentsMock = vi.fn<(asOf: string | null) => Promise<Student[]>>()
 vi.mock('../api/students', () => ({
   studentsApi: {
-    list: () => listStudentsMock(),
+    list: (asOf: string | null = null) => listStudentsMock(asOf),
     listTerms: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
@@ -165,5 +166,28 @@ describe('StudentsView seçim kalıcılığı (Pinia store)', () => {
     expect(selection.studentSearch).toBe('Ayşe')
     expect((wrapper2.get('input[type="text"]').element as HTMLInputElement).value).toBe('Ayşe')
     wrapper2.unmount()
+  })
+})
+
+describe('StudentsView tarihteki durum (asOf)', () => {
+  it('varsayılan tarihte liste `null` ile istenir ve yazma düğmeleri açıktır', async () => {
+    const wrapper = await mountView([studentFixture()])
+
+    expect(listStudentsMock).toHaveBeenCalledWith(null)
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(false)
+    const addButton = wrapper.findAll('button').find((b) => b.text() === labels.common.add)
+    expect(addButton?.attributes('disabled')).toBeUndefined()
+  })
+
+  it('geçmiş bir tarih seçilince liste o tarihle istenir, başlık görünür ve yazma düğmeleri kapanır', async () => {
+    useTermStore().activeTermDates = startedTerm
+    useAsOfDateStore().setAsOfDate('2026-09-15')
+    const wrapper = await mountView([studentFixture()])
+
+    expect(listStudentsMock).toHaveBeenCalledWith('2026-09-15')
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(true)
+    const addButton = wrapper.findAll('button').find((b) => b.text() === labels.common.add)
+    expect(addButton?.attributes('disabled')).toBeDefined()
+    expect(wrapper.find(`button[aria-label="${labels.common.edit}"]`).attributes('disabled')).toBeDefined()
   })
 })

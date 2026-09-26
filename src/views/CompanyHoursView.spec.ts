@@ -14,14 +14,15 @@ import { labels } from '../i18n/labels'
 import type { AutoDistributeRow, DistributionOutcome, HoursBoard, HoursInput, HoursRow } from '../api/hours'
 import { useSelectionStore } from '../stores/selection'
 import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
 import type { EffectiveChangeInput, TermWithDates } from '../types/models'
 
-const getBoardMock = vi.fn<() => Promise<HoursBoard>>()
+const getBoardMock = vi.fn<(asOf: string | null) => Promise<HoursBoard>>()
 const saveMock = vi.fn<(rows: HoursInput[], change?: EffectiveChangeInput) => Promise<HoursBoard>>()
 const autoDistributeMock = vi.fn<(rows: AutoDistributeRow[]) => Promise<DistributionOutcome>>()
 vi.mock('../api/hours', () => ({
   hoursApi: {
-    get: () => getBoardMock(),
+    get: (asOf: string | null = null) => getBoardMock(asOf),
     save: (rows: HoursInput[], change?: EffectiveChangeInput) => saveMock(rows, change),
     autoDistribute: (rows: AutoDistributeRow[]) => autoDistributeMock(rows),
   },
@@ -531,5 +532,27 @@ describe('CompanyHoursView planlama evresinde Kaydet', () => {
     expect(saveMock).toHaveBeenCalledTimes(1)
     expect(saveMock.mock.calls[0][1]).toEqual({ effectiveDate: null, reason: null })
     wrapper.unmount()
+  })
+})
+
+describe('CompanyHoursView tarihteki durum (asOf)', () => {
+  it('varsayılan tarihte board `null` ile istenir ve yazma düğmeleri açıktır', async () => {
+    getBoardMock.mockResolvedValue(boardFixture([hoursRow({ companyId: 1, isLocked: false })]))
+    const wrapper = await mountView()
+
+    expect(getBoardMock).toHaveBeenCalledWith(null)
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(false)
+    expect(lockAllButton(wrapper).attributes('disabled')).toBeUndefined()
+  })
+
+  it('geçmiş bir tarih seçilince board o tarihle istenir, başlık görünür ve yazma düğmeleri kapanır', async () => {
+    useAsOfDateStore().setAsOfDate('2026-09-10')
+    getBoardMock.mockResolvedValue(boardFixture([hoursRow({ companyId: 1, isLocked: false })]))
+    const wrapper = await mountView()
+
+    expect(getBoardMock).toHaveBeenCalledWith('2026-09-10')
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(true)
+    expect(lockAllButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(rowLockButtons(wrapper)[0]?.attributes('disabled')).toBeDefined()
   })
 })

@@ -19,9 +19,10 @@ import type {
 import { labels } from '../i18n/labels'
 import { useSelectionStore } from '../stores/selection'
 import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
 import type { EffectiveChangeInput, TermWithDates } from '../types/models'
 
-const getBoardMock = vi.fn<() => Promise<AssignmentBoard>>()
+const getBoardMock = vi.fn<(asOf: string | null) => Promise<AssignmentBoard>>()
 const proposeMock = vi.fn<() => Promise<AllocationProposal>>()
 const assignMock = vi.fn<(input: NewAssignment, change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
 const unassignMock = vi.fn<(companyId: number, change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
@@ -31,7 +32,7 @@ vi.mock('../api/assignments', async () => {
   return {
     ...actual,
     assignmentsApi: {
-      get: () => getBoardMock(),
+      get: (asOf: string | null = null) => getBoardMock(asOf),
       propose: () => proposeMock(),
       assign: (input: NewAssignment, change?: EffectiveChangeInput) => assignMock(input, change),
       unassign: (companyId: number, change?: EffectiveChangeInput) => unassignMock(companyId, change),
@@ -716,6 +717,33 @@ describe('AllocationView çakışma engellemesi', () => {
     expect(toastAddMock).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'error', detail: labels.allocation.overlapViolation('Firma C') }),
     )
+    wrapper.unmount()
+  })
+})
+
+describe('AllocationView tarihteki durum (asOf)', () => {
+  it('varsayılan tarihte board `null` ile istenir ve yazma düğmeleri açıktır', async () => {
+    const wrapper = await mountView([companyFixture({ companyId: 1 })])
+
+    expect(getBoardMock).toHaveBeenCalledWith(null)
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(false)
+    const proposeButton = wrapper.findAll('button').find((b) => b.text().includes(labels.allocation.propose))
+    expect(proposeButton?.attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('geçmiş bir tarih seçilince board o tarihle istenir, başlık görünür ve yazma düğmeleri kapanır', async () => {
+    useAsOfDateStore().setAsOfDate('2026-09-10')
+    const wrapper = await mountView([companyFixture({ companyId: 1 })])
+
+    expect(getBoardMock).toHaveBeenCalledWith('2026-09-10')
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(true)
+
+    const proposeButton = wrapper.findAll('button').find((b) => b.text().includes(labels.allocation.propose))
+    expect(proposeButton?.attributes('disabled')).toBeDefined()
+
+    const card = wrapper.find('.company-card')
+    expect(card.attributes('draggable')).toBe('false')
     wrapper.unmount()
   })
 })

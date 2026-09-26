@@ -36,7 +36,9 @@ export interface CopyOutcome {
 }
 
 export const availabilityApi = {
-  get: (): Promise<AvailabilityBoard> => call('get_availability_board'),
+  /** `asOf` `null` ise güncel kayıt (düzenlenebilir); bir tarihse o güne göre okuma (salt okunur). */
+  get: (asOf: string | null = null): Promise<AvailabilityBoard> =>
+    call('get_availability_board', { asOf }),
   /** Haftanın tamamını gönderir; kısmi güncelleme yoktur. */
   saveTeacher: (teacherId: number, slots: SlotInput[]): Promise<AvailabilityBoard> =>
     call('save_teacher_availability', { teacherId, slots }),

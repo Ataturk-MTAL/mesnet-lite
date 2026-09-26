@@ -11,12 +11,13 @@ import TeachingLoadView from './TeachingLoadView.vue'
 import { labels } from '../i18n/labels'
 import { teachingLoadApi } from '../api/teachingLoad'
 import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
 import type { TeachingLoadBoard } from '../api/teachingLoad'
 
-const getBoardMock = vi.fn<() => Promise<TeachingLoadBoard>>()
+const getBoardMock = vi.fn<(asOf: string | null) => Promise<TeachingLoadBoard>>()
 vi.mock('../api/teachingLoad', () => ({
   teachingLoadApi: {
-    get: () => getBoardMock(),
+    get: (asOf: string | null = null) => getBoardMock(asOf),
     save: vi.fn(),
   },
 }))
@@ -291,5 +292,29 @@ describe('TeachingLoadView grup sayısı: otomatik / elle', () => {
     expect(groupValue(wrapper, 2)).toBe(1)
     expect(wrapper.get('[data-test="new-row-hint"]').text()).toBe(labels.teachingLoad.groupCountNewRowHint)
     wrapper.unmount()
+  })
+})
+
+describe('TeachingLoadView tarihteki durum (asOf)', () => {
+  it('varsayılan tarihte board `null` ile istenir ve yazma düğmeleri açıktır', async () => {
+    getBoardMock.mockResolvedValue(boardFixture())
+    const wrapper = await mountView()
+
+    expect(getBoardMock).toHaveBeenCalledWith(null)
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(false)
+    const addButton = wrapper.findAll('button').find((b) => b.text() === labels.teachingLoad.addRow)
+    expect(addButton?.attributes('disabled')).toBeUndefined()
+  })
+
+  it('geçmiş bir tarih seçilince board o tarihle istenir, başlık görünür ve yazma düğmeleri kapanır', async () => {
+    useAsOfDateStore().setAsOfDate('2026-09-10')
+    getBoardMock.mockResolvedValue(boardFixture())
+    const wrapper = await mountView()
+
+    expect(getBoardMock).toHaveBeenCalledWith('2026-09-10')
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(true)
+    const addButton = wrapper.findAll('button').find((b) => b.text() === labels.teachingLoad.addRow)
+    expect(addButton?.attributes('disabled')).toBeDefined()
+    expect(wrapper.find('input').attributes('disabled')).toBeDefined()
   })
 })

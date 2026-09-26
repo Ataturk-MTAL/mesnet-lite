@@ -66,7 +66,7 @@
                 size="small"
                 severity="secondary"
                 outlined
-                :disabled="!entry.isRevocable"
+                :disabled="!entry.isRevocable || props.readOnly"
                 data-testid="schedule-history-edit-button"
                 @click="emit('edit', entry)"
               />
@@ -77,7 +77,7 @@
                 size="small"
                 severity="danger"
                 outlined
-                :disabled="!entry.isRevocable"
+                :disabled="!entry.isRevocable || props.readOnly"
                 data-testid="schedule-history-revoke-button"
                 @click="openDeleteDialog(entry)"
               />
@@ -92,7 +92,7 @@
               text
               v-tooltip.top="labels.history.delete.tooltip"
               :loading="deletingChangeSetId === entry.changeSetId"
-              :disabled="deletingChangeSetId === entry.changeSetId"
+              :disabled="deletingChangeSetId === entry.changeSetId || props.readOnly"
               data-testid="schedule-history-delete-button"
               @click="confirmPermanentDelete(entry)"
             />
@@ -167,14 +167,19 @@ import { useChange } from '../../composables/useChange'
 import ImpactDialog from './ImpactDialog.vue'
 import type { HistoryChangeSetEntry, HistoryFilter, Stream } from '../../types/models'
 
-const props = defineProps<{
-  /** Geçmişi gösterilecek öğretmen; seçili değilse liste boş kalır. */
-  teacherId: number | null
-  /** Aktif dönem; hem listeleme hem geri alma isteğinde kullanılır. */
-  term: string
-  /** Üst bileşen her başarılı kayıttan sonra bunu artırır; liste yeniden yüklenir. */
-  refreshToken: number
-}>()
+const props = withDefaults(
+  defineProps<{
+    /** Geçmişi gösterilecek öğretmen; seçili değilse liste boş kalır. */
+    teacherId: number | null
+    /** Aktif dönem; hem listeleme hem geri alma isteğinde kullanılır. */
+    term: string
+    /** Üst bileşen her başarılı kayıttan sonra bunu artırır; liste yeniden yüklenir. */
+    refreshToken: number
+    /** Geçmişteki bir tarih görüntüleniyorsa düzelt/geri al/sil düğmeleri devre dışı kalır. */
+    readOnly?: boolean
+  }>(),
+  { readOnly: false },
+)
 
 const emit = defineEmits<{
   /** "Düzenle"ye basıldı; ızgara düzeltme moduna geçirilir. */
@@ -284,6 +289,7 @@ const deleteReasonId = useId()
 const isDeleteReasonValid = computed(() => deleteReason.value.trim().length > 0)
 
 function openDeleteDialog(entry: HistoryChangeSetEntry): void {
+  if (props.readOnly) return
   deleteTarget.value = entry
   deleteReason.value = ''
   isDeleteDialogOpen.value = true
@@ -322,6 +328,7 @@ const confirm = useConfirm()
 const deletingChangeSetId = ref<number | null>(null)
 
 function confirmPermanentDelete(entry: HistoryChangeSetEntry): void {
+  if (props.readOnly) return
   confirm.require({
     message: labels.history.delete.confirmMessage,
     header: labels.common.confirm,

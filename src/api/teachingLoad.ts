@@ -49,7 +49,9 @@ export interface TeachingLoadInput {
 }
 
 export const teachingLoadApi = {
-  get: (): Promise<TeachingLoadBoard> => call('get_teaching_load_board'),
+  /** `asOf` `null` ise güncel kayıt (düzenlenebilir); bir tarihse o güne göre okuma (salt okunur). */
+  get: (asOf: string | null = null): Promise<TeachingLoadBoard> =>
+    call('get_teaching_load_board', { asOf }),
   /** Aktif dönemin TÜM satırlarını değiştirir; kısmi güncelleme yoktur. */
   save: (rows: TeachingLoadInput[]): Promise<TeachingLoadBoard> =>
     call('save_teaching_load', { rows }),
