@@ -93,6 +93,7 @@ pub(super) fn set_company_hours(ctx: &DecisionContext, req: &ChangeRequest, rows
         }
     }
 
+    reject_if_hours_overlap(ctx, d, rows, &events)?;
     reject_if_pool_overrun(ctx, d, rows, &events)?;
 
     let augmented = with_pending(ctx, &events);
@@ -101,6 +102,33 @@ pub(super) fn set_company_hours(ctx: &DecisionContext, req: &ChangeRequest, rows
     }
 
     finish(ctx, req, d, events, impact, Vec::new())
+}
+
+/// Kullanıcı kararı: aynı öğretmen aynı anda iki işletmede olamaz — bu,
+/// saatin ARTIRILMASIYLA da ihlal edilebilir (bloğun ucu bir başka işletmenin
+/// bloğuna taşar). `with_pending` ile bu PARTİDEKİ tüm satırların YENİ
+/// değerleri `ctx`'e eklenir; böylece iki satır aynı partide birlikte
+/// büyüyüp/küçülürse denetim partinin SONUÇ durumuna bakar — tek satırlık bir
+/// azalma, aynı partideki başka bir satırı ESKİ (artık geçersiz) bir saatle
+/// yanlışlıkla çakışmış göstermez (R2b brief madde 2, `find_overlapping_company`
+/// yardımcısı tekrar yazılmadan burada da kullanılır).
+fn reject_if_hours_overlap(ctx: &DecisionContext, d: NaiveDate, rows: &[CompanyHoursRow], events: &[PlannedEvent]) -> Result<(), Rejection> {
+    let augmented = with_pending(ctx, events);
+    for row in rows {
+        let coordination = augmented.timeline::<CoordinationState>(Stream::Coordination, row.company_id, apply_coordination);
+        let Some(state) = coordination.state_at(d) else { continue };
+        let hours = augmented.timeline::<HoursState>(Stream::CompanyHours, row.company_id, apply_hours);
+        let awarded = hours.state_at(d).map(|h| h.awarded_hours).unwrap_or(0);
+        let candidate_block = Block::from_start(state.visit_day, state.visit_hour, awarded);
+
+        let Some(other) = find_overlapping_company(&augmented, state.teacher_id, row.company_id, candidate_block, d) else { continue };
+        let label = ctx.company_label(row.company_id);
+        return Err(Rejection::new(
+            RejectionCode::BlockOverlap,
+            format!("{label}: aynı öğretmenin {other} işletmesindeki bloğuyla çakışıyor"),
+        ));
+    }
+    Ok(())
 }
 
 /// Kullanıcı kuralı "havuz aşılamaz" (bkz. `domain::hour_distribution::pool_overrun_reason`,
@@ -229,6 +257,12 @@ pub(super) fn assign_coordinators(ctx: &DecisionContext, req: &ChangeRequest, ro
 /// Tek bir `CoordinatorRow` için olayı ve etki satırını üretir. Çakışma
 /// denetimi (`find_overlapping_company`) burada kalır; kapasite/program
 /// bayrakları çağıran tarafta TOPLU hesaplanır.
+///
+/// Çakışma denetimi KOŞULSUZDUR — `is_forced` onu ATLAYAMAZ (kullanıcı
+/// kararı: aynı öğretmen aynı anda iki işletmede olamaz, zorlamada da).
+/// Zorlama yalnız DİĞER kural dışı durumlar için (boş saat dışı, işletme
+/// günü dışı, gün sonu taşması, günlük sınır, kapasite — `domain::validation`
+/// ve `flags.rs`'teki uyarılar) geçerlidir; onlar bu fonksiyonu etkilemez.
 fn build_coordinator_event(ctx: &DecisionContext, d: NaiveDate, row: &CoordinatorRow, impact: &mut ImpactSummary) -> Result<PlannedEvent, Rejection> {
     // Pasif işletme artık kullanılmıyor; ona ziyaret planlanmaz.
     ctx.require_active_company(row.company_id)?;
@@ -238,13 +272,11 @@ fn build_coordinator_event(ctx: &DecisionContext, d: NaiveDate, row: &Coordinato
     let awarded = hours.state_at(d).map(|h| h.awarded_hours).unwrap_or(0);
     let candidate_block = Block::from_start(row.visit_day, row.visit_hour, awarded);
 
-    if !row.is_forced {
-        if let Some(other) = find_overlapping_company(ctx, row.teacher_id, row.company_id, candidate_block, d) {
-            return Err(Rejection::new(
-                RejectionCode::BlockOverlap,
-                format!("{}: aynı öğretmenin {other} işletmesindeki bloğuyla çakışıyor", ctx.teacher_label(row.teacher_id)),
-            ));
-        }
+    if let Some(other) = find_overlapping_company(ctx, row.teacher_id, row.company_id, candidate_block, d) {
+        return Err(Rejection::new(
+            RejectionCode::BlockOverlap,
+            format!("{}: aynı öğretmenin {other} işletmesindeki bloğuyla çakışıyor", ctx.teacher_label(row.teacher_id)),
+        ));
     }
 
     let prior = ctx.state_before::<CoordinationState>(Stream::Coordination, row.company_id, d, apply_coordination);
@@ -268,6 +300,12 @@ fn build_coordinator_event(ctx: &DecisionContext, d: NaiveDate, row: &Coordinato
 /// Aynı öğretmenin, tarih aralıkları çakışan başka bir işletme bloğu var mı?
 /// Yalnız GERÇEKTEN örtüşen dönemler bakılır (spec §5.3, "coordinator_block_overlap
 /// yalnız tarihler çakışınca reddedilir").
+///
+/// Diğer işletmenin taşıdığı saat `from` (denetlenen yürürlük tarihi)
+/// ANINDA okunur — koordinasyon aralığının KENDİ başlangıcında (`iv.valid_from`)
+/// değil. Saat, koordinatör değişmeden de değişebilir (`set_company_hours`);
+/// `ctx` çağıran tarafça `with_pending` ile aynı partideki bekleyen olaylarla
+/// zenginleştirilmişse bu, partinin SONUÇ durumunu yansıtır (R2b brief madde 2).
 fn find_overlapping_company(
     ctx: &DecisionContext,
     teacher_id: i64,
@@ -285,7 +323,7 @@ fn find_overlapping_company(
             if iv.state.teacher_id != teacher_id || !ranges_overlap(from, None, iv.valid_from, iv.valid_to) {
                 continue;
             }
-            let awarded = hours.state_at(iv.valid_from).map(|h| h.awarded_hours).unwrap_or(0);
+            let awarded = hours.state_at(from).map(|h| h.awarded_hours).unwrap_or(0);
             let other_block = Block::from_start(iv.state.visit_day, iv.state.visit_hour, awarded);
             if other_block.overlaps(&candidate_block) {
                 return Some(facts.name.clone());
@@ -616,6 +654,47 @@ mod tests {
         assert_eq!(result.unwrap_err().code, RejectionCode::BlockOverlap);
     }
 
+    /// Kullanıcı kararı: aynı öğretmen aynı anda iki işletmede olamaz —
+    /// `is_forced` bunu ATLAYAMAZ. Zorlama yalnız DİĞER kural dışı durumlar
+    /// içindir (brief madde 1); önceden `if !row.is_forced` bu denetimi
+    /// tamamen devre dışı bırakıyordu.
+    #[test]
+    fn coordinator_block_overlap_rejected_even_when_forced() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_company(2, "İşletme B", Some(10.0))
+            .with_teacher(5, "Ali Öğretmen")
+            .with_event(stored_event(1, 1, Stream::CompanyHours, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(2, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 2, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .build();
+
+        // B'nin ataması SÜRÜYOR (bitiş tarihi yok) → tarihler örtüşüyor.
+        let rows = vec![CoordinatorRow { company_id: 1, teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: true, force_reason: Some("gerekçe".into()) }];
+        let req = request(ymd(2026, 11, 3), ChangeCommand::AssignCoordinators { rows: rows.clone() });
+        let result = assign_coordinators(&ctx, &req, &rows);
+        assert_eq!(result.unwrap_err().code, RejectionCode::BlockOverlap, "zorlama çakışmayı atlamamalı");
+    }
+
+    /// Zorlama, ÇAKIŞMAYAN bir atamayı reddetmemeli — `is_forced` bayrağının
+    /// kendisi bir ret nedeni değildir, yalnız DİĞER kuralları gevşetir.
+    #[test]
+    fn coordinator_forced_but_non_overlapping_is_still_accepted() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_company(2, "İşletme B", Some(10.0))
+            .with_teacher(5, "Ali Öğretmen")
+            .with_event(stored_event(1, 1, Stream::CompanyHours, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(2, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 2, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .build();
+
+        // Farklı gün (2 = Salı): B'nin (Pazartesi) bloğuyla ÖRTÜŞMEZ.
+        let rows = vec![CoordinatorRow { company_id: 1, teacher_id: 5, visit_day: 2, visit_hour: 9, is_forced: true, force_reason: Some("gerekçe".into()) }];
+        let req = request(ymd(2026, 11, 3), ChangeCommand::AssignCoordinators { rows: rows.clone() });
+        assert!(assign_coordinators(&ctx, &req, &rows).is_ok(), "çakışmayan zorlanmış atama kabul edilmeli");
+    }
+
     #[test]
     fn clear_coordination_only_while_planning() {
         let running = ContextBuilder::new(ymd(2026, 11, 10), term(ymd(2026, 9, 1), ymd(2027, 1, 31))).build();
@@ -685,5 +764,79 @@ mod tests {
 
         let warning = decision.impact.warnings.iter().find(|w| w.code == WarningCode::CapacityExceeded).expect("koordinatörün kapasite uyarısı beklenir");
         assert_eq!(warning.from_date, ymd(2026, 11, 5));
+    }
+
+    /// A ve B, aynı öğretmenin (5) koordinatörlüğünde, ÇAKIŞMAYAN bloklarda:
+    /// A saat 1'de 2 saat (blok 1-2), B saat 5'te 2 saat (blok 5-6). A'nın
+    /// saati 6'ya çıkınca bloğu 1-6'ya uzar ve B'nin bloğuna (5-6) taşar —
+    /// kullanıcı kararı: aynı öğretmen aynı anda iki işletmede olamaz.
+    fn overlapping_coordinators_ctx(today: NaiveDate, a_hours: i64) -> DecisionContext {
+        ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            // Tavanı denetim dışı bırakan geniş bir kural (bu testlerin konusu
+            // çakışma, öğrenci/mesafe tavanı değil — bkz. `manual_raise_above_cap_rejected`
+            // ile aynı desen).
+            .with_rules(vec![rule(1, 0.0, None, 1, None, 20)])
+            .with_teacher(5, "Ali Öğretmen")
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_company(2, "İşletme B", Some(10.0))
+            .with_event(stored_event(1, 1, Stream::Placement, 200, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: 1, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 1, Stream::Placement, 201, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: 2, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(3, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 1, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(4, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(a_hours, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(5, 1, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 5, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(6, 1, Stream::CompanyHours, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(2, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .build()
+    }
+
+    #[test]
+    fn set_company_hours_rejects_an_increase_that_overlaps_another_companys_block() {
+        let today = ymd(2026, 11, 10);
+        let ctx = overlapping_coordinators_ctx(today, 2);
+
+        let rows = vec![CompanyHoursRow { company_id: 1, awarded_hours: 6, is_honorary: false, is_locked: false, notes: String::new() }];
+        let req = request(ymd(2026, 11, 3), ChangeCommand::SetCompanyHours { rows: rows.clone() });
+        let err = set_company_hours(&ctx, &req, &rows).unwrap_err();
+        assert_eq!(err.code, RejectionCode::BlockOverlap, "6 saate uzayan blok B'nin bloğuna taşar");
+    }
+
+    #[test]
+    fn set_company_hours_accepts_an_increase_that_does_not_reach_another_block() {
+        let today = ymd(2026, 11, 10);
+        let ctx = overlapping_coordinators_ctx(today, 2);
+
+        let rows = vec![CompanyHoursRow { company_id: 1, awarded_hours: 3, is_honorary: false, is_locked: false, notes: String::new() }];
+        let req = request(ymd(2026, 11, 3), ChangeCommand::SetCompanyHours { rows: rows.clone() });
+        assert!(set_company_hours(&ctx, &req, &rows).is_ok(), "3 saatlik blok (1-3) B'nin bloğuna (5-6) ulaşmaz");
+    }
+
+    /// Göçten kalma bir veri A ve B'yi ZATEN çakışır durumda bırakmış olsun
+    /// (A: 1-10, B: 8-9). Aynı PARTİDE A 2 saate düşerken B DEĞİŞMİYOR —
+    /// denetim partinin SONUÇ durumuna (A'nın YENİ, küçülmüş bloğuna) bakmalı;
+    /// A'nın ESKİ (10 saatlik) bloğuyla B'yi yanlış pozitif çakışmış saymamalı.
+    #[test]
+    fn set_company_hours_batch_check_uses_the_resulting_state_not_a_stale_value() {
+        let today = ymd(2026, 11, 10);
+        let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_rules(vec![rule(1, 0.0, None, 1, None, 20)])
+            .with_teacher(5, "Ali Öğretmen")
+            .with_company(1, "İşletme A", Some(10.0))
+            .with_company(2, "İşletme B", Some(10.0))
+            .with_event(stored_event(1, 1, Stream::Placement, 200, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: 1, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 1, Stream::Placement, 201, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: 2, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(3, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 1, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(4, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(10, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(5, 1, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 8, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(6, 1, Stream::CompanyHours, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(2, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
+            .build();
+
+        let rows = vec![
+            CompanyHoursRow { company_id: 1, awarded_hours: 2, is_honorary: false, is_locked: false, notes: String::new() },
+            CompanyHoursRow { company_id: 2, awarded_hours: 2, is_honorary: false, is_locked: false, notes: "değişmedi".into() },
+        ];
+        let req = request(ymd(2026, 11, 3), ChangeCommand::SetCompanyHours { rows: rows.clone() });
+        assert!(
+            set_company_hours(&ctx, &req, &rows).is_ok(),
+            "A'nın küçülmesiyle çakışma zaten sona eriyor; ESKİ 10 saatlik değerle yanlış pozitif üretilmemeli"
+        );
     }
 }

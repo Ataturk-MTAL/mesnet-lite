@@ -815,6 +815,24 @@ function onDrop(event: DragEvent, day: number, hour: number): void {
   void place(companyId, day, hour)
 }
 
+/** Hedef blok, seçili öğretmenin aynı gün ve saatlerdeki BAŞKA bir bloğuyla çakışıyorsa
+ *  o bloğun işletme adını döner; çakışma yoksa null. Çakışma, diğer kural ihlallerinin
+ *  aksine ASLA zorlanamaz — bu yüzden `collectViolations`tan ayrı, `place()`'in en
+ *  başında tek başına kontrol edilebilecek biçimde tutulur. */
+function findOverlapCompanyName(company: BoardCompany, day: number, hour: number): string | null {
+  const teacher = selectedTeacher.value
+  if (!teacher) return null
+
+  const hours = blockHours(hour, companySpan(company))
+  const overlapCompanyId = hours
+    .map((h) => teacher.occupiedBy[`${day}-${h}`])
+    .find((id) => id !== undefined)
+  if (overlapCompanyId === undefined) return null
+
+  const overlapCompany = board.value?.companies.find((c) => c.companyId === overlapCompanyId)
+  return overlapCompany?.companyName ?? labels.allocation.unknownCompanyFallback
+}
+
 /** Kural ihlallerini toplar. Boş dizi dönerse yerleşim (bloğun TAMAMI için) temizdir. */
 function collectViolations(company: BoardCompany, day: number, hour: number): string[] {
   const problems: string[] = []
@@ -836,17 +854,12 @@ function collectViolations(company: BoardCompany, day: number, hour: number): st
     )
   }
 
-  if (teacher) {
-    const overlapCompanyId = hours
-      .map((h) => teacher.occupiedBy[`${day}-${h}`])
-      .find((id) => id !== undefined)
-    if (overlapCompanyId !== undefined) {
-      const overlapCompany = board.value?.companies.find((c) => c.companyId === overlapCompanyId)
-      problems.push(
-        `Blok, ${overlapCompany?.companyName ?? 'başka bir atama'} işletmesinin bloğuyla çakışıyor.`,
-      )
-    }
+  const overlapCompanyName = findOverlapCompanyName(company, day, hour)
+  if (overlapCompanyName !== null) {
+    problems.push(labels.allocation.overlapViolation(overlapCompanyName))
+  }
 
+  if (teacher) {
     const dayHours = teacher.hoursPerDay[String(day)] ?? 0
     if (dayHours + company.awardedHours > DAILY_HOUR_LIMIT) {
       problems.push(
@@ -892,6 +905,14 @@ async function place(companyId: number, day: number, hour: number): Promise<void
 
   const company = board.value?.companies.find((c) => c.companyId === companyId)
   if (!company) return
+
+  const overlapCompanyName = findOverlapCompanyName(company, day, hour)
+  if (overlapCompanyName !== null) {
+    // Çakışma diğer kural ihlallerinin aksine ZORLANAMAZ: pencere açılmadan
+    // doğrudan reddedilir, yerleşim yapılmaz.
+    showError(new Error(labels.allocation.overlapViolation(overlapCompanyName)))
+    return
+  }
 
   const problems = collectViolations(company, day, hour)
   if (problems.length > 0) {
