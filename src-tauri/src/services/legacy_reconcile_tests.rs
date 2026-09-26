@@ -7,6 +7,7 @@ use chrono::NaiveDate;
 use sqlx::SqlitePool;
 
 use super::legacy_reconcile::reconcile_legacy_board;
+use crate::db::read_at::ReadAt;
 use crate::db::{assignments, change_log, companies, company_hours, init_pool, projection, settings, teachers, terms};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, CompanyHoursRow, NewChangeSet, PlannedEvent, StreamKey};
 use crate::domain::history::events::{CoordinationState, EventPayload, HoursState, Labels, Stream};
@@ -44,7 +45,7 @@ async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
 /// `company_hours::get` yoktur (tek çağıranı bu testlerdi, kaldırıldı);
 /// panonun kendisi de bu şekilde okur — `list` üzerinden filtreler.
 async fn open_hours(pool: &SqlitePool, company_id: i64) -> Option<company_hours::CompanyTermHours> {
-    company_hours::list(pool, TERM).await.unwrap().into_iter().find(|h| h.company_id == company_id)
+    company_hours::list(pool, TERM, &ReadAt::Latest).await.unwrap().into_iter().find(|h| h.company_id == company_id)
 }
 
 async fn a_company(pool: &SqlitePool, name: &str) -> i64 {

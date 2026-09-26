@@ -1,4 +1,5 @@
 use crate::db::assignments::NewAssignment;
+use crate::db::read_at::ReadAt;
 use crate::db::{
     assignments, availability, class_days, companies, company_hours, settings, students, teachers,
     teaching_load, AppState,
@@ -122,7 +123,7 @@ fn violation_to_warning(violation: &Violation) -> String {
     }
 }
 
-async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
+async fn load_board(state: &AppState, read_at: &ReadAt) -> AppResult<AssignmentBoard> {
     let pool = &state.pool;
     let all_settings = settings::get_all(pool).await?;
     let term = all_settings.get("active_term").cloned().unwrap_or_default();
@@ -141,9 +142,11 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
 
     // Havuz `settings` ayarlarından değil, döneme bağlı `term_branch_hours`
     // (bkz. migration 0005) ile şeflik projeksiyonundan hesaplanır; şeflik
-    // saatleri dahil TAM havuzdur (OÖKY MADDE 88/2-ç).
-    let as_of = teaching_load::current_as_of(pool, &term).await?;
-    let pool_hours = teaching_load::total_pool_hours(pool, &term, as_of).await?;
+    // saatleri dahil TAM havuzdur (OÖKY MADDE 88/2-ç). `hours_as_of`,
+    // `read_at`e göre çözülür (spec §6): `Latest`te bugünün döneme
+    // sıkıştırılmış hâli, `AsOf(d)`te doğrudan `d`.
+    let hours_as_of = read_at.hours_as_of(pool, &term).await?;
+    let pool_hours = teaching_load::total_pool_hours(pool, &term, hours_as_of).await?;
     let (day_start_hour, day_end_hour) = settings::lesson_hour_bounds(&all_settings);
 
     let mut board = AssignmentBoard {
@@ -157,14 +160,14 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
     // --- İşletmeler ---
     // `list` (süzülmüş): dağıtım havuzu bir yönetim ekranıdır, pasif işletme yeniden atanamaz.
     let all_companies = companies::list(pool).await?;
-    let all_students = students::list_by_term(pool, &term).await?;
+    let all_students = students::list_by_term(pool, &term, read_at).await?;
     let class_day_map = class_days::map_by_grade(pool, &term).await?;
-    let hours_map: BTreeMap<i64, _> = company_hours::list(pool, &term)
+    let hours_map: BTreeMap<i64, _> = company_hours::list(pool, &term, read_at)
         .await?
         .into_iter()
         .map(|row| (row.company_id, row))
         .collect();
-    let assignment_map: BTreeMap<i64, _> = assignments::list(pool, &term)
+    let assignment_map: BTreeMap<i64, _> = assignments::list(pool, &term, read_at)
         .await?
         .into_iter()
         .map(|row| (row.company_id, row))
@@ -226,20 +229,21 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
     // eski `teachers.chief_type`/yük sütunları artık burada okunmaz, çünkü
     // yük değişiklikleri artık yalnız kapıdan (`SetTeacherLoad`) geçer ve o
     // sütunlara dokunmaz.
-    let all_teachers: Vec<_> = teachers::list_with_load_as_of(pool, &term, as_of)
+    let all_teachers: Vec<_> = teachers::list_with_load_as_of(pool, &term, hours_as_of)
         .await?
         .into_iter()
         .filter(|entry| entry.teacher.is_active == 1)
         .collect();
-    let free_slots = availability::list_all(pool, &term).await?;
-    let hours_by_teacher: BTreeMap<i64, i64> = assignments::awarded_hours_by_teacher(pool, &term)
-        .await?
-        .into_iter()
-        .collect();
+    let free_slots = availability::list_all(pool, &term, read_at).await?;
+    let hours_by_teacher: BTreeMap<i64, i64> =
+        assignments::awarded_hours_by_teacher(pool, &term, read_at)
+            .await?
+            .into_iter()
+            .collect();
 
     let mut per_day: BTreeMap<(i64, i64), i64> = BTreeMap::new();
     for (teacher_id, day, hours) in
-        assignments::awarded_hours_by_teacher_and_day(pool, &term).await?
+        assignments::awarded_hours_by_teacher_and_day(pool, &term, read_at).await?
     {
         per_day.insert((teacher_id, day), hours);
     }
@@ -304,7 +308,7 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
         .sort_by(|a, b| a.teacher_name.cmp(&b.teacher_name));
 
     // --- Sayaçlar ---
-    board.assigned_hours = assignments::total_assigned_hours(pool, &term).await?;
+    board.assigned_hours = assignments::total_assigned_hours(pool, &term, read_at).await?;
     board.remaining_hours = board.pool_hours - board.assigned_hours;
     board.assigned_company_count = board
         .companies
@@ -366,16 +370,26 @@ async fn load_board(state: &AppState) -> AppResult<AssignmentBoard> {
     Ok(board)
 }
 
+/// `asOf` eksikse `ReadAt::Latest` (bugünkü davranışın birebir aynısı);
+/// verilirse `YYYY-MM-DD` ayrıştırılır ve aktif dönemin aralığında olması
+/// zorunludur (spec §6) — sınırda doğrulama, dış veri asla kullanılmadan önce
+/// doğrulanmadan geçmez.
 #[tauri::command]
-pub async fn get_assignment_board(state: State<'_, AppState>) -> AppResult<AssignmentBoard> {
-    load_board(&state).await
+pub async fn get_assignment_board(
+    state: State<'_, AppState>,
+    as_of: Option<String>,
+) -> AppResult<AssignmentBoard> {
+    let term = settings::get_active_term(&state.pool).await?;
+    let read_at = ReadAt::resolve(&state.pool, &term, as_of).await?;
+    load_board(&state, &read_at).await
 }
 
 /// Atanmamış işletmeler için yerleşim önerisi üretir. Hiçbir şey kaydedilmez;
-/// kullanıcı öneriyi görüp uygulamaya karar verir.
+/// kullanıcı öneriyi görüp uygulamaya karar verir. Öneri her zaman BUGÜNKÜ
+/// duruma göre çalışır (tarihe göre öneri anlamsızdır).
 #[tauri::command]
 pub async fn propose_assignments(state: State<'_, AppState>) -> AppResult<AllocationProposal> {
-    let board = load_board(&state).await?;
+    let board = load_board(&state, &ReadAt::Latest).await?;
 
     let companies: Vec<CompanyInput> = board
         .companies
@@ -449,7 +463,7 @@ pub async fn assign_company(
     // içindeki aynı desen): asıl yazma adımı `today`yi parametre alır, testler
     // gerçek takvim gününe bağlı kalmadan sabit bir "bugün" ile sınayabilir.
     assign_company_for_term(&state, input, effective_date, reason, today_local()).await?;
-    load_board(&state).await
+    load_board(&state, &ReadAt::Latest).await
 }
 
 pub(crate) async fn assign_company_for_term(
@@ -501,7 +515,7 @@ pub async fn unassign_company(
     reason: Option<String>,
 ) -> AppResult<AssignmentBoard> {
     unassign_company_for_term(&state, company_id, effective_date, reason, today_local()).await?;
-    load_board(&state).await
+    load_board(&state, &ReadAt::Latest).await
 }
 
 async fn unassign_company_for_term(
@@ -537,7 +551,7 @@ pub async fn clear_assignments(
     reason: Option<String>,
 ) -> AppResult<AssignmentBoard> {
     clear_assignments_for_term(&state, effective_date, reason, today_local()).await?;
-    load_board(&state).await
+    load_board(&state, &ReadAt::Latest).await
 }
 
 async fn clear_assignments_for_term(

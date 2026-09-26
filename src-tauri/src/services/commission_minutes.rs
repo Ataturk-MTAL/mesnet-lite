@@ -12,6 +12,7 @@
 
 use crate::db::assignments::{self, Assignment};
 use crate::db::company_hours::{self, CompanyTermHours};
+use crate::db::read_at::ReadAt;
 use crate::db::teachers::TeacherWithLoadAsOf;
 use crate::db::{companies, settings, students, teachers, teaching_load};
 use crate::domain::models::{ChiefType, Company, Student, Teacher};
@@ -276,19 +277,21 @@ async fn load_source(pool: &SqlitePool, term: &str) -> AppResult<Source> {
         .into_iter()
         .map(|t| (t.id, t))
         .collect();
-    let hours = company_hours::list(pool, term)
+    // Rapor her zaman GÜNCEL duruma göre üretilir (`ReadAt::Latest`); tarihe
+    // göre komisyon tutanağı bu işin kapsamı dışındadır (spec §6, plan R5d).
+    let hours = company_hours::list(pool, term, &ReadAt::Latest)
         .await?
         .into_iter()
         .map(|h| (h.company_id, h))
         .collect();
-    let assignments = assignments::list(pool, term)
+    let assignments = assignments::list(pool, term, &ReadAt::Latest)
         .await?
         .into_iter()
         .map(|a| (a.company_id, a))
         .collect();
 
     let mut students: HashMap<i64, Vec<Student>> = HashMap::new();
-    for student in students::list_by_term(pool, term).await? {
+    for student in students::list_by_term(pool, term, &ReadAt::Latest).await? {
         if let Some(company_id) = student.company_id {
             students.entry(company_id).or_default().push(student);
         }

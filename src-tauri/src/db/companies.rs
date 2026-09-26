@@ -481,6 +481,7 @@ mod tests {
     use super::*;
     use crate::db::company_hours;
     use crate::db::legacy_seed_test_support::{seed_coordinator, seed_hours};
+    use crate::db::read_at::ReadAt;
     use crate::db::{init_pool, teachers};
     use crate::domain::history::decide::{ChangeCommand, ChangeRequest};
     use crate::domain::models::NewTeacher;
@@ -780,7 +781,7 @@ mod tests {
 
         assert!(result.soft_deleted, "açık saat takdiri satırı olan işletme silinmemeli");
         // Sert silinseydi FK ON DELETE CASCADE bu satırı SESSİZCE yok ederdi.
-        assert_eq!(company_hours::list(&pool, TERM).await.unwrap().len(), 1);
+        assert_eq!(company_hours::list(&pool, TERM, &ReadAt::Latest).await.unwrap().len(), 1);
     }
 
     /// Aktif dönemde bu işletmeye yapılmış bir öğretmen ataması varsa silme

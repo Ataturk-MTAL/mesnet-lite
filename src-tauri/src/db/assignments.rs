@@ -17,6 +17,13 @@
 //!
 //! Saat burada TUTULMAZ: ek ders saati işletmenin dönemlik takdiridir
 //! (`company_hour_periods`). Burada yalnızca ziyaretin ne zaman yapılacağı durur.
+//!
+//! Panolarda okunan fonksiyonlar `read_at`e göre çalışır (spec §6): `Latest`te
+//! iki projeksiyonun da AÇIK satırı, `AsOf(d)`te ikisinin de `d` gününde
+//! geçerli satırı. `get_for_company` bunun DIŞINDADIR: yalnız yazma yolunun
+//! (`unassign_company_for_term`) idempotentlik kontrolüdür, HER ZAMAN Latest
+//! davranır.
+use crate::db::read_at::ReadAt;
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -53,12 +60,17 @@ pub struct NewAssignment {
 
 const SELECT_COLUMNS: &str = "id, teacher_id, company_id, term, visit_day, visit_hour, is_forced, force_reason";
 
-pub async fn list(pool: &SqlitePool, term: &str) -> AppResult<Vec<Assignment>> {
+pub async fn list(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<Assignment>> {
     let sql = format!(
-        "SELECT {SELECT_COLUMNS} FROM coordination_periods WHERE term = ?1 AND valid_to IS NULL
-         ORDER BY teacher_id, visit_day, visit_hour"
+        "SELECT {SELECT_COLUMNS} FROM coordination_periods WHERE term = ?1 AND {}
+         ORDER BY teacher_id, visit_day, visit_hour",
+        read_at.condition(2)
     );
-    Ok(sqlx::query_as::<_, Assignment>(&sql).bind(term).fetch_all(pool).await?)
+    let mut query = sqlx::query_as::<_, Assignment>(&sql).bind(term);
+    if let Some(date) = read_at.value() {
+        query = query.bind(date);
+    }
+    Ok(query.fetch_all(pool).await?)
 }
 
 pub async fn get_for_company(pool: &SqlitePool, company_id: i64, term: &str) -> AppResult<Option<Assignment>> {
@@ -73,58 +85,81 @@ pub async fn get_for_company(pool: &SqlitePool, company_id: i64, term: &str) -> 
 /// Saat atamadan değil, işletmenin dönemlik takdirinden gelir; bu yüzden iki
 /// AÇIK projeksiyon LEFT JOIN edilir. Takdiri girilmemiş (açık satırı olmayan)
 /// işletme 0 saat sayılır.
-pub async fn awarded_hours_by_teacher(pool: &SqlitePool, term: &str) -> AppResult<Vec<(i64, i64)>> {
-    let rows: Vec<(i64, i64)> = sqlx::query_as(
+pub async fn awarded_hours_by_teacher(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<(i64, i64)>> {
+    // Aynı `read_at` HER İKİ projeksiyona da uygulanır: `AsOf(d)`te koordinatörlük
+    // VE saat takdiri aynı `d` gününde geçerli olmalı, aksi hâlde biri
+    // güncel biri geçmiş bir günün karışımı yanlış bir toplam üretir.
+    let sql = format!(
         "SELECT cp.teacher_id, COALESCE(SUM(chp.awarded_hours), 0)
          FROM coordination_periods cp
          LEFT JOIN company_hour_periods chp
-                ON chp.company_id = cp.company_id AND chp.term = cp.term AND chp.valid_to IS NULL
-         WHERE cp.term = ?1 AND cp.valid_to IS NULL
+                ON chp.company_id = cp.company_id AND chp.term = cp.term AND {chp_cond}
+         WHERE cp.term = ?1 AND {cp_cond}
          GROUP BY cp.teacher_id",
-    )
-    .bind(term)
-    .fetch_all(pool)
-    .await?;
+        chp_cond = read_at.condition_with_alias("chp.", 2),
+        cp_cond = read_at.condition_with_alias("cp.", 2),
+    );
+    let mut query = sqlx::query_as(&sql).bind(term);
+    if let Some(date) = read_at.value() {
+        query = query.bind(date);
+    }
+    let rows: Vec<(i64, i64)> = query.fetch_all(pool).await?;
     Ok(rows)
 }
 
 /// Öğretmenin gün başına toplam ek ders saati (OÖKY MADDE 88 günlük sınırı).
-pub async fn awarded_hours_by_teacher_and_day(pool: &SqlitePool, term: &str) -> AppResult<Vec<(i64, i64, i64)>> {
-    let rows: Vec<(i64, i64, i64)> = sqlx::query_as(
+pub async fn awarded_hours_by_teacher_and_day(
+    pool: &SqlitePool,
+    term: &str,
+    read_at: &ReadAt,
+) -> AppResult<Vec<(i64, i64, i64)>> {
+    let sql = format!(
         "SELECT cp.teacher_id, cp.visit_day, COALESCE(SUM(chp.awarded_hours), 0)
          FROM coordination_periods cp
          LEFT JOIN company_hour_periods chp
-                ON chp.company_id = cp.company_id AND chp.term = cp.term AND chp.valid_to IS NULL
-         WHERE cp.term = ?1 AND cp.valid_to IS NULL
+                ON chp.company_id = cp.company_id AND chp.term = cp.term AND {chp_cond}
+         WHERE cp.term = ?1 AND {cp_cond}
          GROUP BY cp.teacher_id, cp.visit_day",
-    )
-    .bind(term)
-    .fetch_all(pool)
-    .await?;
+        chp_cond = read_at.condition_with_alias("chp.", 2),
+        cp_cond = read_at.condition_with_alias("cp.", 2),
+    );
+    let mut query = sqlx::query_as(&sql).bind(term);
+    if let Some(date) = read_at.value() {
+        query = query.bind(date);
+    }
+    let rows: Vec<(i64, i64, i64)> = query.fetch_all(pool).await?;
     Ok(rows)
 }
 
 /// Dönemde atanmış toplam ek ders saati.
-pub async fn total_assigned_hours(pool: &SqlitePool, term: &str) -> AppResult<i64> {
-    let total: Option<i64> = sqlx::query_scalar(
+pub async fn total_assigned_hours(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<i64> {
+    let sql = format!(
         "SELECT SUM(chp.awarded_hours)
          FROM coordination_periods cp
          JOIN company_hour_periods chp
-           ON chp.company_id = cp.company_id AND chp.term = cp.term AND chp.valid_to IS NULL
-         WHERE cp.term = ?1 AND cp.valid_to IS NULL",
-    )
-    .bind(term)
-    .fetch_one(pool)
-    .await?;
+           ON chp.company_id = cp.company_id AND chp.term = cp.term AND {chp_cond}
+         WHERE cp.term = ?1 AND {cp_cond}",
+        chp_cond = read_at.condition_with_alias("chp.", 2),
+        cp_cond = read_at.condition_with_alias("cp.", 2),
+    );
+    let mut query = sqlx::query_scalar(&sql).bind(term);
+    if let Some(date) = read_at.value() {
+        query = query.bind(date);
+    }
+    let total: Option<i64> = query.fetch_one(pool).await?;
     Ok(total.unwrap_or(0))
 }
 
-pub async fn assigned_company_ids(pool: &SqlitePool, term: &str) -> AppResult<Vec<i64>> {
-    let rows: Vec<(i64,)> =
-        sqlx::query_as("SELECT company_id FROM coordination_periods WHERE term = ?1 AND valid_to IS NULL")
-            .bind(term)
-            .fetch_all(pool)
-            .await?;
+pub async fn assigned_company_ids(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<i64>> {
+    let sql = format!(
+        "SELECT company_id FROM coordination_periods WHERE term = ?1 AND {}",
+        read_at.condition(2)
+    );
+    let mut query = sqlx::query_as(&sql).bind(term);
+    if let Some(date) = read_at.value() {
+        query = query.bind(date);
+    }
+    let rows: Vec<(i64,)> = query.fetch_all(pool).await?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
@@ -194,7 +229,7 @@ mod tests {
         let company_id = a_company(&pool, "Test İşletme A").await;
         seed_coordinator(&pool, TERM, company_id, teacher_id, 3, 4, false, None).await;
 
-        let rows = list(&pool, TERM).await.unwrap();
+        let rows = list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].visit_day, 3);
         assert_eq!(rows[0].visit_hour, 4);
@@ -216,10 +251,10 @@ mod tests {
         let company_id = a_company(&pool, "Test İşletme A").await;
 
         seed_coordinator(&pool, TERM, company_id, teacher_id, 1, 1, false, None).await;
-        assert_eq!(total_assigned_hours(&pool, TERM).await.unwrap(), 0, "takdir henüz girilmedi");
+        assert_eq!(total_assigned_hours(&pool, TERM, &ReadAt::Latest).await.unwrap(), 0, "takdir henüz girilmedi");
 
         seed_hours(&pool, TERM, company_id, 6, false).await;
-        assert_eq!(total_assigned_hours(&pool, TERM).await.unwrap(), 6);
+        assert_eq!(total_assigned_hours(&pool, TERM, &ReadAt::Latest).await.unwrap(), 6);
     }
 
     #[tokio::test]
@@ -234,7 +269,7 @@ mod tests {
         seed_coordinator(&pool, TERM, first, teacher_id, 1, 1, false, None).await;
         seed_coordinator(&pool, TERM, second, teacher_id, 2, 1, false, None).await;
 
-        let rows = awarded_hours_by_teacher(&pool, TERM).await.unwrap();
+        let rows = awarded_hours_by_teacher(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert_eq!(rows, vec![(teacher_id, 10)]);
     }
 
@@ -251,7 +286,7 @@ mod tests {
         seed_coordinator(&pool, TERM, first, teacher_id, 3, 1, false, None).await;
         seed_coordinator(&pool, TERM, second, teacher_id, 3, 7, false, None).await;
 
-        let rows = awarded_hours_by_teacher_and_day(&pool, TERM).await.unwrap();
+        let rows = awarded_hours_by_teacher_and_day(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert_eq!(rows, vec![(teacher_id, 3, 10)], "aynı günde 10 saat");
     }
 
@@ -260,10 +295,10 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let teacher_id = a_teacher(&pool, "Yilmaz").await;
         let company_id = a_company(&pool, "Test İşletme A").await;
-        assert!(assigned_company_ids(&pool, TERM).await.unwrap().is_empty());
+        assert!(assigned_company_ids(&pool, TERM, &ReadAt::Latest).await.unwrap().is_empty());
 
         seed_coordinator(&pool, TERM, company_id, teacher_id, 1, 1, false, None).await;
-        assert_eq!(assigned_company_ids(&pool, TERM).await.unwrap(), vec![company_id]);
+        assert_eq!(assigned_company_ids(&pool, TERM, &ReadAt::Latest).await.unwrap(), vec![company_id]);
     }
 
     #[tokio::test]
@@ -275,8 +310,8 @@ mod tests {
 
         seed_coordinator(&pool, TERM, company_id, teacher_id, 1, 1, false, None).await;
 
-        assert_eq!(list(&pool, TERM).await.unwrap().len(), 1);
-        assert!(list(&pool, "2027-2028/1").await.unwrap().is_empty());
+        assert_eq!(list(&pool, TERM, &ReadAt::Latest).await.unwrap().len(), 1);
+        assert!(list(&pool, "2027-2028/1", &ReadAt::Latest).await.unwrap().is_empty());
     }
 
     #[tokio::test]

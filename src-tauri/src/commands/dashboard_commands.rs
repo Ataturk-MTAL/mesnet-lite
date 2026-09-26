@@ -1,3 +1,4 @@
+use crate::db::read_at::ReadAt;
 use crate::db::{assignments, companies, company_hours, settings, students, teachers, teaching_load, AppState};
 use crate::domain::workload::{statutory_cap, teacher_capacity, InstitutionType};
 use crate::error::AppResult;
@@ -53,7 +54,7 @@ pub struct DashboardStats {
     pub companies_without_assignment: i64,
 }
 
-async fn dashboard_stats(pool: &SqlitePool) -> AppResult<DashboardStats> {
+async fn dashboard_stats(pool: &SqlitePool, read_at: &ReadAt) -> AppResult<DashboardStats> {
     let all = settings::get_all(pool).await?;
     let term = all.get("active_term").cloned().unwrap_or_default();
 
@@ -68,15 +69,16 @@ async fn dashboard_stats(pool: &SqlitePool) -> AppResult<DashboardStats> {
 
     // `list` (süzülmüş): pano bir yönetim ekranıdır, pasif işletme sayılara katılmaz.
     let all_companies = companies::list(pool).await?;
-    let all_students = students::list_by_term(pool, &term).await?;
+    let all_students = students::list_by_term(pool, &term, read_at).await?;
     // Kapasite `teacher_load_periods` PROJEKSİYONUNDAN okunur (spec R5c);
     // eski `teachers.chief_type`/yük sütunları artık burada okunmaz.
-    let as_of = teaching_load::current_as_of(pool, &term).await?;
-    let all_teachers = teachers::list_with_load_as_of(pool, &term, as_of).await?;
-    let student_counts = students::count_by_company(pool, &term).await?;
-    let awarded_by_teacher = assignments::awarded_hours_by_teacher(pool, &term).await?;
+    // `hours_as_of` `read_at`e göre çözülür (spec §6).
+    let hours_as_of = read_at.hours_as_of(pool, &term).await?;
+    let all_teachers = teachers::list_with_load_as_of(pool, &term, hours_as_of).await?;
+    let student_counts = students::count_by_company(pool, &term, read_at).await?;
+    let awarded_by_teacher = assignments::awarded_hours_by_teacher(pool, &term, read_at).await?;
     let assigned_companies: std::collections::HashSet<i64> =
-        assignments::assigned_company_ids(pool, &term).await?.into_iter().collect();
+        assignments::assigned_company_ids(pool, &term, read_at).await?.into_iter().collect();
 
     let companies_with_students: std::collections::HashSet<i64> =
         student_counts.iter().map(|(id, _)| *id).collect();
@@ -105,13 +107,13 @@ async fn dashboard_stats(pool: &SqlitePool) -> AppResult<DashboardStats> {
         }
     }
 
-    let assigned_hours = assignments::total_assigned_hours(pool, &term).await?;
+    let assigned_hours = assignments::total_assigned_hours(pool, &term, read_at).await?;
 
     // Havuz TEK hesap noktasından (`teaching_load::total_pool_hours`) okunur;
     // "verilmiş" kullanıcının açıkça seçtiği gibi TAKDİR edilen toplamdır
     // (`company_hours::total_awarded`), atanan DEĞİL.
-    let pool_hours = teaching_load::total_pool_hours(pool, &term, as_of).await?;
-    let pool_awarded_hours = company_hours::total_awarded(pool, &term).await?;
+    let pool_hours = teaching_load::total_pool_hours(pool, &term, hours_as_of).await?;
+    let pool_awarded_hours = company_hours::total_awarded(pool, &term, read_at).await?;
 
     Ok(DashboardStats {
         term,
@@ -151,9 +153,16 @@ async fn dashboard_stats(pool: &SqlitePool) -> AppResult<DashboardStats> {
     })
 }
 
+/// `asOf` eksikse `ReadAt::Latest`; verilirse aktif dönemin aralığında
+/// olması zorunludur (spec §6).
 #[tauri::command]
-pub async fn get_dashboard_stats(state: State<'_, AppState>) -> AppResult<DashboardStats> {
-    dashboard_stats(&state.pool).await
+pub async fn get_dashboard_stats(
+    state: State<'_, AppState>,
+    as_of: Option<String>,
+) -> AppResult<DashboardStats> {
+    let term = settings::get_active_term(&state.pool).await?;
+    let read_at = ReadAt::resolve(&state.pool, &term, as_of).await?;
+    dashboard_stats(&state.pool, &read_at).await
 }
 
 #[cfg(test)]
@@ -162,7 +171,9 @@ mod tests {
     use crate::db::init_pool;
     use crate::db::legacy_seed_test_support::seed_hours;
     use crate::db::teaching_load_test_support::{change_chief_type_in_planning, seed_teacher};
+    use crate::domain::history::decide::ChangeCommand;
     use crate::domain::models::ChiefType;
+    use crate::error::AppError;
     use chrono::NaiveDate;
 
     async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
@@ -179,14 +190,14 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
 
-        let before = dashboard_stats(&pool).await.unwrap();
+        let before = dashboard_stats(&pool, &ReadAt::Latest).await.unwrap();
         // Varsayılan ayar (migration 0001): "other" + büyükşehir => tavan 20.
         // Şefsizken bütçe (24) tavanı aştığı için kapasite tavanda KLİPLENİR: 20.
         assert_eq!(before.total_capacity_hours, 20);
 
         change_chief_type_in_planning(&pool, teacher_id, ChiefType::Department, NaiveDate::from_ymd_opt(2026, 9, 5).unwrap()).await;
 
-        let after = dashboard_stats(&pool).await.unwrap();
+        let after = dashboard_stats(&pool, &ReadAt::Latest).await.unwrap();
         // Bölüm şefi 10 saat düşürür: bütçe 24-10=14, artık tavanın (20)
         // ALTINDA kaldığı için kapasite tam 14'e düşer (klipleme kalkar).
         assert_eq!(after.total_capacity_hours, 14, "bölüm şefi 10 saat düşürmeli");
@@ -211,7 +222,7 @@ mod tests {
             .await
             .unwrap();
 
-        let stats = dashboard_stats(&pool).await.unwrap();
+        let stats = dashboard_stats(&pool, &ReadAt::Latest).await.unwrap();
         assert_eq!(stats.teacher_count, 2);
         assert_eq!(stats.active_teacher_count, 1);
     }
@@ -240,6 +251,61 @@ mod tests {
         .id
     }
 
+    /// `a_company` + tavanı devre dışı bırakmak için TEK bir öğrenci
+    /// (yerleştirme `execute_change` ÜZERİNDEN): mesafe `None` olduğu için
+    /// `cap_for` tavan koymaz, AMA `student_count == 0` iken tavan HER
+    /// HÂLÜKARDA 0'dır — bu yüzden en az bir öğrenci gerekir (bkz.
+    /// `hours_commands_tests.rs::a_company_without_a_cap`, aynı desen).
+    async fn a_company_without_a_cap(pool: &SqlitePool, name: &str) -> i64 {
+        let company_id = companies::create(
+            pool,
+            &crate::domain::models::NewCompany {
+                name: name.into(),
+                contact_first_name: String::new(),
+                contact_last_name: String::new(),
+                phone: String::new(),
+                email: String::new(),
+                address_text: "Test adres".into(),
+                latitude: None,
+                longitude: None,
+                one_way_distance_km: None,
+                district: String::new(),
+                notes: String::new(),
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+
+        let req = crate::domain::history::decide::ChangeRequest {
+            term: crate::db::teaching_load_test_support::TERM.to_string(),
+            effective_date: None,
+            document_date: None,
+            reason: "test".into(),
+            command: ChangeCommand::CreateStudent {
+                student: crate::domain::history::decide::NewStudentInput {
+                    first_name: name.to_string(),
+                    last_name: "Öğrenci".into(),
+                    student_no: None,
+                    grade: "12/C".into(),
+                    branch: "Elektronik Haberleşme".into(),
+                    submitted_at: None,
+                },
+                company_id: Some(company_id),
+            },
+        };
+        let outcome = crate::services::change_service::execute_change(
+            pool,
+            req,
+            crate::services::change_service::ChangeMode::Commit { expected_high_water: None },
+            NaiveDate::from_ymd_opt(2026, 8, 15).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, crate::services::change_service::ChangeOutcome::Committed { .. }));
+        company_id
+    }
+
     /// Havuz 160, işletmelere takdir edilen toplam 40 → `poolHours=160`,
     /// `awardedHours=40`, `remainingPoolHours=120`. "Verilmiş", kullanıcının
     /// açıkça seçtiği gibi TAKDİR edilen saattir, atanan DEĞİL.
@@ -262,7 +328,7 @@ mod tests {
         let company_id = a_company(&pool, "İşletme A").await;
         seed_hours(&pool, crate::db::teaching_load_test_support::TERM, company_id, 40, false).await;
 
-        let stats = dashboard_stats(&pool).await.unwrap();
+        let stats = dashboard_stats(&pool, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(stats.pool_hours, 160);
         assert_eq!(stats.awarded_hours, 40);
@@ -290,7 +356,7 @@ mod tests {
         let company_id = a_company(&pool, "İşletme A").await;
         seed_hours(&pool, crate::db::teaching_load_test_support::TERM, company_id, 60, false).await;
 
-        let stats = dashboard_stats(&pool).await.unwrap();
+        let stats = dashboard_stats(&pool, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(stats.remaining_pool_hours, -20);
     }
@@ -305,8 +371,63 @@ mod tests {
         seed_hours(&pool, crate::db::teaching_load_test_support::TERM, paid, 6, false).await;
         seed_hours(&pool, crate::db::teaching_load_test_support::TERM, free, 8, true).await;
 
-        let stats = dashboard_stats(&pool).await.unwrap();
+        let stats = dashboard_stats(&pool, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(stats.awarded_hours, 6, "fahri satırın 8 saati sayılmamalı");
+    }
+
+    // --- R5 spec §6: `get_dashboard_stats` tarih itibarıyla okur ---
+
+    /// Takdir edilen saat dönem başında (planlamada) 6, dönem başladıktan
+    /// sonra (2026-11-05) 10'a çıkarılır. `AsOf` iki durumu da doğru gösterir;
+    /// `Latest` her zaman güncel AÇIK satırı görür — ikisi de gerçek takvim
+    /// gününden BAĞIMSIZDIR çünkü `company_hour_periods` "AÇIK satır" deseniyle
+    /// okunur.
+    #[tokio::test]
+    async fn dashboard_stats_as_of_reads_the_awarded_hours_at_the_given_date() {
+        let (_dir, pool) = test_pool().await;
+        let term = crate::db::teaching_load_test_support::TERM;
+        let company_id = a_company_without_a_cap(&pool, "İşletme A").await;
+        let hours = |awarded: i64| crate::db::company_hours::HoursInput {
+            company_id,
+            max_hours_snapshot: 0,
+            awarded_hours: awarded,
+            is_honorary: false,
+            is_locked: false,
+            notes: String::new(),
+        };
+        crate::commands::hours_commands::save_hours_for_term(&pool, term, &[hours(6)], None, None, NaiveDate::from_ymd_opt(2026, 8, 15).unwrap())
+            .await
+            .unwrap();
+        crate::commands::hours_commands::save_hours_for_term(
+            &pool,
+            term,
+            &[hours(10)],
+            Some("2026-11-05".to_string()),
+            None,
+            NaiveDate::from_ymd_opt(2026, 11, 10).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let before = ReadAt::resolve(&pool, term, Some("2026-10-01".into())).await.unwrap();
+        let stats_before = dashboard_stats(&pool, &before).await.unwrap();
+        assert_eq!(stats_before.awarded_hours, 6, "10-01'de eski takdir geçerliydi");
+
+        let after = ReadAt::resolve(&pool, term, Some("2026-11-06".into())).await.unwrap();
+        let stats_after = dashboard_stats(&pool, &after).await.unwrap();
+        assert_eq!(stats_after.awarded_hours, 10, "11-06'da yeni takdir geçerliydi");
+
+        let stats_latest = dashboard_stats(&pool, &ReadAt::Latest).await.unwrap();
+        assert_eq!(stats_latest.awarded_hours, 10, "Latest her zaman güncel açık satırı görür");
+    }
+
+    /// Dönem dışı bir tarih `Validation` ile reddedilir.
+    #[tokio::test]
+    async fn get_dashboard_stats_rejects_a_date_outside_the_term() {
+        let (_dir, pool) = test_pool().await;
+        let term = crate::db::teaching_load_test_support::TERM;
+        let err = ReadAt::resolve(&pool, term, Some("2028-01-01".into())).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 }

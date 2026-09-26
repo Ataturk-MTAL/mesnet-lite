@@ -1,6 +1,6 @@
     use super::*;
     use crate::db::init_pool;
-    use crate::db::teaching_load_test_support::{seed_teacher, ymd, TERM};
+    use crate::db::teaching_load_test_support::{change_chief_type_in_planning, seed_teacher, ymd, TERM};
     use crate::domain::models::ChiefType;
     use crate::error::AppError;
     use sqlx::SqlitePool;
@@ -117,7 +117,7 @@
     async fn hours_board_pool_includes_chief_hours() {
         let (_dir, pool) = pool_with_chiefs().await;
 
-        let board = load_board(&AppState { pool }).await.unwrap();
+        let board = load_board(&AppState { pool }, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(board.pool_hours, 72 + 16);
     }
@@ -407,7 +407,7 @@
 
         let err = save(&pool, &[hours_input(b, 20)]).await.unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
-        assert_eq!(company_hours::total_awarded(&pool, TERM).await.unwrap(), 90, "reddedilen istekte hiçbir şey yazılmamalı");
+        assert_eq!(company_hours::total_awarded(&pool, TERM, &ReadAt::Latest).await.unwrap(), 90, "reddedilen istekte hiçbir şey yazılmamalı");
     }
 
     /// Tam havuza eşitlemek (90 + 10 = 100) SINIR DAHİL kabul edilir.
@@ -420,7 +420,7 @@
         save(&pool, &[hours_input(a, 90)]).await.unwrap();
 
         save(&pool, &[hours_input(b, 10)]).await.unwrap();
-        assert_eq!(company_hours::total_awarded(&pool, TERM).await.unwrap(), 100);
+        assert_eq!(company_hours::total_awarded(&pool, TERM, &ReadAt::Latest).await.unwrap(), 100);
     }
 
     /// Havuz tanımlanmamışsa (`0`) aşım denetimi hiç yapılmaz.
@@ -431,7 +431,7 @@
         let large = HoursInput { max_hours_snapshot: 10_000, ..hours_input(a, 10_000) };
 
         save(&pool, &[large]).await.unwrap();
-        assert_eq!(company_hours::total_awarded(&pool, TERM).await.unwrap(), 10_000);
+        assert_eq!(company_hours::total_awarded(&pool, TERM, &ReadAt::Latest).await.unwrap(), 10_000);
     }
 
     /// Aşımı AZALTAN bir düzenleme (100 → 80, havuz 80) kabul edilir. İlk
@@ -447,7 +447,7 @@
         crate::db::legacy_seed_test_support::seed_hours(&pool, TERM, a, 100, false).await;
 
         save(&pool, &[hours_input(a, 80)]).await.unwrap();
-        assert_eq!(company_hours::total_awarded(&pool, TERM).await.unwrap(), 80);
+        assert_eq!(company_hours::total_awarded(&pool, TERM, &ReadAt::Latest).await.unwrap(), 80);
     }
 
     /// Göçten kalma veri zaten havuzu aşmışsa (60 > 50), aşımı ARTIRMAYAN bir
@@ -474,7 +474,7 @@
 
         save(&pool, &[hours_input(a, 5)]).await.unwrap();
 
-        assert_eq!(company_hours::total_awarded(&pool, TERM).await.unwrap(), 5, "pano projeksiyondan okumalı");
+        assert_eq!(company_hours::total_awarded(&pool, TERM, &ReadAt::Latest).await.unwrap(), 5, "pano projeksiyondan okumalı");
         let legacy_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM company_term_hours")
             .fetch_one(&pool)
             .await
@@ -502,5 +502,86 @@
         save_hours_for_term(&pool, TERM, &[hours_input(a, 5)], Some("2026-11-03".to_string()), None, running_today)
             .await
             .unwrap();
-        assert_eq!(company_hours::total_awarded(&pool, TERM).await.unwrap(), 5);
+        assert_eq!(company_hours::total_awarded(&pool, TERM, &ReadAt::Latest).await.unwrap(), 5);
+    }
+
+    // --- R5 spec §6: `get_hours_board`/`get_teaching_load_board` tarih itibarıyla okur ---
+
+    /// Saat dönem başında (planlamada) 6, dönem başladıktan sonra
+    /// (2026-11-05) 10'a çıkarılır. `AsOf` iki durumu da doğru gösterir;
+    /// `Latest` her zaman güncel AÇIK satırı (10) görür.
+    #[tokio::test]
+    async fn get_hours_board_as_of_reads_the_projection_at_the_given_date() {
+        let (_dir, pool) = test_pool().await;
+        let state = AppState { pool: pool.clone() };
+        // `a_company_without_a_cap`: tavan (mesafe bilinmiyor + 1 öğrenci)
+        // devre dışı, aksi hâlde 0 öğrencili işletmede `cap_for` tavanı 0'a
+        // sabitler ve HER takdir reddedilir.
+        let company_id = a_company_without_a_cap(&pool, "İşletme A").await;
+        save(&pool, &[hours_input(company_id, 6)]).await.unwrap();
+        save_hours_for_term(&pool, TERM, &[hours_input(company_id, 10)], Some("2026-11-05".to_string()), None, ymd(2026, 11, 10))
+            .await
+            .unwrap();
+
+        let before = ReadAt::resolve(&pool, TERM, Some("2026-10-01".into())).await.unwrap();
+        let board_before = load_board(&state, &before).await.unwrap();
+        assert_eq!(
+            board_before.rows.iter().find(|r| r.company_id == company_id).unwrap().awarded_hours,
+            6,
+            "10-01'de henüz eski takdir geçerliydi"
+        );
+
+        let after = ReadAt::resolve(&pool, TERM, Some("2026-11-06".into())).await.unwrap();
+        let board_after = load_board(&state, &after).await.unwrap();
+        assert_eq!(
+            board_after.rows.iter().find(|r| r.company_id == company_id).unwrap().awarded_hours,
+            10,
+            "11-06'da yeni takdir geçerliydi"
+        );
+
+        let board_latest = load_board(&state, &ReadAt::Latest).await.unwrap();
+        assert_eq!(
+            board_latest.rows.iter().find(|r| r.company_id == company_id).unwrap().awarded_hours,
+            10,
+            "Latest her zaman güncel açık satırı görür"
+        );
+    }
+
+    /// Dönem dışı bir tarih ve bozuk biçim `Validation` ile reddedilir
+    /// (sınırda doğrulama, spec §6) — `ReadAt::resolve`in genel testleri
+    /// `db/read_at.rs`te; burada TEK bir uçtan uca örnek yeterlidir.
+    #[tokio::test]
+    async fn get_hours_board_rejects_a_date_outside_the_term() {
+        let (_dir, pool) = test_pool().await;
+        let err = ReadAt::resolve(&pool, TERM, Some("2027-06-01".into())).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+        let err = ReadAt::resolve(&pool, TERM, Some("bozuk-tarih".into())).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    /// Ders yükü panosundaki şeflik saati de `read_at`e göre değişir. Şeflik
+    /// dönem başında yok, 2026-09-10'dan itibaren bölüm şefliğine (MADDE 6/4,
+    /// 10 saat) dönüşür. Bu tarih oturumun GERÇEK bugününden (2026-09-26)
+    /// önce olduğu için `Latest` (`current_as_of`, gerçek bugünü kullanır) de
+    /// yeni değeri görür — `list_teachers_with_capacity_follows_the_projection_after_a_load_only_change`
+    /// testindeki AYNI desen.
+    #[tokio::test]
+    async fn get_teaching_load_board_as_of_reads_the_chief_hours_at_the_given_date() {
+        let (_dir, pool) = test_pool().await;
+        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
+        change_chief_type_in_planning(&pool, teacher_id, ChiefType::Department, ymd(2026, 9, 10)).await;
+
+        let before = ReadAt::resolve(&pool, TERM, Some("2026-09-05".into())).await.unwrap();
+        let hours_before = before.hours_as_of(&pool, TERM).await.unwrap();
+        let board_before = build_teaching_load_board(&pool, TERM, hours_before).await.unwrap();
+        assert_eq!(board_before.chief_planning_hours, 0, "9-05'te henüz şeflik yoktu");
+
+        let after = ReadAt::resolve(&pool, TERM, Some("2026-09-15".into())).await.unwrap();
+        let hours_after = after.hours_as_of(&pool, TERM).await.unwrap();
+        let board_after = build_teaching_load_board(&pool, TERM, hours_after).await.unwrap();
+        assert_eq!(board_after.chief_planning_hours, 10, "9-15'te bölüm şefliği başlamıştı");
+
+        let hours_latest = ReadAt::Latest.hours_as_of(&pool, TERM).await.unwrap();
+        let board_latest = build_teaching_load_board(&pool, TERM, hours_latest).await.unwrap();
+        assert_eq!(board_latest.chief_planning_hours, 10, "Latest gerçek bugünü kullanır, değişiklik zaten geçmişte kaldı");
     }

@@ -7,6 +7,7 @@
 
 use crate::db::assignments::Assignment;
 use crate::db::company_hours::CompanyTermHours;
+use crate::db::read_at::ReadAt;
 use crate::db::{assignments, companies, company_hours, settings, students, teachers};
 use crate::domain::models::{Company, Student, Teacher};
 use crate::error::{AppError, AppResult};
@@ -146,14 +147,16 @@ async fn load_context(pool: &SqlitePool, term: &str) -> AppResult<ReportContext>
         .map(|c| (c.id, c))
         .collect();
 
-    let hours = company_hours::list(pool, term)
+    // Rapor her zaman GÜNCEL duruma göre üretilir (`ReadAt::Latest`); tarihe
+    // göre rapor üretimi bu işin kapsamı dışındadır (spec §6, plan R5d).
+    let hours = company_hours::list(pool, term, &ReadAt::Latest)
         .await?
         .into_iter()
         .map(|h| (h.company_id, h))
         .collect();
 
     let mut students_by_company: HashMap<i64, Vec<Student>> = HashMap::new();
-    for student in students::list_by_term(pool, term).await? {
+    for student in students::list_by_term(pool, term, &ReadAt::Latest).await? {
         if let Some(company_id) = student.company_id {
             students_by_company.entry(company_id).or_default().push(student);
         }
@@ -290,7 +293,7 @@ struct AssignmentSheetData {
 pub async fn build_assignment_sheet(pool: &SqlitePool, term: &str) -> AppResult<Vec<u8>> {
     let school_name = settings::get(pool, "school_name").await?.unwrap_or_default();
     let ctx = load_context(pool, term).await?;
-    let assignment_list = assignments::list(pool, term).await?;
+    let assignment_list = assignments::list(pool, term, &ReadAt::Latest).await?;
 
     let mut has_forced_rows = false;
     let mut grand_total_hours = 0i64;
@@ -381,7 +384,7 @@ struct VisitListData {
 pub async fn build_visit_lists(pool: &SqlitePool, term: &str) -> AppResult<Vec<u8>> {
     let school_name = settings::get(pool, "school_name").await?.unwrap_or_default();
     let ctx = load_context(pool, term).await?;
-    let assignment_list = assignments::list(pool, term).await?;
+    let assignment_list = assignments::list(pool, term, &ReadAt::Latest).await?;
 
     let teacher_pages = group_by_teacher(&ctx, &assignment_list)
         .into_iter()
@@ -587,7 +590,7 @@ mod tests {
         seed_coordinator(&pool, TERM, company_id, teacher_id, 3, 4, false, None).await;
 
         let ctx = load_context(&pool, TERM).await.unwrap();
-        let assignment_list = assignments::list(&pool, TERM).await.unwrap();
+        let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
         let row = build_row(&ctx, rows[0]);
@@ -607,7 +610,7 @@ mod tests {
         seed_coordinator(&pool, TERM, company_id, teacher_id, 4, 2, false, None).await;
 
         let ctx = load_context(&pool, TERM).await.unwrap();
-        let assignment_list = assignments::list(&pool, TERM).await.unwrap();
+        let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
         let row = build_row(&ctx, rows[0]);
@@ -638,7 +641,7 @@ mod tests {
         seed_coordinator(&pool, TERM, company_id, teacher_id, 1, 1, true, Some("Ulaşım zorunluluğu".into())).await;
 
         let ctx = load_context(&pool, TERM).await.unwrap();
-        let assignment_list = assignments::list(&pool, TERM).await.unwrap();
+        let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
         let row = build_row(&ctx, rows[0]);
@@ -662,7 +665,7 @@ mod tests {
         seed_coordinator(&pool, TERM, company_id, teacher_id, 4, 2, false, None).await;
 
         let ctx = load_context(&pool, TERM).await.unwrap();
-        let assignment_list = assignments::list(&pool, TERM).await.unwrap();
+        let assignment_list = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         let groups = group_by_teacher(&ctx, &assignment_list);
         let (_, rows) = groups.first().expect("bir grup olmalı");
         let row = build_row(&ctx, rows[0]);

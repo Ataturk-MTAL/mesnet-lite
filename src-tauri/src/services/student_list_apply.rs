@@ -17,6 +17,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+use crate::db::read_at::ReadAt;
 use crate::db::students::{self, normalize};
 use crate::db::settings;
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewStudentInput};
@@ -341,7 +342,8 @@ pub async fn preview(pool: &SqlitePool, files: &[StudentListFile]) -> AppResult<
     let named = parse_named_classes(files)?;
     let mut warnings = missing_number_warnings(&named);
     let flat = flatten_rows(&named, &mut warnings);
-    let existing = students::list_by_term(pool, &term).await?;
+    // Önizleme her zaman GÜNCEL duruma göre karşılaştırır (`ReadAt::Latest`).
+    let existing = students::list_by_term(pool, &term, &ReadAt::Latest).await?;
 
     let mut classes: Vec<ClassPreview> = named.iter().map(empty_class_preview).collect();
     let mut vacancy = VacancyTracker::new(&existing);
