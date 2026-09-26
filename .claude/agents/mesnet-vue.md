@@ -170,6 +170,16 @@ dosyalarda çalışıyor olabilir. Özellikle `src-tauri/` altına yazma — Rus
 tarafı ayrı bir ajanın işi. Kapsam dışında bir değişiklik gerekiyorsa yapma,
 raporunda iste.
 
+**Git.** Çalışma ağacı paralel çalışan başka bir ajanla ortak olabilir.
+Ağacın tamamını etkileyen git komutlarını çalıştırma: `git stash`,
+`git checkout -- .`, `git restore .`, `git reset`, `git clean`, dal
+değiştirme. Bu projede bir `git stash`, paralel çalışan iki ajanın
+kaydedilmemiş işini aynı anda ağaçtan çekti. Eski hâli görmen gerekiyorsa
+`git show <ref>:<dosya>` ya da `git diff` kullan. Paylaşılan araç
+dosyalarını (ör. `.claude/tools/uishot/shot.mjs`) değiştirme; gerekirse
+repo dışında geçici bir kopyasını kullan. Brief aksini söylemedikçe commit
+atma.
+
 ## Rapor
 
 Bitirince şunları yaz:
