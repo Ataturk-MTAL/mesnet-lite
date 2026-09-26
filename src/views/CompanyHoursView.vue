@@ -213,6 +213,17 @@
         />
       </RouterLink>
     </div>
+
+    <ChangeDetailsDialog
+      v-if="activeTermDates"
+      :visible="isChangeDialogOpen"
+      :term="activeTermDates"
+      :title="labels.history.changeDetailsTitle"
+      :effective-date="lastChangeEffectiveDate"
+      reason=""
+      @confirm="confirmChangeDetails"
+      @cancel="cancelChangeDetails"
+    />
   </div>
 </template>
 
@@ -226,12 +237,25 @@ import type { AutoDistributeRow, HoursBoard, HoursInput, HoursRow } from '../api
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
 import { useSelectionStore } from '../stores/selection'
+import { useChangeDetailsDialog } from '../composables/useChangeDetailsDialog'
+import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
 import { buildGlobalFilter, extractGlobalFilterValue } from '../utils/dataTableFilters'
 
 const toast = useToast()
 const selection = useSelectionStore()
 const { companyHoursSearch } = storeToRefs(selection)
-const { activeTerm } = storeToRefs(useTermStore())
+const { activeTerm, activeTermDates } = storeToRefs(useTermStore())
+
+/** Dönem tarihleri henüz yüklenmediyse planlama evresi varsayılır — Kaydet
+ *  o kısa aralıkta engellenmez; gerçek yasak arka uçtan gelir. */
+const isPlanning = computed(() => activeTermDates.value?.isPlanning ?? true)
+const {
+  isOpen: isChangeDialogOpen,
+  lastEffectiveDate: lastChangeEffectiveDate,
+  requestDetails: requestChangeDetails,
+  confirm: confirmChangeDetails,
+  cancel: cancelChangeDetails,
+} = useChangeDetailsDialog(() => isPlanning.value)
 
 const board = ref<HoursBoard | null>(null)
 /** Ekranda düzenlenen kopyalar; kaydedilene kadar sunucuya gitmez. */
@@ -413,7 +437,15 @@ function undoSuggestion(): void {
   suggestionWarnings.value = []
 }
 
+/**
+ * Dönem başladıysa (`isPlanning === false`) önce yürürlük tarihi ve gerekçe
+ * sorulur; kullanıcı Vazgeç derse hiçbir şey kaydedilmez. Toplu satır kaydı
+ * TEK bir pencereden geçer, satır başına ayrı pencere açılmaz.
+ */
 async function save(): Promise<void> {
+  const details = await requestChangeDetails()
+  if (details === null) return
+
   isSaving.value = true
   try {
     const payload: HoursInput[] = rows.value.map((row) => ({
@@ -424,7 +456,7 @@ async function save(): Promise<void> {
       isLocked: row.isLocked,
       notes: row.notes,
     }))
-    applyBoard(await hoursApi.save(payload))
+    applyBoard(await hoursApi.save(payload, details))
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
   } catch (error: unknown) {
     showError(error)

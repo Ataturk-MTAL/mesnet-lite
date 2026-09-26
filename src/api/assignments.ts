@@ -1,4 +1,5 @@
 import { call } from './client'
+import type { EffectiveChangeInput } from '../types/models'
 
 /** Atama ekranındaki işletme kartı. */
 export interface BoardCompany {
@@ -96,8 +97,27 @@ export const assignmentsApi = {
   get: (): Promise<AssignmentBoard> => call('get_assignment_board'),
   /** Öneri üretir; hiçbir şey kaydetmez. */
   propose: (): Promise<AllocationProposal> => call('propose_assignments'),
-  assign: (input: NewAssignment): Promise<AssignmentBoard> => call('assign_company', { input }),
-  unassign: (companyId: number): Promise<AssignmentBoard> =>
-    call('unassign_company', { companyId }),
-  clear: (): Promise<AssignmentBoard> => call('clear_assignments'),
+  /**
+   * Dönem başladıysa (`isPlanning === false`) `change` zorunlu etkiyle
+   * gönderilmelidir; arka uç tarihsiz yazımı reddeder. Planlamada `change`
+   * verilmezse ikisi de `null` gider.
+   */
+  assign: (input: NewAssignment, change?: EffectiveChangeInput): Promise<AssignmentBoard> =>
+    call('assign_company', {
+      input,
+      effectiveDate: change?.effectiveDate ?? null,
+      reason: change?.reason ?? null,
+    }),
+  unassign: (companyId: number, change?: EffectiveChangeInput): Promise<AssignmentBoard> =>
+    call('unassign_company', {
+      companyId,
+      effectiveDate: change?.effectiveDate ?? null,
+      reason: change?.reason ?? null,
+    }),
+  /** `clear_assignments` dönem başladıysa HER DURUMDA reddedilir; yalnız planlamada çalışır. */
+  clear: (change?: EffectiveChangeInput): Promise<AssignmentBoard> =>
+    call('clear_assignments', {
+      effectiveDate: change?.effectiveDate ?? null,
+      reason: change?.reason ?? null,
+    }),
 }

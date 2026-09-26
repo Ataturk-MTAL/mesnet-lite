@@ -19,7 +19,8 @@
           icon="pi pi-trash"
           severity="danger"
           outlined
-          :disabled="(board?.assignedCompanyCount ?? 0) === 0"
+          :disabled="(board?.assignedCompanyCount ?? 0) === 0 || !isPlanning"
+          v-tooltip.bottom="{ value: labels.allocation.clearAllDisabledHint, disabled: isPlanning }"
           @click="confirmClear"
         />
       </div>
@@ -418,6 +419,17 @@
         />
       </template>
     </Dialog>
+
+    <ChangeDetailsDialog
+      v-if="activeTermDates"
+      :visible="isChangeDialogOpen"
+      :term="activeTermDates"
+      :title="labels.history.changeDetailsTitle"
+      :effective-date="lastChangeEffectiveDate"
+      reason=""
+      @confirm="confirmChangeDetails"
+      @cancel="cancelChangeDetails"
+    />
   </div>
 </template>
 
@@ -437,6 +449,8 @@ import type {
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
 import { useSelectionStore } from '../stores/selection'
+import { useChangeDetailsDialog } from '../composables/useChangeDetailsDialog'
+import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
 
 /** İşletme adresi ipucu. Varsayılan `--p-tooltip-max-width` (12.5rem) uzun bir
  *  adres için çok dar kalır; sınır `.p-tooltip` KÖKÜNDE tanımlı olduğundan
@@ -490,7 +504,19 @@ const selection = useSelectionStore()
 // `allocationCompanySearch`'tür (Dağıtım işletme arama kutusu, ekranlar
 // arasında paylaşılan genel `companySearch`'ten AYRIDIR).
 const { selectedTeacherId, allocationCompanySearch: companySearch } = storeToRefs(selection)
-const { activeTerm } = storeToRefs(useTermStore())
+const { activeTerm, activeTermDates } = storeToRefs(useTermStore())
+
+/** Dönem tarihleri henüz yüklenmediyse planlama evresi varsayılır — yazımlar
+ *  o kısa aralıkta engellenmez; gerçek yasak arka uçtan gelir. */
+const isPlanning = computed(() => activeTermDates.value?.isPlanning ?? true)
+/** Yerleştirme, çıkarma ve öneri uygulama — dönem başladıysa hepsi bu pencereden geçer. */
+const {
+  isOpen: isChangeDialogOpen,
+  lastEffectiveDate: lastChangeEffectiveDate,
+  requestDetails: requestChangeDetails,
+  confirm: confirmChangeDetails,
+  cancel: cancelChangeDetails,
+} = useChangeDetailsDialog(() => isPlanning.value)
 
 const board = ref<AssignmentBoard | null>(null)
 const draggedCompanyId = ref<number | null>(null)
@@ -887,9 +913,13 @@ async function place(companyId: number, day: number, hour: number): Promise<void
   })
 }
 
+/** Dönem başladıysa önce tarih/gerekçe penceresi sorulur; Vazgeç'te hiçbir şey yazılmaz. */
 async function submit(input: NewAssignment): Promise<void> {
+  const change = await requestChangeDetails()
+  if (change === null) return
+
   try {
-    board.value = await assignmentsApi.assign(input)
+    board.value = await assignmentsApi.assign(input, change)
     draggedCompanyId.value = null
     hoverCell.value = null
     toast.add({ severity: 'success', summary: labels.allocation.assigned, life: 2500 })
@@ -923,15 +953,21 @@ async function confirmForce(): Promise<void> {
   pendingViolations.value = []
 }
 
+/** Liste VE ızgara "x" düğmeleri buradan geçer. Dönem başladıysa önce tarih/gerekçe sorulur. */
 async function unassign(companyId: number): Promise<void> {
+  const change = await requestChangeDetails()
+  if (change === null) return
+
   try {
-    board.value = await assignmentsApi.unassign(companyId)
+    board.value = await assignmentsApi.unassign(companyId, change)
     toast.add({ severity: 'success', summary: labels.allocation.unassigned2, life: 2500 })
   } catch (error: unknown) {
     showError(error)
   }
 }
 
+/** `clear_assignments` dönem başladıysa arka uçta HER DURUMDA reddedilir; bu yüzden
+ *  pencere sorulmaz, düğme doğrudan devre dışı bırakılır (bkz. şablondaki `:disabled`). */
 function confirmClear(): void {
   confirm.require({
     message: labels.allocation.clearConfirm,
@@ -996,19 +1032,27 @@ async function applyProposal(): Promise<void> {
   const items = proposal.value?.assignments ?? []
   if (items.length === 0) return
 
+  // Dönem başladıysa TÜM atamalar için TEK pencere açılır; aynı tarih ve gerekçe
+  // her kaleme gönderilir. Vazgeç'te hiçbir atama uygulanmaz.
+  const change = await requestChangeDetails()
+  if (change === null) return
+
   isApplyingProposal.value = true
   const results: ProposalApplyResult[] = []
 
   for (const item of items) {
     try {
-      await assignmentsApi.assign({
-        teacherId: item.teacherId,
-        companyId: item.companyId,
-        visitDay: item.visitDay,
-        visitHour: item.visitHour,
-        isForced: false,
-        forceReason: null,
-      })
+      await assignmentsApi.assign(
+        {
+          teacherId: item.teacherId,
+          companyId: item.companyId,
+          visitDay: item.visitDay,
+          visitHour: item.visitHour,
+          isForced: false,
+          forceReason: null,
+        },
+        change,
+      )
       results.push({
         companyId: item.companyId,
         companyName: item.companyName,
