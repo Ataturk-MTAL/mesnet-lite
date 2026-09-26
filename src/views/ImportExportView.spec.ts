@@ -8,6 +8,7 @@ import Aura from '@openvue/themes/aura'
 import ImportExportView from './ImportExportView.vue'
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
 import type { StudentListPreview, StudentListSummary } from '../api/studentListImport'
 import type { TermWithDates } from '../types/models'
 
@@ -127,7 +128,7 @@ describe('ImportExportView commission minutes', () => {
     await vi.waitFor(() => expect(callMock.mock.calls.some((c) => c[0] === 'save_to_downloads')).toBe(true))
 
     const exportCall = callMock.mock.calls.find((c) => c[0] === 'export_commission_minutes_pdf')!
-    expect(exportCall[1]).toEqual({ versionId: null })
+    expect(exportCall[1]).toEqual({ versionId: null, asOf: null })
 
     wrapper.unmount()
   })
@@ -541,6 +542,87 @@ describe('ImportExportView e-Okul sınıf listesi — silinecek öğrenciler', (
       .dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
     await vi.waitFor(() => expect(wrapper.text()).toContain(`1 ${labels.studentListImport.resultRemoved}`))
+
+    wrapper.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// "Tarihteki Durum" seçicisi — çıktılar seçili tarihe göre üretilir; içe
+// aktarma olanakları salt okunur durumda kapanır, çıktılar açık kalır.
+// ---------------------------------------------------------------------------
+
+describe('ImportExportView tarihteki durum (asOf)', () => {
+  it('varsayılan görünümde çıktı komutları `asOf: null` gönderir', async () => {
+    callMock.mockImplementation(
+      withVersionsList((command) =>
+        command === 'export_commission_minutes_pdf' ? [1] : '/Downloads/dosya.pdf',
+      ),
+    )
+    const wrapper = mountView()
+    await flushPromises()
+
+    clickButton(wrapper, 'commission-minutes-pdf-button')
+    await vi.waitFor(() => expect(callMock.mock.calls.some((c) => c[0] === 'export_commission_minutes_pdf')).toBe(true))
+
+    const call = callMock.mock.calls.find((c) => c[0] === 'export_commission_minutes_pdf')!
+    expect(call[1]).toEqual({ versionId: null, asOf: null })
+
+    wrapper.unmount()
+  })
+
+  it('geçmiş bir tarih seçiliyken çıktı komutları o tarihi gönderir ve dosya adına ekler', async () => {
+    useAsOfDateStore().setAsOfDate('2026-09-10')
+    callMock.mockImplementation(
+      withVersionsList((command) =>
+        command === 'export_commission_minutes_pdf' ? [1] : '/Downloads/dosya.pdf',
+      ),
+    )
+    const wrapper = mountView()
+    await flushPromises()
+
+    clickButton(wrapper, 'commission-minutes-pdf-button')
+    await vi.waitFor(() => expect(callMock.mock.calls.some((c) => c[0] === 'export_commission_minutes_pdf')).toBe(true))
+
+    const call = callMock.mock.calls.find((c) => c[0] === 'export_commission_minutes_pdf')!
+    expect(call[1]).toEqual({ versionId: null, asOf: '2026-09-10' })
+
+    const saveCall = callMock.mock.calls.find((c) => c[0] === 'save_to_downloads')!
+    const saveArgs = saveCall[1] as { fileName: string }
+    expect(saveArgs.fileName).toBe('Isletme-Belirleme-Komisyon-Tutanagi-2026-2027-1-2026-09-10.pdf')
+
+    wrapper.unmount()
+  })
+
+  it('geçmiş bir tarih seçiliyken başlık görünür, içe aktarma kapanır, çıktılar açık kalır', async () => {
+    // Salt okunura geçmeden önce bir dosya seçilip önizlenmiş olsun ki "İçe
+    // Aktar" düğmesi de (yalnız önizleme kartı varken görünür) sınanabilsin.
+    callMock.mockImplementation(async (command) =>
+      command === 'preview_student_list_import' ? studentListPreviewFixture() : undefined,
+    )
+    const wrapper = mountView()
+    await selectStudentListFile(wrapper)
+    clickButton(wrapper, 'student-list-preview-button')
+    await vi.waitFor(() => expect(wrapper.text()).toContain(labels.studentListImport.previewTitle))
+
+    useAsOfDateStore().setAsOfDate('2026-09-10')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(true)
+
+    // İçe aktarma olanakları kapalı.
+    const csvFileInput = wrapper.find('.file-input').element as HTMLInputElement
+    expect(csvFileInput.disabled).toBe(true)
+    expect(wrapper.findAll('button').find((b) => b.text() === labels.importCsv.chooseFile)?.attributes('disabled')).toBeDefined()
+    expect(
+      wrapper.findAll('button').find((b) => b.text() === labels.studentListImport.chooseFiles)?.attributes('disabled'),
+    ).toBeDefined()
+    expect(wrapper.find('[data-testid="student-list-preview-button"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="student-list-apply-button"]').attributes('disabled')).toBeDefined()
+
+    // Çıktı düğmeleri açık.
+    expect(wrapper.find('[data-testid="commission-minutes-pdf-button"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="commission-minutes-xlsx-button"]').attributes('disabled')).toBeUndefined()
 
     wrapper.unmount()
   })

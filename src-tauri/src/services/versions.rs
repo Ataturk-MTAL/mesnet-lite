@@ -11,12 +11,13 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::NaiveDateTime;
+use chrono::{NaiveDate, NaiveDateTime};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 use tempfile::TempDir;
 
+use crate::db::read_at::ReadAt;
 use crate::error::{AppError, AppResult};
 
 /// Sürüm adının izin verilen azami uzunluğu (brief kararı): listede taşmayan,
@@ -24,6 +25,11 @@ use crate::error::{AppError, AppResult};
 const MAX_VERSION_NAME_LENGTH: usize = 80;
 /// `created_at` sütununun biçimi: Türkiye yerel saatiyle, saniye çözünürlüklü.
 const CREATED_AT_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
+/// `as_of` sütununun ve `ReadAt::resolve`e verilen değerin biçimi.
+const AS_OF_DATE_FORMAT: &str = "%Y-%m-%d";
+/// Otomatik sürüm adına eklenen tarih ekinin biçimi (kullanıcıya dönük, Türkçe
+/// gün.ay.yıl sırası) — brief kararı: " (10.09.2026 itibarıyla)" gibi.
+const AS_OF_DISPLAY_FORMAT: &str = "%d.%m.%Y";
 /// Parmak izi hesaplanırken atlanan tablolar: `versions` kendi kendine
 /// referans olur (bir sürüm alma işlemi kendi parmak izini değiştiremez);
 /// `_sqlx_migrations` şema sürümünü taşır, kullanıcı verisi değildir.
@@ -66,6 +72,11 @@ pub struct Version {
     pub trigger: Option<String>,
     pub term: String,
     pub created_at: String,
+    /// Sürümün hangi tarihe göre üretildiği (`YYYY-MM-DD`); `None` ise
+    /// `Latest` (bkz. `db::read_at::ReadAt`). Dışa aktarım komutları bu alanı,
+    /// isteğinde `asOf` verilmemişse hangi tarihi kullanacağını bulmak için
+    /// okur (brief madde 2).
+    pub as_of: Option<String>,
     /// Sürüm dosyası diskte hâlâ var mı. Elle silinmiş (veya taşınmış) bir
     /// dosyanın satırı listede kalır ama bu alan `false` olur — kullanıcı
     /// açmayı denemeden önce durumu görür.
@@ -84,6 +95,7 @@ struct VersionRow {
     file_name: String,
     fingerprint: String,
     created_at: String,
+    as_of: Option<String>,
 }
 
 impl VersionRow {
@@ -96,6 +108,7 @@ impl VersionRow {
             trigger: self.trigger,
             term: self.term,
             created_at: self.created_at,
+            as_of: self.as_of,
             is_available,
         })
     }
@@ -108,40 +121,58 @@ pub fn versions_dir(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("versions")
 }
 
-/// Elle veya otomatik bir sürüm alır.
+/// Elle veya otomatik bir sürüm alır. `as_of`, sürümün hangi güne göre
+/// üretildiğidir (`ReadAt::resolve` ile doğrulanır — dönem dışı/bozuk tarih
+/// `Validation` döner); `None` ise sürüm `Latest` olarak işaretlenir.
 ///
-/// **Otomatik ve tekrar:** parmak izi son sürümünkiyle AYNIYSA yeni dosya
-/// AÇILMAZ, son sürüm olduğu gibi döner — kullanıcı kararı: aynı veriden
-/// art arda aynı çıktı alınması disk dolduran ayırt etmeyen kopyalar
-/// biriktirmemeli. **Elle kayıt** bu kısayolu asla kullanmaz: kullanıcı bir
-/// ada bilinçle basmışsa, veri değişmemiş olsa bile o an bir sürüm istemiştir.
+/// **Otomatik ve tekrar:** parmak izi VE `as_of` son sürümünkiyle AYNIYSA
+/// yeni dosya AÇILMAZ, son sürüm olduğu gibi döner — kullanıcı kararı: aynı
+/// veriden aynı tarih için art arda aynı çıktı alınması disk dolduran ayırt
+/// etmeyen kopyalar biriktirmemeli. Farklı bir `as_of` ise (veri aynı olsa
+/// bile) yeni bir kopya açılır: geçmiş tarihli bir çıktının dayanağı, başka
+/// bir tarihin dayanağıyla PAYLAŞILAMAZ. **Elle kayıt** bu kısayolu asla
+/// kullanmaz: kullanıcı bir ada bilinçle basmışsa, veri değişmemiş olsa bile
+/// o an bir sürüm istemiştir.
 pub async fn create_version(
     pool: &SqlitePool,
     versions_dir: &Path,
     name: &str,
     kind: VersionKind,
     trigger: Option<&str>,
+    as_of: Option<String>,
     now: NaiveDateTime,
 ) -> AppResult<Version> {
     let name = validate_version_name(name)?;
+    let term = crate::db::settings::get_active_term(pool).await?;
+    let as_of_str = resolve_as_of_string(pool, &term, as_of).await?;
     let fingerprint = compute_fingerprint(pool).await?;
 
     if kind == VersionKind::Auto {
         if let Some(latest) = fetch_latest_version_row(pool).await? {
-            if latest.fingerprint == fingerprint {
+            if latest.fingerprint == fingerprint && latest.as_of == as_of_str {
                 return latest.into_version(versions_dir);
             }
         }
     }
 
     std::fs::create_dir_all(versions_dir)?;
-    let term = crate::db::settings::get_active_term(pool).await?;
     let file_name = random_file_name(pool).await?;
     let target = versions_dir.join(&file_name);
     crate::services::backup::vacuum_into(pool, &target).await?;
 
     let created_at = now.format(CREATED_AT_FORMAT).to_string();
-    let id = insert_version_row(pool, &name, kind, trigger, &term, &file_name, &fingerprint, &created_at).await?;
+    let id = insert_version_row(
+        pool,
+        &name,
+        kind,
+        trigger,
+        &term,
+        &file_name,
+        &fingerprint,
+        &created_at,
+        as_of_str.as_deref(),
+    )
+    .await?;
 
     Ok(Version {
         id,
@@ -150,8 +181,17 @@ pub async fn create_version(
         trigger: trigger.map(str::to_string),
         term,
         created_at,
+        as_of: as_of_str,
         is_available: true,
     })
+}
+
+/// `as_of`'u `ReadAt::resolve` ile doğrular (dönem dışı/bozuk tarih burada
+/// elenir) ve DB'ye yazılacak kanonik `YYYY-MM-DD` dizgesine çevirir.
+/// Doğrulama TEK yerde (`ReadAt::resolve`) yaşar; burada tekrarlanmaz.
+async fn resolve_as_of_string(pool: &SqlitePool, term: &str, as_of: Option<String>) -> AppResult<Option<String>> {
+    let read_at = ReadAt::resolve(pool, term, as_of).await?;
+    Ok(read_at.value().map(|d| d.format(AS_OF_DATE_FORMAT).to_string()))
 }
 
 fn validate_version_name(name: &str) -> AppResult<String> {
@@ -190,10 +230,11 @@ async fn insert_version_row(
     file_name: &str,
     fingerprint: &str,
     created_at: &str,
+    as_of: Option<&str>,
 ) -> AppResult<i64> {
     sqlx::query_scalar(
-        "INSERT INTO versions (name, kind, trigger, term, file_name, fingerprint, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO versions (name, kind, trigger, term, file_name, fingerprint, created_at, as_of)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          RETURNING id",
     )
     .bind(name)
@@ -203,6 +244,7 @@ async fn insert_version_row(
     .bind(file_name)
     .bind(fingerprint)
     .bind(created_at)
+    .bind(as_of)
     .fetch_one(pool)
     .await
     .map_err(|e| AppError::Database(format!("Sürüm satırı eklenemedi: {e}")))
@@ -210,7 +252,7 @@ async fn insert_version_row(
 
 async fn fetch_latest_version_row(pool: &SqlitePool) -> AppResult<Option<VersionRow>> {
     sqlx::query_as::<_, VersionRow>(
-        "SELECT id, name, kind, trigger, term, file_name, fingerprint, created_at
+        "SELECT id, name, kind, trigger, term, file_name, fingerprint, created_at, as_of
          FROM versions ORDER BY id DESC LIMIT 1",
     )
     .fetch_optional(pool)
@@ -222,7 +264,7 @@ async fn fetch_latest_version_row(pool: &SqlitePool) -> AppResult<Option<Version
 /// zaman en sona eklenir) `ORDER BY id DESC` = ekleme sırasının tersi.
 pub async fn list_versions(pool: &SqlitePool, versions_dir: &Path) -> AppResult<Vec<Version>> {
     let rows: Vec<VersionRow> = sqlx::query_as(
-        "SELECT id, name, kind, trigger, term, file_name, fingerprint, created_at
+        "SELECT id, name, kind, trigger, term, file_name, fingerprint, created_at, as_of
          FROM versions ORDER BY id DESC",
     )
     .fetch_all(pool)
@@ -282,8 +324,10 @@ pub async fn open_version(versions_dir: &Path, file_name: &str) -> AppResult<(Te
 }
 
 /// Beş dışa aktarım komutunun ortak `versionId` yolu: seçilen sürümü açar,
-/// üreticiye vereceği havuzu ve o kopyanın aktif dönemini döner. Sürüm
-/// bulunamazsa ya da dosyası kayıpsa Türkçe `Validation` döner (brief madde 4).
+/// üreticiye vereceği havuzu, o kopyanın aktif dönemini ve sürümün kayıtlı
+/// `as_of`'unu döner. Sürüm bulunamazsa ya da dosyası kayıpsa Türkçe
+/// `Validation` döner (brief madde 4). Dönen `as_of`, isteğin kendi `asOf`'u
+/// verilmemişse hangi tarihin kullanılacağını belirler (brief madde 2).
 ///
 /// `TempDir` çağıranın elinde kalmalı: havuz kapatılıp bu değer düşürülene
 /// kadar geçici dosya silinmez (bkz. `open_version`).
@@ -291,31 +335,56 @@ pub async fn open_version_for_export(
     pool: &SqlitePool,
     versions_dir: &Path,
     version_id: i64,
-) -> AppResult<(TempDir, SqlitePool, String)> {
-    let file_name: Option<String> = sqlx::query_scalar("SELECT file_name FROM versions WHERE id = ?1")
-        .bind(version_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| AppError::Database(format!("Sürüm okunamadı: {e}")))?;
+) -> AppResult<(TempDir, SqlitePool, String, Option<String>)> {
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT file_name, as_of FROM versions WHERE id = ?1")
+            .bind(version_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| AppError::Database(format!("Sürüm okunamadı: {e}")))?;
 
-    let Some(file_name) = file_name else {
+    let Some((file_name, as_of)) = row else {
         return Err(AppError::Validation(format!("Seçilen sürüm ({version_id}) bulunamadı.")));
     };
 
     let (temp_dir, version_pool) = open_version(versions_dir, &file_name).await?;
     let term = crate::db::settings::get_active_term(&version_pool).await?;
-    Ok((temp_dir, version_pool, term))
+    Ok((temp_dir, version_pool, term, as_of))
 }
 
 /// Güncel veritabanından bir çıktı üretildikten SONRA çağrılır: otomatik bir
 /// sürüm almayı dener. Kullanıcı kararı — sürüm ALINAMAZSA çıktı hiç
 /// döndürülmez, çünkü resmi bir evrakın (çizelge/tutanak/Excel) dayanağı
 /// olan anlık görüntü kaybolmamalı.
-pub async fn record_auto_version(pool: &SqlitePool, versions_dir: &Path, trigger: &str, name: &str) -> AppResult<()> {
-    create_version(pool, versions_dir, name, VersionKind::Auto, Some(trigger), crate::domain::terms::now_local())
-        .await
-        .map(|_| ())
-        .map_err(|e| AppError::Validation(format!("Sürüm kaydedilemediği için çıktı verilmedi: {e}")))
+///
+/// `as_of`, çıktının üretildiği `ReadAt::value()`dir. Doluysa sürüm adına
+/// " (dd.MM.yyyy itibarıyla)" eki eklenir (brief madde 3) — listede hangi
+/// otomatik sürümün hangi tarihe baktığı adından anlaşılsın diye.
+pub async fn record_auto_version(
+    pool: &SqlitePool,
+    versions_dir: &Path,
+    trigger: &str,
+    name: &str,
+    as_of: Option<NaiveDate>,
+) -> AppResult<()> {
+    let display_name = match as_of {
+        Some(date) => format!("{name} ({} itibarıyla)", date.format(AS_OF_DISPLAY_FORMAT)),
+        None => name.to_string(),
+    };
+    let as_of_str = as_of.map(|date| date.format(AS_OF_DATE_FORMAT).to_string());
+
+    create_version(
+        pool,
+        versions_dir,
+        &display_name,
+        VersionKind::Auto,
+        Some(trigger),
+        as_of_str,
+        crate::domain::terms::now_local(),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| AppError::Validation(format!("Sürüm kaydedilemediği için çıktı verilmedi: {e}")))
 }
 
 /// `versions`/`_sqlx_migrations` dışındaki tabloların deterministik içerik

@@ -100,9 +100,10 @@ async fn write_assignments_sheet(
     workbook: &mut Workbook,
     pool: &SqlitePool,
     term: &str,
+    read_at: &ReadAt,
     bold: &Format,
 ) -> AppResult<()> {
-    let assignment_rows = assignments::list(pool, term, &ReadAt::Latest).await?;
+    let assignment_rows = assignments::list(pool, term, read_at).await?;
     // `list_all`: dönem ortasında pasifleşen bir işletmenin atama satırı
     // dışa aktarımdan KAYBOLMAMALI (spec §5.4, dışa aktarım geçmişe bakar).
     let companies_by_id: BTreeMap<i64, _> = companies::list_all(pool)
@@ -115,7 +116,7 @@ async fn write_assignments_sheet(
         .into_iter()
         .map(|teacher| (teacher.id, teacher))
         .collect();
-    let hours_by_company: BTreeMap<i64, _> = company_hours::list(pool, term, &ReadAt::Latest)
+    let hours_by_company: BTreeMap<i64, _> = company_hours::list(pool, term, read_at)
         .await?
         .into_iter()
         .map(|hours| (hours.company_id, hours))
@@ -180,12 +181,13 @@ async fn write_companies_sheet(
     workbook: &mut Workbook,
     pool: &SqlitePool,
     term: &str,
+    read_at: &ReadAt,
     bold: &Format,
 ) -> AppResult<()> {
     // `list_all`: bu sayfa "dönemden bağımsız kalıcı işletme kaydı"nı dışa
     // aktarır; pasif bir işletme bu kayıttan silinmiş gibi görünmemeli.
     let all_companies = companies::list_all(pool).await?;
-    let student_counts: BTreeMap<i64, i64> = students::count_by_company(pool, term, &ReadAt::Latest)
+    let student_counts: BTreeMap<i64, i64> = students::count_by_company(pool, term, read_at)
         .await?
         .into_iter()
         .collect();
@@ -241,9 +243,10 @@ async fn write_students_sheet(
     workbook: &mut Workbook,
     pool: &SqlitePool,
     term: &str,
+    read_at: &ReadAt,
     bold: &Format,
 ) -> AppResult<()> {
-    let term_students = students::list_by_term(pool, term, &ReadAt::Latest).await?;
+    let term_students = students::list_by_term(pool, term, read_at).await?;
     // `list_all`: öğrenci, artık pasif bir işletmeye yerleştirilmiş olabilir
     // (dönem ortasında birleştirme/pasifleşme); ad süzülmüş listede kaybolmamalı.
     let companies_by_id: BTreeMap<i64, _> = companies::list_all(pool)
@@ -277,14 +280,15 @@ async fn write_students_sheet(
 }
 
 /// Verilen dönem için üç sayfalı bir Excel çalışma kitabı üretir ve baytlarını
-/// döner. Sırasıyla: Atamalar, İşletmeler, Öğrenciler.
-pub async fn build_workbook(pool: &SqlitePool, term: &str) -> AppResult<Vec<u8>> {
+/// döner. Sırasıyla: Atamalar, İşletmeler, Öğrenciler. `read_at`, kenar
+/// çubuğunda seçilen tarihtir (`Latest` = güncel durum).
+pub async fn build_workbook(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<u8>> {
     let mut workbook = Workbook::new();
     let bold = Format::new().set_bold();
 
-    write_assignments_sheet(&mut workbook, pool, term, &bold).await?;
-    write_companies_sheet(&mut workbook, pool, term, &bold).await?;
-    write_students_sheet(&mut workbook, pool, term, &bold).await?;
+    write_assignments_sheet(&mut workbook, pool, term, read_at, &bold).await?;
+    write_companies_sheet(&mut workbook, pool, term, read_at, &bold).await?;
+    write_students_sheet(&mut workbook, pool, term, read_at, &bold).await?;
 
     Ok(workbook.save_to_buffer()?)
 }
@@ -294,7 +298,10 @@ mod tests {
     use super::*;
     use crate::db::init_pool;
     use crate::db::legacy_seed_test_support::{seed_coordinator, seed_hours};
+    use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewStudentInput};
     use crate::domain::models::{NewCompany, NewStudent, NewTeacher};
+    use crate::services::change_service::{execute_change, ChangeMode, ChangeOutcome};
+    use chrono::NaiveDate;
 
     const TERM: &str = "2026-2027/1";
 
@@ -307,7 +314,7 @@ mod tests {
     #[tokio::test]
     async fn empty_database_still_produces_a_non_empty_workbook() {
         let (_dir, pool) = test_pool().await;
-        let bytes = build_workbook(&pool, TERM).await.unwrap();
+        let bytes = build_workbook(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(!bytes.is_empty(), "boş veritabanında da başlıklar yazılmalı");
     }
@@ -317,7 +324,7 @@ mod tests {
     #[tokio::test]
     async fn seeded_records_produce_a_larger_workbook_than_an_empty_one() {
         let (_empty_dir, empty_pool) = test_pool().await;
-        let empty_bytes = build_workbook(&empty_pool, TERM).await.unwrap();
+        let empty_bytes = build_workbook(&empty_pool, TERM, &ReadAt::Latest).await.unwrap();
 
         let (_dir, pool) = test_pool().await;
 
@@ -377,11 +384,117 @@ mod tests {
         seed_hours(&pool, TERM, company.id, 6, false).await;
         seed_coordinator(&pool, TERM, company.id, teacher.id, 2, 3, false, None).await;
 
-        let seeded_bytes = build_workbook(&pool, TERM).await.unwrap();
+        let seeded_bytes = build_workbook(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(
             seeded_bytes.len() > empty_bytes.len(),
             "doldurulmuş dönem boş dönemden daha büyük bir dosya üretmeli"
+        );
+    }
+
+    /// Dönem başlamadan önceki "bugün" — `pdf_report`teki AYNI sabit
+    /// (`ChangeRequest::effective_date` boş bırakılırsa dönem başına çözülür).
+    fn planning_today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 8, 15).unwrap()
+    }
+
+    /// GERÇEK yazma yoluyla (`execute_change`) işletmeye tek bir öğrenci
+    /// yerleştirir; `cap_for` öğrencisiz işletmede 0'a zorladığı için
+    /// (`domain::history::policy::cap_for`) saat takdirinden ÖNCE gerekir.
+    async fn place_student(pool: &SqlitePool, company_id: i64, first: &str) {
+        let req = ChangeRequest {
+            term: TERM.into(),
+            effective_date: None,
+            document_date: None,
+            reason: "test".into(),
+            command: ChangeCommand::CreateStudent {
+                student: NewStudentInput {
+                    first_name: first.into(),
+                    last_name: "Öğrenci".into(),
+                    student_no: None,
+                    grade: "12/C".into(),
+                    branch: "Elektronik Haberleşme".into(),
+                    submitted_at: None,
+                },
+                company_id: Some(company_id),
+            },
+        };
+        let outcome = execute_change(pool, req, ChangeMode::Commit { expected_high_water: None }, planning_today())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, ChangeOutcome::Committed { .. }), "Committed beklenirdi: {outcome:?}");
+    }
+
+    /// GERÇEK yazma yoluyla (`execute_change` → `SetCompanyHours`) bir
+    /// işletmenin saatini `effective_date`ten itibaren değiştirir; iki farklı
+    /// tarihte çağrılırsa `company_hour_periods`te GERÇEKTEN iki ayrı satır
+    /// açar — `legacy_seed_test_support::seed_hours`in aksine (o tek satırlık
+    /// bir sahne kurar, `AsOf`/`Latest` farkını sınayamaz).
+    async fn set_hours(pool: &SqlitePool, company_id: i64, awarded_hours: i64, effective_date: Option<&str>, today: NaiveDate) {
+        let row = crate::db::company_hours::HoursInput {
+            company_id,
+            max_hours_snapshot: 1000,
+            awarded_hours,
+            is_honorary: false,
+            is_locked: false,
+            notes: String::new(),
+        };
+        crate::commands::hours_commands::save_hours_for_term(pool, TERM, &[row], effective_date.map(str::to_string), None, today)
+            .await
+            .unwrap();
+    }
+
+    /// Kenar çubuğunda seçilen tarihe göre üretim (kullanıcı kararı, spec §6):
+    /// `AsOf` değişiklikten ÖNCEki saati (4), `Latest` (açık satır) SONRAki
+    /// saati (8) basmalı — "Atamalar" sayfasındaki hücre farklı olduğu için
+    /// iki çalışma kitabının baytları da farklı olmalı.
+    #[tokio::test]
+    async fn as_of_workbook_reflects_the_hours_in_effect_on_that_date() {
+        let (_dir, pool) = test_pool().await;
+
+        let company = companies::create(&pool, &NewCompany {
+            name: "Tarihli İşletme".into(),
+            contact_first_name: String::new(),
+            contact_last_name: String::new(),
+            phone: String::new(),
+            email: String::new(),
+            address_text: "Test Mahallesi".into(),
+            latitude: None,
+            longitude: None,
+            one_way_distance_km: Some(6.8),
+            district: String::new(),
+            notes: String::new(),
+        })
+        .await
+        .unwrap();
+        let teacher = teachers::create(&pool, &NewTeacher {
+            first_name: "Test".into(),
+            last_name: "Öğretmen".into(),
+            registry_no: "1".into(),
+            field: "Elektrik-Elektronik Teknolojisi".into(),
+            branches: vec![],
+            employment_type: "tenured".into(),
+            base_hours: 20,
+            max_extra_hours: 24,
+            other_extra_hours: 0,
+            chief_type: "none".into(),
+            is_active: true,
+        })
+        .await
+        .unwrap();
+
+        place_student(&pool, company.id, "Ada").await;
+        seed_coordinator(&pool, TERM, company.id, teacher.id, 2, 3, false, None).await;
+        set_hours(&pool, company.id, 4, None, planning_today()).await;
+        set_hours(&pool, company.id, 8, Some("2026-10-05"), NaiveDate::from_ymd_opt(2026, 10, 5).unwrap()).await;
+
+        let before = NaiveDate::from_ymd_opt(2026, 9, 15).unwrap();
+        let as_of_bytes = build_workbook(&pool, TERM, &ReadAt::AsOf(before)).await.unwrap();
+        let latest_bytes = build_workbook(&pool, TERM, &ReadAt::Latest).await.unwrap();
+
+        assert_ne!(
+            as_of_bytes, latest_bytes,
+            "AsOf ve Latest farklı saat basmalı, çıktı baytları aynı olmamalı"
         );
     }
 

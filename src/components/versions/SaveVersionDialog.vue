@@ -6,6 +6,16 @@
     :header="labels.versions.saveDialogTitle"
     :style="{ width: '24rem' }"
   >
+    <Message
+      v-if="asOfDate"
+      severity="info"
+      :closable="false"
+      class="as-of-note"
+      data-testid="version-save-as-of-note"
+    >
+      {{ labels.versions.saveAsOfNote(formatAsOfDate(asOfDate)) }}
+    </Message>
+
     <div class="field">
       <label for="version-save-name">{{ labels.versions.nameLabel }}</label>
       <InputText
@@ -45,8 +55,10 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { labels } from '../../i18n/labels'
+import { formatAsOfDate } from '../../utils/versionDate'
 
-const props = defineProps<{ visible: boolean; saving: boolean }>()
+/** `asOfDate`: kaydın hangi "tarihteki durum"u yansıtacağı; varsayılan görünümde `null`. */
+const props = defineProps<{ visible: boolean; saving: boolean; asOfDate: string | null }>()
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   save: [name: string]
@@ -76,5 +88,6 @@ function save(): void {
 
 <style scoped>
 .field { display: flex; flex-direction: column; gap: 0.375rem; }
+.as-of-note { margin-bottom: 1rem; }
 label { font-size: 0.875rem; font-weight: 500; }
 </style>

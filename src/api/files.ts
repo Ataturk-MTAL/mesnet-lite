@@ -20,30 +20,51 @@ export const filesApi = {
    * Excel çalışma kitabını üretir ve indirilenler klasörüne kaydeder.
    * `versionId` verilmezse güncel veriden üretilir ve otomatik bir sürüm
    * kaydedilir; bir sürüm numarası verilirse o sürümden üretilir ve yeni
-   * sürüm kaydedilmez.
+   * sürüm kaydedilmez. `asOf` yalnız `versionId` yokken dikkate alınır: seçili
+   * "tarihteki durum"a göre üretim ister; `null` güncel veri demektir.
    */
-  exportWorkbook: async (fileName: string, versionId: number | null = null): Promise<string> => {
-    const bytes = await call<number[]>('export_workbook', { versionId })
+  exportWorkbook: async (
+    fileName: string,
+    versionId: number | null = null,
+    asOf: string | null = null,
+  ): Promise<string> => {
+    const bytes = await call<number[]>('export_workbook', { versionId, asOf })
     return saveToDownloads(fileName, bytes)
   },
   /** Koordinatör Görevlendirme Çizelgesi'ni PDF üretir ve kaydeder. */
-  exportAssignmentSheet: async (fileName: string, versionId: number | null = null): Promise<string> => {
-    const bytes = await call<number[]>('export_assignment_sheet', { versionId })
+  exportAssignmentSheet: async (
+    fileName: string,
+    versionId: number | null = null,
+    asOf: string | null = null,
+  ): Promise<string> => {
+    const bytes = await call<number[]>('export_assignment_sheet', { versionId, asOf })
     return saveToDownloads(fileName, bytes)
   },
   /** Öğretmen Ziyaret Listeleri'ni PDF üretir ve kaydeder. */
-  exportVisitLists: async (fileName: string, versionId: number | null = null): Promise<string> => {
-    const bytes = await call<number[]>('export_visit_lists', { versionId })
+  exportVisitLists: async (
+    fileName: string,
+    versionId: number | null = null,
+    asOf: string | null = null,
+  ): Promise<string> => {
+    const bytes = await call<number[]>('export_visit_lists', { versionId, asOf })
     return saveToDownloads(fileName, bytes)
   },
   /** İşletme Belirleme Komisyon Tutanağı'nı PDF üretir ve kaydeder. */
-  exportCommissionMinutesPdf: async (fileName: string, versionId: number | null = null): Promise<string> => {
-    const bytes = await call<number[]>('export_commission_minutes_pdf', { versionId })
+  exportCommissionMinutesPdf: async (
+    fileName: string,
+    versionId: number | null = null,
+    asOf: string | null = null,
+  ): Promise<string> => {
+    const bytes = await call<number[]>('export_commission_minutes_pdf', { versionId, asOf })
     return saveToDownloads(fileName, bytes)
   },
   /** İşletme Belirleme Komisyon Tutanağı'nı Excel olarak üretir ve kaydeder. */
-  exportCommissionMinutesXlsx: async (fileName: string, versionId: number | null = null): Promise<string> => {
-    const bytes = await call<number[]>('export_commission_minutes_xlsx', { versionId })
+  exportCommissionMinutesXlsx: async (
+    fileName: string,
+    versionId: number | null = null,
+    asOf: string | null = null,
+  ): Promise<string> => {
+    const bytes = await call<number[]>('export_commission_minutes_xlsx', { versionId, asOf })
     return saveToDownloads(fileName, bytes)
   },
   /** Konumu olmayan işletmeleri Nominatim ile çözer. Saniyede bir istek. */
