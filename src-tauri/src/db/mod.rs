@@ -78,8 +78,24 @@ pub async fn init_pool(db_path: &Path) -> AppResult<SqlitePool> {
         .map_err(|e| AppError::Database(format!("Migration başarısız: {e}")))?;
 
     backfill_company_districts(&pool).await?;
+    backfill_missing_term_rows(&pool).await?;
 
     Ok(pool)
+}
+
+/// Açılış tamamlaması: `settings::known_terms`in bildiği ama `terms`
+/// tablosunda satırı olmayan her dönem için varsayılan tarihleri yazar.
+///
+/// 0006'dan SONRA `create_term`/`save_settings`'in `terms::ensure` çağırmadığı
+/// eski sürümlerle açılmış kurulu veritabanlarında böyle dönemler kalmış
+/// olabilir (bkz. brief teşhisi); bu, o veritabanlarını göç YAZMADAN düzeltir.
+/// İDEMPOTENT: `terms::ensure` `INSERT OR IGNORE` kullandığı için var olan
+/// bir satıra (özellikle onaylanmış tarihlere) asla dokunmaz.
+async fn backfill_missing_term_rows(pool: &SqlitePool) -> AppResult<()> {
+    for term in settings::known_terms(pool).await? {
+        terms::ensure(pool, &term).await?;
+    }
+    Ok(())
 }
 
 /// Migration 0010'un SQL ile yapamadığı işi tamamlar: `district = ''` olan
@@ -312,5 +328,60 @@ mod tests {
         let today = crate::domain::terms::today_local();
         let expected = backup_dir.join(format!("mesnet-lite-{}.db", today.format("%Y-%m-%d")));
         assert!(expected.exists(), "bugünün otomatik yedeği alınmış olmalı: {expected:?}");
+    }
+
+    fn ymd(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    /// Kök neden testi: `create_term`/`save_settings`'in `terms::ensure`
+    /// çağırmadığı eski sürümlerle açılmış bir veritabanında, `students.term`
+    /// bilinir ama `terms` tablosunda satırı yoktur (bkz. brief teşhisi).
+    /// Açılış tamamlaması bu satırı sessizce doldurmalı.
+    #[tokio::test]
+    async fn init_pool_backfills_a_terms_row_for_a_known_term_missing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        let pool = init_pool(&db_path).await.unwrap();
+        sqlx::query(
+            "INSERT INTO students (first_name, last_name, grade, branch, company_id, term)
+             VALUES ('Test', 'Öğrenci', '12/C', 'Dal', NULL, ?1)",
+        )
+        .bind("2027-2028/1")
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let reopened = init_pool(&db_path).await.unwrap();
+        let mut conn = reopened.acquire().await.unwrap();
+        let fetched = terms::get_in(&mut conn, "2027-2028/1").await.unwrap();
+        let expected = crate::domain::terms::TermDates::default_for("2027-2028/1");
+        assert_eq!(fetched.start, expected.start);
+        assert_eq!(fetched.end, expected.end);
+        assert!(!fetched.dates_confirmed);
+    }
+
+    /// Açılış tamamlaması, kullanıcının onayladığı tarihlere ASLA dokunmaz —
+    /// ikinci (ve üçüncü) açılış hiçbir şeyi değiştirmemeli.
+    #[tokio::test]
+    async fn init_pool_completion_never_touches_a_confirmed_terms_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        let pool = init_pool(&db_path).await.unwrap();
+        // Seed'deki aktif dönem "2026-2027/1"; tarihlerini onayla.
+        terms::update_dates(&pool, "2026-2027/1", ymd(2026, 9, 15), ymd(2027, 1, 20), true, ymd(2026, 9, 1))
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let reopened = init_pool(&db_path).await.unwrap();
+        let mut conn = reopened.acquire().await.unwrap();
+        let fetched = terms::get_in(&mut conn, "2026-2027/1").await.unwrap();
+        assert_eq!(fetched.start, ymd(2026, 9, 15));
+        assert_eq!(fetched.end, ymd(2027, 1, 20));
+        assert!(fetched.dates_confirmed);
     }
 }
