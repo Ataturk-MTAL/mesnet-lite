@@ -52,6 +52,7 @@ declare module 'vue' {
     TeacherFormDialog: typeof import('./src/components/teacher/TeacherFormDialog.vue')['default']
     TeacherLoadDialog: typeof import('./src/components/teacher/TeacherLoadDialog.vue')['default']
     TeacherScheduleHistory: typeof import('./src/components/history/TeacherScheduleHistory.vue')['default']
+    TermDatesDialog: typeof import('./src/components/term/TermDatesDialog.vue')['default']
     Textarea: typeof import('openvue/textarea')['default']
     Toast: typeof import('openvue/toast')['default']
     ToggleSwitch: typeof import('openvue/toggleswitch')['default']
