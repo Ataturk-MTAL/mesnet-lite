@@ -276,6 +276,7 @@ async fn reactivate_if_inactive(conn: &mut sqlx::SqliteConnection, company_id: i
 mod tests {
     use super::*;
     use crate::db::init_pool;
+    use crate::db::read_at::ReadAt;
 
     const LOCATOR: &str = "Result: Test Lisesi, Toroslar/Mersin\n\
          Distance: 6.8 km\n\
@@ -399,7 +400,7 @@ mod tests {
         apply_with_today(&pool, &content, &BTreeMap::new(), today).await.unwrap();
 
         let term = settings::get_active_term(&pool).await.unwrap();
-        let student = students::list_by_term(&pool, &term).await.unwrap().into_iter().next().unwrap();
+        let student = students::list_by_term(&pool, &term, &ReadAt::Latest).await.unwrap().into_iter().next().unwrap();
         let company = companies::list(&pool).await.unwrap().into_iter().find(|c| c.name == "TEST A").unwrap();
 
         assert_eq!(student.company_id, Some(company.id), "öğrenci kapıdan işletmeye yerleştirilmeli");

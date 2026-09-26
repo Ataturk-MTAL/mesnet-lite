@@ -567,7 +567,10 @@ export const labels = {
   asOfDate: {
     label: 'Tarihteki Durum',
     today: 'Bugün',
-    readOnlyNote: 'Bugünden farklı bir tarih görüntüleniyor; bu ekran salt okunur.',
+    readOnlyBanner: (date: string) => `${date} tarihindeki durum gösteriliyor; değişiklik yapılamaz.`,
+    readOnlyBannerNote:
+      'Sınıf günleri, ders yükü satırları, işletme ve öğretmen kayıtları gibi tarihçesi tutulmayan bilgiler güncel hâliyle gösterilir.',
+    backToDefault: 'Varsayılan tarihe dön',
   },
   effectiveDateField: {
     contractStart: 'Sözleşme başlangıç tarihi',

@@ -71,7 +71,7 @@
         .await
         .unwrap();
 
-        let board = load_board(&AppState { pool }).await.unwrap();
+        let board = load_board(&AppState { pool }, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(board.companies.len(), 1);
         assert_eq!(board.companies[0].district, "Akdeniz");
@@ -84,7 +84,7 @@
         let dir = tempfile::tempdir().unwrap();
         let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
 
-        let board = load_board(&AppState { pool }).await.unwrap();
+        let board = load_board(&AppState { pool }, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(board.day_start_hour, 1);
         assert_eq!(board.day_end_hour, 10);
@@ -96,7 +96,7 @@
         let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
         settings::set(&pool, "max_daily_lessons", "6").await.unwrap();
 
-        let board = load_board(&AppState { pool }).await.unwrap();
+        let board = load_board(&AppState { pool }, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(board.day_start_hour, 1);
         assert_eq!(board.day_end_hour, 7);
@@ -133,7 +133,7 @@
         teaching_load::replace_for_term(&pool, TERM, &[row]).await.unwrap();
         seed_teacher(&pool, "Alan", ChiefType::Department).await;
 
-        let board = load_board(&AppState { pool }).await.unwrap();
+        let board = load_board(&AppState { pool }, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(board.pool_hours, 24 * 2 + 10);
     }
@@ -150,7 +150,7 @@
         let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
         let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
 
-        let before = load_board(&AppState { pool: pool.clone() }).await.unwrap();
+        let before = load_board(&AppState { pool: pool.clone() }, &ReadAt::Latest).await.unwrap();
         // Varsayılan ayar (migration 0001): "other" + büyükşehir => tavan 20.
         // Şefsizken bütçe (24) tavanı aştığı için kapasite tavanda KLİPLENİR: 20.
         assert_eq!(before.teachers[0].capacity, 20);
@@ -160,7 +160,7 @@
         // koşulda bu değişikliği görür.
         change_chief_type_in_planning(&pool, teacher_id, ChiefType::Department, NaiveDate::from_ymd_opt(2026, 9, 5).unwrap()).await;
 
-        let after = load_board(&AppState { pool: pool.clone() }).await.unwrap();
+        let after = load_board(&AppState { pool: pool.clone() }, &ReadAt::Latest).await.unwrap();
         // Bölüm şefi 10 saat düşürür: bütçe 24-10=14, artık tavanın (20)
         // ALTINDA kaldığı için kapasite tam 14'e düşer (klipleme kalkar).
         assert_eq!(after.teachers[0].capacity, 14, "bölüm şefi 10 saat düşürmeli");
@@ -249,7 +249,7 @@
         assign_company_for_term(&state, assignment_input(first, company_id, 1, 1), None, None, planning_today()).await.unwrap();
         assign_company_for_term(&state, assignment_input(second, company_id, 5, 7), None, None, planning_today()).await.unwrap();
 
-        let rows = assignments::list(&pool, TERM).await.unwrap();
+        let rows = assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert_eq!(rows.len(), 1, "ikinci kayıt açılmamalı, yerinde taşınmalı");
         assert_eq!(rows[0].teacher_id, second);
         assert_eq!(rows[0].visit_day, 5);
@@ -360,5 +360,53 @@
 
         clear_assignments_for_term(&state, None, None, planning_today()).await.unwrap();
 
-        assert!(assignments::list(&pool, TERM).await.unwrap().is_empty());
+        assert!(assignments::list(&pool, TERM, &ReadAt::Latest).await.unwrap().is_empty());
+    }
+
+    // --- R5 spec §6: `get_assignment_board` tarih itibarıyla okur ---
+
+    /// Bir işletme dönem başında (planlamada) bir öğretmene atanır, sonra
+    /// dönem başladıktan sonraki bir tarihte (2026-11-05) atamadan çıkarılır.
+    /// `AsOf` atamanın açık olduğu/kapandığı iki günü de doğru gösterir;
+    /// `Latest` her zaman güncel (kapanmış) durumu görür — ikisi de gerçek
+    /// takvim gününden BAĞIMSIZDIR çünkü `coordination_periods` "AÇIK satır"
+    /// deseniyle okunur.
+    #[tokio::test]
+    async fn get_assignment_board_as_of_reads_the_coordination_period_at_the_given_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        let state = AppState { pool: pool.clone() };
+        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
+        let company_id = a_company(&pool, "İşletme A").await;
+
+        assign_company_for_term(&state, assignment_input(teacher_id, company_id, 1, 1), None, None, planning_today())
+            .await
+            .unwrap();
+        unassign_company_for_term(&state, company_id, Some("2026-11-05".to_string()), None, ymd(2026, 11, 10))
+            .await
+            .unwrap();
+
+        let mid = ReadAt::resolve(&pool, TERM, Some("2026-10-01".into())).await.unwrap();
+        let board_mid = load_board(&state, &mid).await.unwrap();
+        let company_mid = board_mid.companies.iter().find(|c| c.company_id == company_id).unwrap();
+        assert_eq!(company_mid.assigned_teacher_id, Some(teacher_id), "10-01'de atama hâlâ açıktı");
+
+        let after = ReadAt::resolve(&pool, TERM, Some("2026-11-06".into())).await.unwrap();
+        let board_after = load_board(&state, &after).await.unwrap();
+        let company_after = board_after.companies.iter().find(|c| c.company_id == company_id).unwrap();
+        assert_eq!(company_after.assigned_teacher_id, None, "11-06'da atama zaten bitmişti");
+
+        let board_latest = load_board(&state, &ReadAt::Latest).await.unwrap();
+        let company_latest = board_latest.companies.iter().find(|c| c.company_id == company_id).unwrap();
+        assert_eq!(company_latest.assigned_teacher_id, None, "Latest her zaman güncel açık durumu görür");
+    }
+
+    /// Dönem dışı bir tarih `Validation` ile reddedilir; panoya hiç girilmez.
+    #[tokio::test]
+    async fn get_assignment_board_rejects_a_date_outside_the_term() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+
+        let err = ReadAt::resolve(&pool, TERM, Some("2025-01-01".into())).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }

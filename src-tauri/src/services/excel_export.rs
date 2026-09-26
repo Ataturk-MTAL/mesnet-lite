@@ -5,6 +5,7 @@
 use crate::db::assignments;
 use crate::db::companies;
 use crate::db::company_hours;
+use crate::db::read_at::ReadAt;
 use crate::db::students;
 use crate::db::teachers;
 use crate::error::{AppError, AppResult};
@@ -101,7 +102,7 @@ async fn write_assignments_sheet(
     term: &str,
     bold: &Format,
 ) -> AppResult<()> {
-    let assignment_rows = assignments::list(pool, term).await?;
+    let assignment_rows = assignments::list(pool, term, &ReadAt::Latest).await?;
     // `list_all`: dönem ortasında pasifleşen bir işletmenin atama satırı
     // dışa aktarımdan KAYBOLMAMALI (spec §5.4, dışa aktarım geçmişe bakar).
     let companies_by_id: BTreeMap<i64, _> = companies::list_all(pool)
@@ -114,7 +115,7 @@ async fn write_assignments_sheet(
         .into_iter()
         .map(|teacher| (teacher.id, teacher))
         .collect();
-    let hours_by_company: BTreeMap<i64, _> = company_hours::list(pool, term)
+    let hours_by_company: BTreeMap<i64, _> = company_hours::list(pool, term, &ReadAt::Latest)
         .await?
         .into_iter()
         .map(|hours| (hours.company_id, hours))
@@ -184,7 +185,7 @@ async fn write_companies_sheet(
     // `list_all`: bu sayfa "dönemden bağımsız kalıcı işletme kaydı"nı dışa
     // aktarır; pasif bir işletme bu kayıttan silinmiş gibi görünmemeli.
     let all_companies = companies::list_all(pool).await?;
-    let student_counts: BTreeMap<i64, i64> = students::count_by_company(pool, term)
+    let student_counts: BTreeMap<i64, i64> = students::count_by_company(pool, term, &ReadAt::Latest)
         .await?
         .into_iter()
         .collect();
@@ -242,7 +243,7 @@ async fn write_students_sheet(
     term: &str,
     bold: &Format,
 ) -> AppResult<()> {
-    let term_students = students::list_by_term(pool, term).await?;
+    let term_students = students::list_by_term(pool, term, &ReadAt::Latest).await?;
     // `list_all`: öğrenci, artık pasif bir işletmeye yerleştirilmiş olabilir
     // (dönem ortasında birleştirme/pasifleşme); ad süzülmüş listede kaybolmamalı.
     let companies_by_id: BTreeMap<i64, _> = companies::list_all(pool)

@@ -1,4 +1,5 @@
-use crate::db::{settings, teachers, teaching_load, AppState};
+use crate::db::read_at::ReadAt;
+use crate::db::{settings, teachers, AppState};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, ImpactSummary, NewTeacherProfile};
 use crate::domain::history::events::TeacherLoad;
 use crate::domain::models::{NewTeacher, Teacher};
@@ -48,7 +49,10 @@ pub async fn list_teachers(state: State<'_, AppState>) -> AppResult<Vec<Teacher>
 /// tipine, büyükşehir durumuna VE `teacher_load_periods` projeksiyonundaki
 /// o günkü yüke bağlı olduğu için burada hesaplanır (spec R5c: kapasite
 /// okuyan hiçbir yer artık eski `teachers` yük sütunlarına bakmaz).
-async fn list_teachers_with_capacity_impl(pool: &SqlitePool) -> AppResult<Vec<TeacherWithCapacity>> {
+async fn list_teachers_with_capacity_impl(
+    pool: &SqlitePool,
+    read_at: &ReadAt,
+) -> AppResult<Vec<TeacherWithCapacity>> {
     let all = settings::get_all(pool).await?;
     let institution_type = InstitutionType::parse(
         all.get("institution_type").map(String::as_str).unwrap_or("other"),
@@ -60,8 +64,8 @@ async fn list_teachers_with_capacity_impl(pool: &SqlitePool) -> AppResult<Vec<Te
     let cap = statutory_cap(institution_type, is_metropolitan);
 
     let term = settings::get_active_term(pool).await?;
-    let as_of = teaching_load::current_as_of(pool, &term).await?;
-    let rows = teachers::list_with_load_as_of(pool, &term, as_of).await?;
+    let hours_as_of = read_at.hours_as_of(pool, &term).await?;
+    let rows = teachers::list_with_load_as_of(pool, &term, hours_as_of).await?;
 
     Ok(rows
         .into_iter()
@@ -78,11 +82,16 @@ async fn list_teachers_with_capacity_impl(pool: &SqlitePool) -> AppResult<Vec<Te
         .collect())
 }
 
+/// `asOf` eksikse `ReadAt::Latest`; verilirse aktif dönemin aralığında
+/// olması zorunludur (spec §6).
 #[tauri::command]
 pub async fn list_teachers_with_capacity(
     state: State<'_, AppState>,
+    as_of: Option<String>,
 ) -> AppResult<Vec<TeacherWithCapacity>> {
-    list_teachers_with_capacity_impl(&state.pool).await
+    let term = settings::get_active_term(&state.pool).await?;
+    let read_at = ReadAt::resolve(&state.pool, &term, as_of).await?;
+    list_teachers_with_capacity_impl(&state.pool, &read_at).await
 }
 
 /// `NewTeacher`in kimlik kısmını `createTeacher.teacher` gövdesine çevirir.
@@ -247,6 +256,7 @@ pub async fn delete_teacher(state: State<'_, AppState>, id: i64) -> AppResult<()
 mod tests {
     use super::*;
     use crate::db::init_pool;
+    use crate::db::teaching_load;
 
     async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
@@ -431,7 +441,7 @@ mod tests {
             .await
             .unwrap();
 
-        let before = list_teachers_with_capacity_impl(&pool).await.unwrap();
+        let before = list_teachers_with_capacity_impl(&pool, &ReadAt::Latest).await.unwrap();
         assert_eq!(before[0].chief_hours, 0);
 
         let term = crate::db::teaching_load_test_support::TERM.to_string();
@@ -447,12 +457,48 @@ mod tests {
         .await
         .unwrap();
 
-        let after = list_teachers_with_capacity_impl(&pool).await.unwrap();
+        let after = list_teachers_with_capacity_impl(&pool, &ReadAt::Latest).await.unwrap();
         assert_eq!(after[0].chief_hours, 10, "kapasite projeksiyondaki yeni şeflikten okunmalı");
         assert_eq!(
             teachers::get(&pool, created.id).await.unwrap().chief_type,
             "none",
             "eski sütun donuk kalmalı"
         );
+    }
+
+    // --- R5 spec §6: `list_teachers_with_capacity` tarih itibarıyla okur ---
+
+    use crate::db::teaching_load_test_support::{change_chief_type_in_planning, seed_teacher, TERM};
+    use crate::domain::models::ChiefType;
+
+    /// Şeflik dönem başında yok, 2026-09-10'dan itibaren bölüm şefliğine
+    /// (MADDE 6/4, 10 saat) dönüşür. Bu tarih oturumun GERÇEK bugününden
+    /// (2026-09-26) önce olduğu için `Latest` (`current_as_of`, gerçek
+    /// bugünü kullanır) de yeni değeri görür — `list_teachers_with_capacity_follows_the_projection_after_a_load_only_change`
+    /// testindeki AYNI desen.
+    #[tokio::test]
+    async fn list_teachers_with_capacity_as_of_reads_the_chief_type_at_the_given_date() {
+        let (_dir, pool) = test_pool().await;
+        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
+        change_chief_type_in_planning(&pool, teacher_id, ChiefType::Department, ymd(2026, 9, 10)).await;
+
+        let before = ReadAt::resolve(&pool, TERM, Some("2026-09-05".into())).await.unwrap();
+        let rows_before = list_teachers_with_capacity_impl(&pool, &before).await.unwrap();
+        assert_eq!(rows_before[0].chief_hours, 0, "9-05'te henüz şeflik yoktu");
+
+        let after = ReadAt::resolve(&pool, TERM, Some("2026-09-15".into())).await.unwrap();
+        let rows_after = list_teachers_with_capacity_impl(&pool, &after).await.unwrap();
+        assert_eq!(rows_after[0].chief_hours, 10, "9-15'te bölüm şefliği başlamıştı");
+
+        let rows_latest = list_teachers_with_capacity_impl(&pool, &ReadAt::Latest).await.unwrap();
+        assert_eq!(rows_latest[0].chief_hours, 10, "Latest gerçek bugünü kullanır, değişiklik zaten geçmişte kaldı");
+    }
+
+    /// Dönem dışı bir tarih `Validation` ile reddedilir.
+    #[tokio::test]
+    async fn list_teachers_with_capacity_rejects_a_date_outside_the_term() {
+        let (_dir, pool) = test_pool().await;
+        let err = ReadAt::resolve(&pool, TERM, Some("2025-12-31".into())).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 }

@@ -8,11 +8,13 @@
         dateFormat="dd.mm.yy"
         showIcon
         iconDisplay="input"
+        :minDate="minDateValue"
+        :maxDate="maxDateValue"
         :aria-label="labels.asOfDate.label"
         data-testid="as-of-date-picker"
       />
       <Button
-        v-if="!isToday"
+        v-if="isReadOnly"
         :label="labels.asOfDate.today"
         severity="secondary"
         outlined
@@ -22,7 +24,6 @@
         @click="asOfDateStore.goToToday"
       />
     </div>
-    <Message v-if="isReadOnly" severity="warn" :closable="false">{{ labels.asOfDate.readOnlyNote }}</Message>
   </div>
 </template>
 
@@ -35,7 +36,7 @@ import { dateToIso, isoToDate } from '../../utils/isoDate'
 
 const inputId = useId()
 const asOfDateStore = useAsOfDateStore()
-const { asOfDate, isToday, isReadOnly } = storeToRefs(asOfDateStore)
+const { asOfDate, isReadOnly, termStartDate, termEndDate } = storeToRefs(asOfDateStore)
 
 const dateValue = computed({
   get: () => isoToDate(asOfDate.value),
@@ -44,6 +45,10 @@ const dateValue = computed({
     if (iso) asOfDateStore.setAsOfDate(iso)
   },
 })
+
+// Seçilebilir aralık dönem başı–sonu ile sınırlanır.
+const minDateValue = computed(() => isoToDate(termStartDate.value) ?? undefined)
+const maxDateValue = computed(() => isoToDate(termEndDate.value) ?? undefined)
 </script>
 
 <style scoped>

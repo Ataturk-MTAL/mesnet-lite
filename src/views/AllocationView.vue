@@ -11,6 +11,7 @@
           icon="pi pi-bolt"
           outlined
           :loading="isProposing"
+          :disabled="isReadOnly"
           v-tooltip.top="labels.allocation.proposeTooltip"
           @click="openProposalDialog"
         />
@@ -19,12 +20,14 @@
           icon="pi pi-trash"
           severity="danger"
           outlined
-          :disabled="(board?.assignedCompanyCount ?? 0) === 0 || !isPlanning"
+          :disabled="(board?.assignedCompanyCount ?? 0) === 0 || !isPlanning || isReadOnly"
           v-tooltip.bottom="{ value: labels.allocation.clearAllDisabledHint, disabled: isPlanning }"
           @click="confirmClear"
         />
       </div>
     </div>
+
+    <AsOfReadOnlyBanner />
 
     <Message severity="secondary" :closable="false">{{ labels.allocation.subtitle }}</Message>
 
@@ -105,10 +108,14 @@
                   v-for="company in group.companies"
                   :key="company.companyId"
                   class="company-card"
-                  :class="{ 'company-card--dragging': draggedCompanyId === company.companyId }"
-                  draggable="true"
+                  :class="{
+                    'company-card--dragging': draggedCompanyId === company.companyId,
+                    'company-card--readonly': isReadOnly,
+                  }"
+                  :draggable="!isReadOnly"
                   tabindex="0"
                   role="button"
+                  :aria-disabled="isReadOnly"
                   :aria-label="company.companyName"
                   @dragstart="onDragStart($event, company.companyId)"
                   @dragend="onDragEnd"
@@ -182,6 +189,7 @@
                     text
                     rounded
                     size="small"
+                    :disabled="isReadOnly"
                     :aria-label="labels.allocation.removeAssignment"
                     v-tooltip.top="labels.allocation.removeAssignment"
                     @click="unassign(company.companyId)"
@@ -266,6 +274,7 @@
                             text
                             rounded
                             size="small"
+                            :disabled="isReadOnly"
                             :aria-label="labels.allocation.removeAssignment"
                             v-tooltip.top="labels.allocation.removeAssignment"
                             @click.stop="unassign(cellCompany(day, hour)!.companyId)"
@@ -414,7 +423,7 @@
         <Button
           :label="labels.allocation.proposalApply"
           :loading="isApplyingProposal"
-          :disabled="!proposal || proposal.assignments.length === 0 || isApplyingProposal"
+          :disabled="!proposal || proposal.assignments.length === 0 || isApplyingProposal || isReadOnly"
           @click="applyProposal"
         />
       </template>
@@ -449,8 +458,10 @@ import type {
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
 import { useSelectionStore } from '../stores/selection'
+import { useAsOfDateStore } from '../stores/asOfDate'
 import { useChangeDetailsDialog } from '../composables/useChangeDetailsDialog'
 import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
+import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
 
 /** İşletme adresi ipucu. Varsayılan `--p-tooltip-max-width` (12.5rem) uzun bir
  *  adres için çok dar kalır; sınır `.p-tooltip` KÖKÜNDE tanımlı olduğundan
@@ -505,6 +516,7 @@ const selection = useSelectionStore()
 // arasında paylaşılan genel `companySearch`'ten AYRIDIR).
 const { selectedTeacherId, allocationCompanySearch: companySearch } = storeToRefs(selection)
 const { activeTerm, activeTermDates } = storeToRefs(useTermStore())
+const { requestAsOf, isReadOnly } = storeToRefs(useAsOfDateStore())
 
 /** Dönem tarihleri henüz yüklenmediyse planlama evresi varsayılır — yazımlar
  *  o kısa aralıkta engellenmez; gerçek yasak arka uçtan gelir. */
@@ -741,6 +753,7 @@ function buildDragImage(company: BoardCompany): HTMLDivElement {
  * paketlenmiş uygulamada görünür. İşletme kimliğini yüke yazıyoruz.
  */
 function onDragStart(event: DragEvent, companyId: number): void {
+  if (isReadOnly.value) return
   draggedCompanyId.value = companyId
   if (!event.dataTransfer) return
 
@@ -795,17 +808,19 @@ function onCellMouseLeave(day: number, hour: number): void {
 
 /** Klavye ile seçim: Enter kartı seçer, sonra hücrede tıklama bırakır. */
 function toggleKeyboardSelection(companyId: number): void {
+  if (isReadOnly.value) return
   const isDeselecting = draggedCompanyId.value === companyId
   draggedCompanyId.value = isDeselecting ? null : companyId
   if (isDeselecting) hoverCell.value = null
 }
 
 function onCellClick(day: number, hour: number): void {
-  if (draggedCompanyId.value === null) return
+  if (isReadOnly.value || draggedCompanyId.value === null) return
   void place(draggedCompanyId.value, day, hour)
 }
 
 function onDrop(event: DragEvent, day: number, hour: number): void {
+  if (isReadOnly.value) return
   // `dragend` bazı webview'larda `drop`tan önce tetiklenip ref'i temizler;
   // asıl kaynak sürükleme yüküdür, ref yalnızca yedek.
   const payload = Number(event.dataTransfer?.getData('text/plain'))
@@ -976,6 +991,7 @@ async function confirmForce(): Promise<void> {
 
 /** Liste VE ızgara "x" düğmeleri buradan geçer. Dönem başladıysa önce tarih/gerekçe sorulur. */
 async function unassign(companyId: number): Promise<void> {
+  if (isReadOnly.value) return
   const change = await requestChangeDetails()
   if (change === null) return
 
@@ -990,6 +1006,7 @@ async function unassign(companyId: number): Promise<void> {
 /** `clear_assignments` dönem başladıysa arka uçta HER DURUMDA reddedilir; bu yüzden
  *  pencere sorulmaz, düğme doğrudan devre dışı bırakılır (bkz. şablondaki `:disabled`). */
 function confirmClear(): void {
+  if (isReadOnly.value) return
   confirm.require({
     message: labels.allocation.clearConfirm,
     header: labels.allocation.clearAll,
@@ -1025,6 +1042,7 @@ function proposalResultFor(companyId: number): ProposalApplyResult | null {
 
 /** Öneriyi arka uçtan ister; hiçbir şey kaydetmez, yalnızca diyaloğu doldurur. */
 async function openProposalDialog(): Promise<void> {
+  if (isReadOnly.value) return
   isProposing.value = true
   try {
     proposal.value = await assignmentsApi.propose()
@@ -1050,6 +1068,7 @@ function closeProposalDialog(): void {
  * toast özetinde kullanıcıya bildirilir. Sonunda pano tazelenir.
  */
 async function applyProposal(): Promise<void> {
+  if (isReadOnly.value) return
   const items = proposal.value?.assignments ?? []
   if (items.length === 0) return
 
@@ -1115,7 +1134,7 @@ async function applyProposal(): Promise<void> {
 
 async function load(): Promise<void> {
   try {
-    board.value = await assignmentsApi.get()
+    board.value = await assignmentsApi.get(requestAsOf.value)
     // Seçim listede varsa korunur; yoksa (bayat ya da hiç seçilmemiş) ilk
     // öğretmene düşer, ızgara boş görünmesin.
     selection.syncTeacherSelection(board.value.teachers.map((t) => t.teacherId))
@@ -1124,7 +1143,7 @@ async function load(): Promise<void> {
   }
 }
 
-watch(activeTerm, load)
+watch([activeTerm, requestAsOf], load)
 
 onMounted(load)
 
@@ -1203,6 +1222,8 @@ onUnmounted(() => {
   opacity: 0.5;
   transform: scale(0.97);
 }
+.company-card--readonly { cursor: not-allowed; opacity: 0.7; }
+.company-card--readonly:hover { background: var(--p-content-background); }
 .company-name { font-weight: 600; font-size: 0.9375rem; }
 .company-address {
   font-size: 0.75rem; color: var(--p-text-muted-color); margin-top: 0.125rem;

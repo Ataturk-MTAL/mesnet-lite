@@ -1,3 +1,4 @@
+use crate::db::read_at::ReadAt;
 use crate::db::{availability, class_days, settings, students, teachers, AppState};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest};
 use crate::domain::scheduling::Slot;
@@ -50,7 +51,7 @@ pub struct AvailabilityBoard {
     pub warnings: Vec<String>,
 }
 
-async fn load_board(pool: &SqlitePool) -> AppResult<AvailabilityBoard> {
+async fn load_board(pool: &SqlitePool, read_at: &ReadAt) -> AppResult<AvailabilityBoard> {
     let all_settings = settings::get_all(pool).await?;
     let term = all_settings.get("active_term").cloned().unwrap_or_default();
     let (day_start_hour, day_end_hour) = settings::lesson_hour_bounds(&all_settings);
@@ -63,7 +64,7 @@ async fn load_board(pool: &SqlitePool) -> AppResult<AvailabilityBoard> {
     };
 
     // --- Öğretmenler ve boş saatleri ---
-    let all_slots = availability::list_all(pool, &term).await?;
+    let all_slots = availability::list_all(pool, &term, read_at).await?;
     for teacher in teachers::list_active(pool).await? {
         let free_slots: Vec<String> = all_slots
             .iter()
@@ -86,7 +87,7 @@ async fn load_board(pool: &SqlitePool) -> AppResult<AvailabilityBoard> {
     // Sınıf listesi öğrenci kayıtlarından türetilir: elle sınıf tanımlamak
     // yerine gerçekte öğrencisi olan sınıflar gösterilir.
     let mut student_counts: BTreeMap<String, i64> = BTreeMap::new();
-    for student in students::list_by_term(pool, &term).await? {
+    for student in students::list_by_term(pool, &term, read_at).await? {
         *student_counts.entry(student.grade).or_insert(0) += 1;
     }
 
@@ -146,9 +147,16 @@ async fn load_board(pool: &SqlitePool) -> AppResult<AvailabilityBoard> {
     Ok(board)
 }
 
+/// `asOf` eksikse `ReadAt::Latest`; verilirse aktif dönemin aralığında
+/// olması zorunludur (spec §6).
 #[tauri::command]
-pub async fn get_availability_board(state: State<'_, AppState>) -> AppResult<AvailabilityBoard> {
-    load_board(&state.pool).await
+pub async fn get_availability_board(
+    state: State<'_, AppState>,
+    as_of: Option<String>,
+) -> AppResult<AvailabilityBoard> {
+    let term = settings::get_active_term(&state.pool).await?;
+    let read_at = ReadAt::resolve(&state.pool, &term, as_of).await?;
+    load_board(&state.pool, &read_at).await
 }
 
 /// Izgaranın gönderdiği tek hücre.
@@ -204,7 +212,7 @@ async fn save_availability(
         slots: slots.iter().map(|s| Slot::new(s.day_of_week, s.hour)).collect(),
     };
     commit_schedule_change(pool, &term, command, SAVE_SCHEDULE_REASON, today).await?;
-    load_board(pool).await
+    load_board(pool, &ReadAt::Latest).await
 }
 
 /// Bir öğretmenin haftalık boş saatlerini tamamen değiştirir.
@@ -238,7 +246,7 @@ pub async fn save_class_days(
 
     let term = settings::get_active_term(&state.pool).await?;
     class_days::replace_for_grade(&state.pool, grade.trim(), &term, &days).await?;
-    load_board(&state.pool).await
+    load_board(&state.pool, &ReadAt::Latest).await
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -254,8 +262,8 @@ pub struct CopyOutcome {
 /// `false` döner: karar katmanı kopyayı mevcut programın ÜSTÜNE yazardı, ama
 /// bu ekranın sözleşmesi "mevcut kayıt üzerine yazılmaz"dır.
 async fn copy_schedules(pool: &SqlitePool, term: &str, from_term: &str, today: NaiveDate) -> AppResult<bool> {
-    let target_has_schedule = !availability::list_all(pool, term).await?.is_empty();
-    let source_is_empty = availability::list_all(pool, from_term).await?.is_empty();
+    let target_has_schedule = !availability::list_all(pool, term, &ReadAt::Latest).await?.is_empty();
+    let source_is_empty = availability::list_all(pool, from_term, &ReadAt::Latest).await?.is_empty();
     if target_has_schedule || source_is_empty {
         return Ok(false);
     }
@@ -285,7 +293,7 @@ pub async fn copy_schedule_from_term(
     Ok(CopyOutcome {
         availability_copied,
         class_days_copied,
-        board: load_board(&state.pool).await?,
+        board: load_board(&state.pool, &ReadAt::Latest).await?,
     })
 }
 
@@ -367,7 +375,7 @@ mod tests {
             .unwrap();
         assert_eq!(free_slots_of(&saved, teacher_id), vec!["1-2", "3-7"]);
 
-        let reloaded = load_board(&pool).await.unwrap();
+        let reloaded = load_board(&pool, &ReadAt::Latest).await.unwrap();
         assert_eq!(free_slots_of(&reloaded, teacher_id), vec!["1-2", "3-7"]);
         assert_eq!(reloaded.teachers[0].free_count, 2);
         assert_eq!(count(&pool, "change_sets", Some("set_teacher_schedule")).await, 1, "olay yoluyla yazılmalı");
@@ -381,14 +389,14 @@ mod tests {
         let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
         save_availability(&pool, teacher_id, &[slot(2, 3), slot(4, 4)], planning_today()).await.unwrap();
 
-        let from_reader: Vec<String> = availability::list_all(&pool, TERM)
+        let from_reader: Vec<String> = availability::list_all(&pool, TERM, &ReadAt::Latest)
             .await
             .unwrap()
             .iter()
             .map(|s| format!("{}-{}", s.day_of_week, s.hour))
             .collect();
 
-        let board = load_board(&pool).await.unwrap();
+        let board = load_board(&pool, &ReadAt::Latest).await.unwrap();
         assert_eq!(free_slots_of(&board, teacher_id), from_reader);
         assert_eq!(from_reader, vec!["2-3", "4-4"]);
     }
@@ -449,7 +457,7 @@ mod tests {
 
         assert!(copied);
         assert_eq!(count(&pool, "change_sets", Some("copy_schedules_from_term")).await, 1);
-        let board = load_board(&pool).await.unwrap();
+        let board = load_board(&pool, &ReadAt::Latest).await.unwrap();
         assert_eq!(free_slots_of(&board, teacher_id), vec!["1-2", "5-8"]);
     }
 
@@ -466,7 +474,7 @@ mod tests {
 
         assert!(!copied);
         assert_eq!(count(&pool, "change_sets", None).await, sets_before);
-        let board = load_board(&pool).await.unwrap();
+        let board = load_board(&pool, &ReadAt::Latest).await.unwrap();
         assert_eq!(free_slots_of(&board, teacher_id), vec!["5-8"], "mevcut kayıt korunmalı");
     }
 
@@ -502,7 +510,7 @@ mod tests {
     async fn board_hours_default_to_one_through_ten_when_max_daily_lessons_is_unset() {
         let (_dir, pool) = test_pool().await;
 
-        let board = load_board(&pool).await.unwrap();
+        let board = load_board(&pool, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(board.day_start_hour, 1);
         assert_eq!(board.day_end_hour, 10);
@@ -515,9 +523,58 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         settings::set(&pool, "max_daily_lessons", "6").await.unwrap();
 
-        let board = load_board(&pool).await.unwrap();
+        let board = load_board(&pool, &ReadAt::Latest).await.unwrap();
 
         assert_eq!(board.day_start_hour, 1);
         assert_eq!(board.day_end_hour, 7);
+    }
+
+    // --- R5 spec §6: `get_availability_board` tarih itibarıyla okur ---
+
+    /// Öğretmen dönem başında (1,2) saatinde boş; dönem başladıktan sonra
+    /// (2026-11-05) programı (2,3)'e değişir. `AsOf` iki durumu da doğru
+    /// gösterir; `Latest` "her halükarda son düzenleme etkin" kararını
+    /// korur (bkz. `list_all` başlığı) — ikisi de gerçek takvim gününden
+    /// BAĞIMSIZDIR.
+    async fn set_schedule_at(pool: &SqlitePool, teacher_id: i64, slots: &[(i64, i64)], effective: Option<NaiveDate>, today: NaiveDate) {
+        let request = ChangeRequest {
+            term: TERM.to_string(),
+            effective_date: effective,
+            document_date: None,
+            reason: "test".to_string(),
+            command: ChangeCommand::SetTeacherSchedule {
+                teacher_id,
+                slots: slots.iter().map(|&(day, hour)| Slot::new(day, hour)).collect(),
+            },
+        };
+        let outcome = execute_change(pool, request, ChangeMode::Commit { expected_high_water: None }, today).await.unwrap();
+        assert!(matches!(outcome, ChangeOutcome::Committed { .. }), "Committed beklenirdi");
+    }
+
+    #[tokio::test]
+    async fn get_availability_board_as_of_reads_the_schedule_at_the_given_date() {
+        let (_dir, pool) = test_pool().await;
+        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
+        set_schedule_at(&pool, teacher_id, &[(1, 2)], None, planning_today()).await;
+        set_schedule_at(&pool, teacher_id, &[(2, 3)], Some(ymd(2026, 11, 5)), november_today()).await;
+
+        let before = ReadAt::resolve(&pool, TERM, Some("2026-10-01".into())).await.unwrap();
+        let board_before = load_board(&pool, &before).await.unwrap();
+        assert_eq!(free_slots_of(&board_before, teacher_id), vec!["1-2"], "10-01'de eski program geçerliydi");
+
+        let after = ReadAt::resolve(&pool, TERM, Some("2026-11-06".into())).await.unwrap();
+        let board_after = load_board(&pool, &after).await.unwrap();
+        assert_eq!(free_slots_of(&board_after, teacher_id), vec!["2-3"], "11-06'da yeni program geçerliydi");
+
+        let board_latest = load_board(&pool, &ReadAt::Latest).await.unwrap();
+        assert_eq!(free_slots_of(&board_latest, teacher_id), vec!["2-3"], "Latest her zaman son düzenlemeyi gösterir");
+    }
+
+    /// Bozuk biçimli bir tarih `Validation` ile reddedilir; hiçbir okuma yapılmaz.
+    #[tokio::test]
+    async fn get_availability_board_rejects_a_malformed_date() {
+        let (_dir, pool) = test_pool().await;
+        let err = ReadAt::resolve(&pool, TERM, Some("2026/11/05".into())).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 }

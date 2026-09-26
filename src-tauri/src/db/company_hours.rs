@@ -12,9 +12,10 @@
 //! `company_term_hours` tablosu geri dönüş güvenliği için DÜŞÜRÜLMEDİ, ama
 //! bu iş tarihinden sonra bir daha YAZILMAZ. Tek okuyucusu, açılışta bir kez
 //! çalışan tek seferlik aktarımdır (`services::legacy_reconcile`). Aşağıdaki
-//! her fonksiyon artık `company_hour_periods`in AÇIK (`valid_to IS NULL`)
-//! satırını okur — pano tarihe göre değil, HER ZAMAN bugünkü açık durumu
-//! görür (tarihe göre okuma ayrı bir işte eklenecek).
+//! her fonksiyon `read_at`e göre okur (spec §6): `Latest`te
+//! `company_hour_periods`in AÇIK (`valid_to IS NULL`) satırı, `AsOf(d)`te `d`
+//! gününde geçerli satır.
+use crate::db::read_at::ReadAt;
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -56,21 +57,31 @@ pub struct HoursInput {
 const SELECT_COLUMNS: &str =
     "id, company_id, term, max_hours_snapshot, awarded_hours, is_honorary, is_locked, notes";
 
-/// Dönemin tüm işletmeleri için AÇIK saat takdiri satırları.
-pub async fn list(pool: &SqlitePool, term: &str) -> AppResult<Vec<CompanyTermHours>> {
-    let sql = format!("SELECT {SELECT_COLUMNS} FROM company_hour_periods WHERE term = ?1 AND valid_to IS NULL");
-    Ok(sqlx::query_as::<_, CompanyTermHours>(&sql).bind(term).fetch_all(pool).await?)
+/// Dönemin tüm işletmeleri için `read_at`e göre geçerli saat takdiri satırları.
+pub async fn list(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<CompanyTermHours>> {
+    let sql = format!(
+        "SELECT {SELECT_COLUMNS} FROM company_hour_periods WHERE term = ?1 AND {}",
+        read_at.condition(2)
+    );
+    let mut query = sqlx::query_as::<_, CompanyTermHours>(&sql).bind(term);
+    if let Some(date) = read_at.value() {
+        query = query.bind(date);
+    }
+    Ok(query.fetch_all(pool).await?)
 }
 
-/// Dönemdeki toplam takdir edilen saat. Fahri satırlar 0 saat taşıdığı için
-/// toplama doğal olarak katkı vermez.
-pub async fn total_awarded(pool: &SqlitePool, term: &str) -> AppResult<i64> {
-    let total: Option<i64> = sqlx::query_scalar(
-        "SELECT SUM(awarded_hours) FROM company_hour_periods WHERE term = ?1 AND valid_to IS NULL",
-    )
-    .bind(term)
-    .fetch_one(pool)
-    .await?;
+/// Dönemdeki toplam takdir edilen saat, `read_at`e göre. Fahri satırlar 0
+/// saat taşıdığı için toplama doğal olarak katkı vermez.
+pub async fn total_awarded(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<i64> {
+    let sql = format!(
+        "SELECT SUM(awarded_hours) FROM company_hour_periods WHERE term = ?1 AND {}",
+        read_at.condition(2)
+    );
+    let mut query = sqlx::query_scalar(&sql).bind(term);
+    if let Some(date) = read_at.value() {
+        query = query.bind(date);
+    }
+    let total: Option<i64> = query.fetch_one(pool).await?;
     Ok(total.unwrap_or(0))
 }
 
@@ -119,10 +130,10 @@ mod tests {
         let company_id = a_company(&pool, "Test İşletme A").await;
         seed_hours(&pool, TERM, company_id, 6, false).await;
 
-        let rows = list(&pool, TERM).await.unwrap();
+        let rows = list(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].awarded_hours, 6);
-        assert_eq!(total_awarded(&pool, TERM).await.unwrap(), 6);
+        assert_eq!(total_awarded(&pool, TERM, &ReadAt::Latest).await.unwrap(), 6);
     }
 
     /// Fahri satır havuz toplamına katkı vermez (`legacy_seed_test_support::seed_hours`
@@ -135,13 +146,13 @@ mod tests {
         seed_hours(&pool, TERM, paid, 6, false).await;
         seed_hours(&pool, TERM, free, 8, true).await;
 
-        assert_eq!(total_awarded(&pool, TERM).await.unwrap(), 6);
+        assert_eq!(total_awarded(&pool, TERM, &ReadAt::Latest).await.unwrap(), 6);
     }
 
     #[tokio::test]
     async fn total_is_zero_when_nothing_awarded() {
         let (_dir, pool) = test_pool().await;
-        assert_eq!(total_awarded(&pool, TERM).await.unwrap(), 0);
+        assert_eq!(total_awarded(&pool, TERM, &ReadAt::Latest).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -150,9 +161,9 @@ mod tests {
         let company_id = a_company(&pool, "Test İşletme A").await;
         seed_hours(&pool, TERM, company_id, 6, false).await;
 
-        assert_eq!(total_awarded(&pool, TERM).await.unwrap(), 6);
-        assert_eq!(list(&pool, TERM).await.unwrap().len(), 1);
-        assert!(list(&pool, "2027-2028/1").await.unwrap().is_empty());
+        assert_eq!(total_awarded(&pool, TERM, &ReadAt::Latest).await.unwrap(), 6);
+        assert_eq!(list(&pool, TERM, &ReadAt::Latest).await.unwrap().len(), 1);
+        assert!(list(&pool, "2027-2028/1", &ReadAt::Latest).await.unwrap().is_empty());
     }
 
     /// Takdir kaydı olan bir işletme SİLİNMEZ, pasife alınır (spec §5.4);
@@ -166,6 +177,6 @@ mod tests {
         let result = companies::remove(&pool, company_id).await.unwrap();
 
         assert!(result.soft_deleted, "takdir geçmişi olan işletme pasife alınmalı");
-        assert_eq!(list(&pool, TERM).await.unwrap().len(), 1, "takdir kaydı silinmemeli");
+        assert_eq!(list(&pool, TERM, &ReadAt::Latest).await.unwrap().len(), 1, "takdir kaydı silinmemeli");
     }
 }

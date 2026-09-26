@@ -1,3 +1,4 @@
+use crate::db::read_at::ReadAt;
 use crate::domain::models::{NewStudent, Student};
 use crate::error::{AppError, AppResult};
 use sqlx::{SqliteConnection, SqlitePool};
@@ -43,16 +44,24 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<Student>> {
     Ok(sqlx::query_as::<_, Student>(&sql).fetch_all(pool).await?)
 }
 
-/// Yalnızca verilen eğitim-öğretim yılındaki öğrenciler.
-pub async fn list_by_term(pool: &SqlitePool, term: &str) -> AppResult<Vec<Student>> {
+/// Yalnızca verilen eğitim-öğretim yılındaki öğrenciler, `read_at`e göre
+/// yerleştirilmiş (spec §6): `Latest`te açık satır, `AsOf(d)`te `d` gününde
+/// geçerli satır. İkisi de `students` satırının kendisini (sınıf, dal, var
+/// olma) HER ZAMAN güncel okur; yalnız `company_id` tarihe göre değişir.
+pub async fn list_by_term(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<Student>> {
+    let join = format!(
+        "LEFT JOIN student_placements p ON p.student_id = s.id AND p.term = s.term AND {}",
+        read_at.condition_with_alias("p.", 2)
+    );
     let sql = format!(
-        "SELECT {SELECT_COLUMNS} FROM students s {PLACEMENT_JOIN} WHERE s.term = ?1
+        "SELECT {SELECT_COLUMNS} FROM students s {join} WHERE s.term = ?1
          ORDER BY s.grade COLLATE NOCASE, s.last_name COLLATE NOCASE, s.first_name COLLATE NOCASE"
     );
-    Ok(sqlx::query_as::<_, Student>(&sql)
-        .bind(term)
-        .fetch_all(pool)
-        .await?)
+    let mut query = sqlx::query_as::<_, Student>(&sql).bind(term);
+    if let Some(date) = read_at.value() {
+        query = query.bind(date);
+    }
+    Ok(query.fetch_all(pool).await?)
 }
 
 /// `list_by_term`in aynı transaction'daki bağlantı üzerinden çalışan hâli.
@@ -112,17 +121,21 @@ pub async fn list_by_company(
         .await?)
 }
 
-/// İşletme başına öğrenci sayısı — dönem bazlı, doğrudan projeksiyondan.
-/// Saat tavanı kuralları bu sayıyı kullanır, bu yüzden dönem filtresi zorunludur:
-/// geçen yılın öğrencileri bu yılın tavanını yükseltmemelidir.
-pub async fn count_by_company(pool: &SqlitePool, term: &str) -> AppResult<Vec<(i64, i64)>> {
-    let rows: Vec<(i64, i64)> = sqlx::query_as(
+/// İşletme başına öğrenci sayısı — dönem bazlı, doğrudan projeksiyondan,
+/// `read_at`e göre (spec §6). Saat tavanı kuralları bu sayıyı kullanır, bu
+/// yüzden dönem filtresi zorunludur: geçen yılın öğrencileri bu yılın
+/// tavanını yükseltmemelidir.
+pub async fn count_by_company(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<(i64, i64)>> {
+    let sql = format!(
         "SELECT company_id, COUNT(*) FROM student_placements
-         WHERE term = ?1 AND valid_to IS NULL GROUP BY company_id",
-    )
-    .bind(term)
-    .fetch_all(pool)
-    .await?;
+         WHERE term = ?1 AND {} GROUP BY company_id",
+        read_at.condition(2)
+    );
+    let mut query = sqlx::query_as(&sql).bind(term);
+    if let Some(date) = read_at.value() {
+        query = query.bind(date);
+    }
+    let rows: Vec<(i64, i64)> = query.fetch_all(pool).await?;
     Ok(rows)
 }
 
@@ -608,7 +621,7 @@ mod tests {
         };
         expect_committed(commit_on(&pool, transfer, november_today()).await);
 
-        let counts = count_by_company(&pool, TERM).await.unwrap();
+        let counts = count_by_company(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert_eq!(counts.iter().find(|(id, _)| *id == from).map(|(_, n)| *n).unwrap_or(0), 0, "eski işletmede kalmamalı");
         assert_eq!(counts.iter().find(|(id, _)| *id == to).unwrap().1, 1, "yeni işletmede görünmeli");
     }
@@ -656,7 +669,7 @@ mod tests {
         create_placed_student(&pool, "Ayşe", "Demir", "12/C", Some(a)).await;
         create_placed_student(&pool, "Mehmet", "Kaya", "12/D", Some(b)).await;
 
-        let counts = count_by_company(&pool, TERM).await.unwrap();
+        let counts = count_by_company(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert_eq!(counts.iter().find(|(id, _)| *id == a).unwrap().1, 2);
         assert_eq!(counts.iter().find(|(id, _)| *id == b).unwrap().1, 1);
     }
@@ -786,8 +799,8 @@ mod tests {
         create(&pool, &next_year).await.unwrap();
 
         assert_eq!(list(&pool).await.unwrap().len(), 2, "tüm dönemler");
-        assert_eq!(list_by_term(&pool, TERM).await.unwrap().len(), 1);
-        assert_eq!(list_by_term(&pool, "2027-2028/1").await.unwrap().len(), 1);
+        assert_eq!(list_by_term(&pool, TERM, &ReadAt::Latest).await.unwrap().len(), 1);
+        assert_eq!(list_by_term(&pool, "2027-2028/1", &ReadAt::Latest).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -823,7 +836,7 @@ mod tests {
         .unwrap();
         seed_opening_placement(&pool, "2025-2026/1", last_year_student.id, company_id).await;
 
-        let counts = count_by_company(&pool, TERM).await.unwrap();
+        let counts = count_by_company(&pool, TERM, &ReadAt::Latest).await.unwrap();
         assert_eq!(counts.iter().find(|(id, _)| *id == company_id).unwrap().1, 1);
     }
 

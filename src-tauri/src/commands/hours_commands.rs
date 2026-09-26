@@ -1,5 +1,6 @@
 use crate::db::company_hours::HoursInput;
 use crate::db::hour_rules::select_narrowest;
+use crate::db::read_at::ReadAt;
 use crate::db::teaching_load::{self, BranchStudentCounts, TermBranchHoursInput};
 use crate::db::{companies, company_hours, hour_rules, settings, students, AppState};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, CompanyHoursRow};
@@ -58,23 +59,24 @@ pub struct HoursBoard {
     pub warnings: Vec<String>,
 }
 
-async fn load_board(state: &AppState) -> AppResult<HoursBoard> {
+async fn load_board(state: &AppState, read_at: &ReadAt) -> AppResult<HoursBoard> {
     let pool = &state.pool;
     let all_settings = settings::get_all(pool).await?;
     let term = all_settings.get("active_term").cloned().unwrap_or_default();
     // Havuz `settings` ayarlarından değil, döneme bağlı `term_branch_hours`
     // (bkz. migration 0005) ile şeflik projeksiyonundan hesaplanır.
-    let as_of = teaching_load::current_as_of(pool, &term).await?;
-    let pool_hours = teaching_load::total_pool_hours(pool, &term, as_of).await?;
+    // `hours_as_of` `read_at`e göre çözülür (spec §6).
+    let hours_as_of = read_at.hours_as_of(pool, &term).await?;
+    let pool_hours = teaching_load::total_pool_hours(pool, &term, hours_as_of).await?;
 
     // `list` (süzülmüş): saat takdiri havuzu bir yönetim ekranıdır, pasif işletmeye saat takdir edilmez.
     let all_companies = companies::list(pool).await?;
     let rules = hour_rules::list(pool).await?;
-    let student_counts: BTreeMap<i64, i64> = students::count_by_company(pool, &term)
+    let student_counts: BTreeMap<i64, i64> = students::count_by_company(pool, &term, read_at)
         .await?
         .into_iter()
         .collect();
-    let saved: BTreeMap<i64, _> = company_hours::list(pool, &term)
+    let saved: BTreeMap<i64, _> = company_hours::list(pool, &term, read_at)
         .await?
         .into_iter()
         .map(|row| (row.company_id, row))
@@ -148,9 +150,16 @@ async fn load_board(state: &AppState) -> AppResult<HoursBoard> {
     Ok(board)
 }
 
+/// `asOf` eksikse `ReadAt::Latest`; verilirse aktif dönemin aralığında
+/// olması zorunludur (spec §6).
 #[tauri::command]
-pub async fn get_hours_board(state: State<'_, AppState>) -> AppResult<HoursBoard> {
-    load_board(&state).await
+pub async fn get_hours_board(
+    state: State<'_, AppState>,
+    as_of: Option<String>,
+) -> AppResult<HoursBoard> {
+    let term = settings::get_active_term(&state.pool).await?;
+    let read_at = ReadAt::resolve(&state.pool, &term, as_of).await?;
+    load_board(&state, &read_at).await
 }
 
 /// Saatler artık tarihçe kapısından (`change_service::execute_change`) yazılır
@@ -177,7 +186,7 @@ pub async fn save_company_hours(
     // testler gerçek takvim gününe bağlı kalmadan dönem başlangıcı/tarih
     // zorunluluğu senaryolarını sabit bir "bugün" ile sınayabilir.
     save_hours_for_term(&state.pool, &term, &rows, effective_date, reason, today_local()).await?;
-    load_board(&state).await
+    load_board(&state, &ReadAt::Latest).await
 }
 
 /// `save_company_hours`'ın asıl yazma adımı — testte `State<'_, AppState>`
@@ -373,11 +382,17 @@ async fn build_teaching_load_board(
 
 /// Aktif dönemin ders yükü satırlarını getirir; henüz satırı olmayan ama
 /// öğrencisi olan (sınıf, dal) çiftleri öneri satırı olarak eklenir.
+/// `asOf` eksikse `ReadAt::Latest`; verilirse aktif dönemin aralığında
+/// olması zorunludur (spec §6).
 #[tauri::command]
-pub async fn get_teaching_load_board(state: State<'_, AppState>) -> AppResult<TeachingLoadBoard> {
+pub async fn get_teaching_load_board(
+    state: State<'_, AppState>,
+    as_of: Option<String>,
+) -> AppResult<TeachingLoadBoard> {
     let term = settings::get_active_term(&state.pool).await?;
-    let as_of = teaching_load::current_as_of(&state.pool, &term).await?;
-    build_teaching_load_board(&state.pool, &term, as_of).await
+    let read_at = ReadAt::resolve(&state.pool, &term, as_of).await?;
+    let hours_as_of = read_at.hours_as_of(&state.pool, &term).await?;
+    build_teaching_load_board(&state.pool, &term, hours_as_of).await
 }
 
 /// Aktif dönemin ders yükü satırlarını TAMAMEN değiştirir (kısmi güncelleme yok).

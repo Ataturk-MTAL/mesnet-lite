@@ -12,6 +12,7 @@ import { listHistory } from '../api/history'
 import { labels } from '../i18n/labels'
 import { useSelectionStore } from '../stores/selection'
 import { useTermStore } from '../stores/term'
+import { useAsOfDateStore } from '../stores/asOfDate'
 import type { ChangeOutcome, ChangeRequest, HistoryChangeSetEntry, ImpactSummary, TermWithDates } from '../types/models'
 
 // Dönem, aktif dönem ve müsaitlik verisi Tauri komutlarından gelir; testte backend yoktur.
@@ -20,13 +21,13 @@ vi.mock('../api/terms', () => ({
   listTermsWithDates: () => listTermsWithDatesMock(),
 }))
 
-const getBoardMock = vi.fn<() => Promise<AvailabilityBoard>>()
+const getBoardMock = vi.fn<(asOf: string | null) => Promise<AvailabilityBoard>>()
 const saveTeacherMock = vi.fn<(teacherId: number, slots: SlotInput[]) => Promise<AvailabilityBoard>>()
 const saveClassDaysMock = vi.fn<(grade: string, days: number[]) => Promise<AvailabilityBoard>>()
 const copyFromTermMock = vi.fn<(fromTerm: string) => Promise<CopyOutcome>>()
 vi.mock('../api/availability', () => ({
   availabilityApi: {
-    get: () => getBoardMock(),
+    get: (asOf: string | null = null) => getBoardMock(asOf),
     saveTeacher: (teacherId: number, slots: SlotInput[]) => saveTeacherMock(teacherId, slots),
     saveClassDays: (grade: string, days: number[]) => saveClassDaysMock(grade, days),
     copyFromTerm: (fromTerm: string) => copyFromTermMock(fromTerm),
@@ -407,6 +408,45 @@ describe('AvailabilityView history and correction', () => {
     expect(wrapper.find('textarea#availability-reason').exists()).toBe(false)
     expect(wrapper.text()).not.toContain(labels.history.reasonRequired)
     expect(wrapper.text()).not.toContain(labels.effectiveDateField.required)
+    wrapper.unmount()
+  })
+})
+
+describe('AvailabilityView tarihteki durum (asOf)', () => {
+  it('varsayılan tarihte board `null` ile istenir, başlık yoktur ve ızgara düzenlenebilir', async () => {
+    getBoardMock.mockResolvedValue(boardFixture())
+    listTermsWithDatesMock.mockResolvedValue([startedTerm])
+    vi.mocked(listHistory).mockResolvedValue({ entries: [], nextBeforeChangeSetId: null })
+    useTermStore().activeTermDates = startedTerm
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(getBoardMock).toHaveBeenCalledWith(null)
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(false)
+    await wrapper.find('.grid-cell').trigger('keydown', { key: 'Enter' })
+    expect(freeCellCount(wrapper)).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('geçmiş bir tarih seçilince board o tarihle istenir, başlık görünür ve ızgara salt okunur olur', async () => {
+    getBoardMock.mockResolvedValue(boardFixture())
+    listTermsWithDatesMock.mockResolvedValue([startedTerm])
+    vi.mocked(listHistory).mockResolvedValue({ entries: [], nextBeforeChangeSetId: null })
+    useTermStore().activeTermDates = startedTerm
+    useAsOfDateStore().setAsOfDate('2026-10-05')
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(getBoardMock).toHaveBeenCalledWith('2026-10-05')
+    expect(wrapper.find('[data-testid="as-of-readonly-banner"]').exists()).toBe(true)
+
+    await wrapper.find('.grid-cell').trigger('keydown', { key: 'Enter' })
+    expect(freeCellCount(wrapper)).toBe(0)
+
+    const selectAllButton = wrapper.findAll('button').find((b) => b.text() === labels.availability.selectAll)
+    expect(selectAllButton?.attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 })

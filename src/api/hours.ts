@@ -68,7 +68,8 @@ export interface DistributionOutcome {
 }
 
 export const hoursApi = {
-  get: (): Promise<HoursBoard> => call('get_hours_board'),
+  /** `asOf` `null` ise güncel kayıt (düzenlenebilir); bir tarihse o güne göre okuma (salt okunur). */
+  get: (asOf: string | null = null): Promise<HoursBoard> => call('get_hours_board', { asOf }),
   /**
    * Dönem başladıysa (`isPlanning === false`) `change` zorunlu etkiyle
    * gönderilmelidir; arka uç tarihsiz yazımı reddeder. Planlamada `change`

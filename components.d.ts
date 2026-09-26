@@ -17,6 +17,7 @@ declare module 'vue' {
     AccordionPanel: typeof import('openvue/accordionpanel')['default']
     AppSidebar: typeof import('./src/components/layout/AppSidebar.vue')['default']
     AsOfDatePicker: typeof import('./src/components/history/AsOfDatePicker.vue')['default']
+    AsOfReadOnlyBanner: typeof import('./src/components/history/AsOfReadOnlyBanner.vue')['default']
     AutoComplete: typeof import('openvue/autocomplete')['default']
     Button: typeof import('openvue/button')['default']
     Card: typeof import('openvue/card')['default']

@@ -94,7 +94,9 @@ export interface AllocationProposal {
 }
 
 export const assignmentsApi = {
-  get: (): Promise<AssignmentBoard> => call('get_assignment_board'),
+  /** `asOf` `null` ise güncel kayıt (düzenlenebilir); bir tarihse o güne göre okuma (salt okunur). */
+  get: (asOf: string | null = null): Promise<AssignmentBoard> =>
+    call('get_assignment_board', { asOf }),
   /** Öneri üretir; hiçbir şey kaydetmez. */
   propose: (): Promise<AllocationProposal> => call('propose_assignments'),
   /**
