@@ -137,7 +137,7 @@ async fn create_version_writes_a_file_and_a_row() {
     let versions_dir = dir.path().join("versions");
     insert_company(&pool, "Test A.Ş.").await;
 
-    let version = create_version(&pool, &versions_dir, "İlk Kayıt", VersionKind::Manual, None, now(0))
+    let version = create_version(&pool, &versions_dir, "İlk Kayıt", VersionKind::Manual, None, None, now(0))
         .await
         .unwrap();
 
@@ -157,10 +157,10 @@ async fn automatic_repeat_without_data_change_does_not_open_a_new_file() {
     let versions_dir = dir.path().join("versions");
     insert_company(&pool, "Değişmeyen İşletme").await;
 
-    let first = create_version(&pool, &versions_dir, "Çıktı", VersionKind::Auto, Some("workbook"), now(0))
+    let first = create_version(&pool, &versions_dir, "Çıktı", VersionKind::Auto, Some("workbook"), None, now(0))
         .await
         .unwrap();
-    let second = create_version(&pool, &versions_dir, "Çıktı", VersionKind::Auto, Some("workbook"), now(5))
+    let second = create_version(&pool, &versions_dir, "Çıktı", VersionKind::Auto, Some("workbook"), None, now(5))
         .await
         .unwrap();
 
@@ -178,12 +178,12 @@ async fn automatic_version_opens_a_new_file_when_data_changed() {
     let versions_dir = dir.path().join("versions");
     insert_company(&pool, "Birinci").await;
 
-    let first = create_version(&pool, &versions_dir, "Çıktı", VersionKind::Auto, Some("workbook"), now(0))
+    let first = create_version(&pool, &versions_dir, "Çıktı", VersionKind::Auto, Some("workbook"), None, now(0))
         .await
         .unwrap();
 
     insert_company(&pool, "İkinci").await;
-    let second = create_version(&pool, &versions_dir, "Çıktı", VersionKind::Auto, Some("workbook"), now(5))
+    let second = create_version(&pool, &versions_dir, "Çıktı", VersionKind::Auto, Some("workbook"), None, now(5))
         .await
         .unwrap();
 
@@ -201,10 +201,10 @@ async fn manual_version_always_opens_a_new_file_even_without_data_change() {
     let versions_dir = dir.path().join("versions");
     insert_company(&pool, "Sabit").await;
 
-    let first = create_version(&pool, &versions_dir, "Birinci Elle Kayıt", VersionKind::Manual, None, now(0))
+    let first = create_version(&pool, &versions_dir, "Birinci Elle Kayıt", VersionKind::Manual, None, None, now(0))
         .await
         .unwrap();
-    let second = create_version(&pool, &versions_dir, "İkinci Elle Kayıt", VersionKind::Manual, None, now(5))
+    let second = create_version(&pool, &versions_dir, "İkinci Elle Kayıt", VersionKind::Manual, None, None, now(5))
         .await
         .unwrap();
 
@@ -223,8 +223,8 @@ async fn list_versions_orders_newest_first() {
     let (dir, pool) = test_pool().await;
     let versions_dir = dir.path().join("versions");
 
-    let first = create_version(&pool, &versions_dir, "Birinci", VersionKind::Manual, None, now(0)).await.unwrap();
-    let second = create_version(&pool, &versions_dir, "İkinci", VersionKind::Manual, None, now(5)).await.unwrap();
+    let first = create_version(&pool, &versions_dir, "Birinci", VersionKind::Manual, None, None, now(0)).await.unwrap();
+    let second = create_version(&pool, &versions_dir, "İkinci", VersionKind::Manual, None, None, now(5)).await.unwrap();
 
     let listed = list_versions(&pool, &versions_dir).await.unwrap();
     assert_eq!(listed.iter().map(|v| v.id).collect::<Vec<_>>(), vec![second.id, first.id]);
@@ -236,7 +236,7 @@ async fn list_versions_marks_a_version_with_a_deleted_file_as_unavailable() {
     let (dir, pool) = test_pool().await;
     let versions_dir = dir.path().join("versions");
 
-    let version = create_version(&pool, &versions_dir, "Kaybolacak", VersionKind::Manual, None, now(0))
+    let version = create_version(&pool, &versions_dir, "Kaybolacak", VersionKind::Manual, None, None, now(0))
         .await
         .unwrap();
 
@@ -261,7 +261,7 @@ async fn delete_version_removes_the_file_and_the_row() {
     let (dir, pool) = test_pool().await;
     let versions_dir = dir.path().join("versions");
 
-    let version = create_version(&pool, &versions_dir, "Silinecek", VersionKind::Manual, None, now(0))
+    let version = create_version(&pool, &versions_dir, "Silinecek", VersionKind::Manual, None, None, now(0))
         .await
         .unwrap();
     let file_name: String = sqlx::query_scalar("SELECT file_name FROM versions WHERE id = ?1")
@@ -291,7 +291,7 @@ async fn open_version_never_touches_the_original_file() {
     let versions_dir = dir.path().join("versions");
     insert_company(&pool, "Test").await;
 
-    let version = create_version(&pool, &versions_dir, "Değişmeyecek", VersionKind::Manual, None, now(0))
+    let version = create_version(&pool, &versions_dir, "Değişmeyecek", VersionKind::Manual, None, None, now(0))
         .await
         .unwrap();
     let file_name: String = sqlx::query_scalar("SELECT file_name FROM versions WHERE id = ?1")
@@ -340,7 +340,7 @@ async fn version_taken_before_a_change_still_reads_the_old_value() {
     // yol tarihi otomatik dönem başına çözer.
     set_company_hours_via_real_path(&pool, company_id, 4, None, ymd(2026, 8, 15)).await;
 
-    let taken = record_auto_version(&pool, &versions_dir, "workbook", "Çalışma Kitabı çıktısı").await;
+    let taken = record_auto_version(&pool, &versions_dir, "workbook", "Çalışma Kitabı çıktısı", None).await;
     assert!(taken.is_ok(), "sürüm alınabilmeli: {:?}", taken.err());
 
     // Dönem başladıktan SONRA, ayrı bir yürürlük tarihiyle: gerçek bir
@@ -351,12 +351,15 @@ async fn version_taken_before_a_change_still_reads_the_old_value() {
     let listed = list_versions(&pool, &versions_dir).await.unwrap();
     let version = listed.first().expect("bir sürüm alınmış olmalı");
 
-    let (temp_dir, version_pool, version_term) =
+    let (temp_dir, version_pool, version_term, version_as_of) =
         open_version_for_export(&pool, &versions_dir, version.id).await.unwrap();
     let temp_path = temp_dir.path().to_path_buf();
 
     // Dönen dönem, KOPYANIN kendi `active_term` ayarıdır (brief madde 4).
     assert_eq!(version_term, TERM);
+    // `record_auto_version`e `as_of` verilmedi (`None`); sürümün kendisi de
+    // `Latest` olarak işaretlenmeli.
+    assert_eq!(version_as_of, None);
 
     let old_rows = company_hours::list(&version_pool, &version_term, &ReadAt::Latest).await.unwrap();
     let old_row = old_rows.iter().find(|r| r.company_id == company_id).expect("sürümde satır bulunmalı");
@@ -364,7 +367,7 @@ async fn version_taken_before_a_change_still_reads_the_old_value() {
 
     // Dışa aktarım yolunun sürüm kopyasında GERÇEKTEN çalıştığını kanıtla:
     // `open_version_for_export`in beş komuta verdiği havuz budur.
-    let pdf_result = pdf_report::build_assignment_sheet(&version_pool, &version_term).await;
+    let pdf_result = pdf_report::build_assignment_sheet(&version_pool, &version_term, &ReadAt::Latest).await;
     assert!(pdf_result.is_ok(), "sürüm kopyasından PDF üretilebilmeli: {:?}", pdf_result.err());
 
     version_pool.close().await;
@@ -388,7 +391,7 @@ async fn create_version_fails_when_the_versions_directory_cannot_be_created() {
     let blocked_path = dir.path().join("versions-as-a-file");
     std::fs::write(&blocked_path, b"bu bir dizin degil").unwrap();
 
-    let result = create_version(&pool, &blocked_path, "Olmayacak", VersionKind::Manual, None, now(0)).await;
+    let result = create_version(&pool, &blocked_path, "Olmayacak", VersionKind::Manual, None, None, now(0)).await;
 
     assert!(result.is_err());
     let row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM versions").fetch_one(&pool).await.unwrap();
@@ -404,7 +407,7 @@ async fn record_auto_version_reports_the_reason_when_it_fails() {
     let blocked_path = dir.path().join("versions-as-a-file");
     std::fs::write(&blocked_path, b"bu bir dizin degil").unwrap();
 
-    let result = record_auto_version(&pool, &blocked_path, "workbook", "Çalışma Kitabı çıktısı").await;
+    let result = record_auto_version(&pool, &blocked_path, "workbook", "Çalışma Kitabı çıktısı", None).await;
 
     let message = result.unwrap_err().to_string();
     assert!(
@@ -422,7 +425,7 @@ async fn create_version_rejects_a_blank_name() {
     let (dir, pool) = test_pool().await;
     let versions_dir = dir.path().join("versions");
 
-    let result = create_version(&pool, &versions_dir, "   ", VersionKind::Manual, None, now(0)).await;
+    let result = create_version(&pool, &versions_dir, "   ", VersionKind::Manual, None, None, now(0)).await;
 
     assert!(matches!(result, Err(crate::error::AppError::Validation(_))));
 }
@@ -433,7 +436,170 @@ async fn create_version_rejects_a_name_longer_than_eighty_characters() {
     let versions_dir = dir.path().join("versions");
     let too_long = "a".repeat(81);
 
-    let result = create_version(&pool, &versions_dir, &too_long, VersionKind::Manual, None, now(0)).await;
+    let result = create_version(&pool, &versions_dir, &too_long, VersionKind::Manual, None, None, now(0)).await;
 
     assert!(matches!(result, Err(crate::error::AppError::Validation(_))));
+}
+
+// ---------------------------------------------------------------------
+// as_of (brief madde 2/3)
+// ---------------------------------------------------------------------
+
+/// Verilen `as_of`, `ReadAt::resolve` ile doğrulanıp kanonik `YYYY-MM-DD`
+/// biçiminde satıra yazılmalı.
+#[tokio::test]
+async fn create_version_stores_the_given_as_of_date() {
+    let (dir, pool) = test_pool().await;
+    let versions_dir = dir.path().join("versions");
+    insert_company(&pool, "Test A.Ş.").await;
+
+    let version = create_version(
+        &pool,
+        &versions_dir,
+        "Tarihli Kayıt",
+        VersionKind::Manual,
+        None,
+        Some("2026-10-05".to_string()),
+        now(0),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(version.as_of.as_deref(), Some("2026-10-05"));
+}
+
+/// Dönem dışı bir `as_of`, `ReadAt::resolve`in doğrulamasından geçemez —
+/// `create_version` bunu KENDİ hata mesajı üretmeden, tek doğruluk kaynağına
+/// devrederek reddetmeli.
+#[tokio::test]
+async fn create_version_rejects_an_as_of_date_outside_the_term() {
+    let (dir, pool) = test_pool().await;
+    let versions_dir = dir.path().join("versions");
+
+    let result = create_version(
+        &pool,
+        &versions_dir,
+        "Olmayacak",
+        VersionKind::Manual,
+        None,
+        Some("2027-06-01".to_string()),
+        now(0),
+    )
+    .await;
+
+    assert!(matches!(result, Err(crate::error::AppError::Validation(_))));
+    let row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM versions").fetch_one(&pool).await.unwrap();
+    assert_eq!(row_count, 0, "dönem dışı tarihte satır yazılmamalı");
+}
+
+/// Otomatik sürümün tekrar denetimi artık AYNI parmak izi VE AYNI `as_of`
+/// ister: aynı veriden aynı tarih için ikinci çağrı yeni dosya açmamalı.
+#[tokio::test]
+async fn automatic_repeat_with_the_same_as_of_does_not_open_a_new_file() {
+    let (dir, pool) = test_pool().await;
+    let versions_dir = dir.path().join("versions");
+    insert_company(&pool, "Değişmeyen İşletme").await;
+
+    let first = create_version(
+        &pool,
+        &versions_dir,
+        "Çıktı",
+        VersionKind::Auto,
+        Some("workbook"),
+        Some("2026-10-05".to_string()),
+        now(0),
+    )
+    .await
+    .unwrap();
+    let second = create_version(
+        &pool,
+        &versions_dir,
+        "Çıktı",
+        VersionKind::Auto,
+        Some("workbook"),
+        Some("2026-10-05".to_string()),
+        now(5),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(first.id, second.id, "aynı veri VE aynı as_of ise aynı sürüm dönmeli");
+    let row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM versions").fetch_one(&pool).await.unwrap();
+    assert_eq!(row_count, 1);
+}
+
+/// Veri AYNI kalsa bile `as_of` FARKLIYSA yeni bir kopya açılmalı: geçmiş
+/// tarihli bir çıktının dayanağı başka bir tarihin dayanağıyla paylaşılamaz.
+#[tokio::test]
+async fn automatic_version_opens_a_new_file_when_only_the_as_of_date_differs() {
+    let (dir, pool) = test_pool().await;
+    let versions_dir = dir.path().join("versions");
+    insert_company(&pool, "Değişmeyen İşletme").await;
+
+    let first = create_version(
+        &pool,
+        &versions_dir,
+        "Çıktı",
+        VersionKind::Auto,
+        Some("workbook"),
+        Some("2026-10-05".to_string()),
+        now(0),
+    )
+    .await
+    .unwrap();
+    let second = create_version(&pool, &versions_dir, "Çıktı", VersionKind::Auto, Some("workbook"), None, now(5))
+        .await
+        .unwrap();
+
+    assert_ne!(first.id, second.id, "veri aynı olsa bile farklı as_of yeni sürüm açmalı");
+    let row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM versions").fetch_one(&pool).await.unwrap();
+    assert_eq!(row_count, 2);
+}
+
+/// `record_auto_version`e tarih verilince ad " (dd.MM.yyyy itibarıyla)" ekini
+/// almalı ve satıra `as_of` yazılmalı.
+#[tokio::test]
+async fn record_auto_version_with_a_date_appends_the_display_suffix_and_stores_as_of() {
+    let (dir, pool) = test_pool().await;
+    let versions_dir = dir.path().join("versions");
+    insert_company(&pool, "Test A.Ş.").await;
+
+    let date = NaiveDate::from_ymd_opt(2026, 10, 5).unwrap();
+    record_auto_version(&pool, &versions_dir, "workbook", "Çalışma Kitabı çıktısı", Some(date))
+        .await
+        .unwrap();
+
+    let listed = list_versions(&pool, &versions_dir).await.unwrap();
+    let version = listed.first().expect("bir sürüm alınmış olmalı");
+
+    assert_eq!(version.name, "Çalışma Kitabı çıktısı (05.10.2026 itibarıyla)");
+    assert_eq!(version.as_of.as_deref(), Some("2026-10-05"));
+}
+
+/// `open_version_for_export`, sürümün kayıtlı `as_of`'unu da döner — beş
+/// dışa aktarım komutunun "istekte tarih yoksa sürümün tarihini kullan"
+/// kararı (brief madde 2) buna dayanır.
+#[tokio::test]
+async fn open_version_for_export_returns_the_versions_stored_as_of() {
+    let (dir, pool) = test_pool().await;
+    let versions_dir = dir.path().join("versions");
+    insert_company(&pool, "Test A.Ş.").await;
+
+    let version = create_version(
+        &pool,
+        &versions_dir,
+        "Tarihli Kayıt",
+        VersionKind::Manual,
+        None,
+        Some("2026-10-05".to_string()),
+        now(0),
+    )
+    .await
+    .unwrap();
+
+    let (temp_dir, version_pool, _term, as_of) = open_version_for_export(&pool, &versions_dir, version.id).await.unwrap();
+    assert_eq!(as_of.as_deref(), Some("2026-10-05"));
+
+    version_pool.close().await;
+    drop(temp_dir);
 }

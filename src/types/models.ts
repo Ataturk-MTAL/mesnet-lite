@@ -454,4 +454,6 @@ export interface Version {
   createdAt: string
   /** Veritabanı kopyası diskten silinmiş/taşınmışsa false; çıktı alınamaz. */
   isAvailable: boolean
+  /** Sürümün yansıttığı "tarihteki durum"; güncel durumdan kaydedildiyse `null`. */
+  asOf: string | null
 }

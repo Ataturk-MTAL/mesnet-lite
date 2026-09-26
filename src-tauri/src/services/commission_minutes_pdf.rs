@@ -4,6 +4,7 @@
 //! aynı `MinutesData`'dır ve `sys.inputs.data` üzerinden JSON olarak aktarılır.
 //! Motor ve derleme yardımcısı (`render_pdf`) diğer raporlarla ortaktır.
 
+use crate::db::read_at::ReadAt;
 use crate::error::AppResult;
 use crate::services::commission_minutes::{build_minutes_data, MinutesData};
 use crate::services::pdf_report::{render_pdf, FONT_BOLD, FONT_REGULAR};
@@ -28,9 +29,10 @@ pub fn render_minutes_pdf(data: &MinutesData) -> AppResult<Vec<u8>> {
     render_pdf(minutes_engine(), data)
 }
 
-/// Dönemin komisyon tutanağını PDF olarak üretir.
-pub async fn build_minutes_pdf(pool: &SqlitePool, term: &str) -> AppResult<Vec<u8>> {
-    render_minutes_pdf(&build_minutes_data(pool, term).await?)
+/// Dönemin komisyon tutanağını PDF olarak üretir. `read_at`, kenar
+/// çubuğunda seçilen tarihtir (`Latest` = güncel durum).
+pub async fn build_minutes_pdf(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<u8>> {
+    render_minutes_pdf(&build_minutes_data(pool, term, read_at).await?)
 }
 
 #[cfg(test)]
@@ -40,11 +42,29 @@ mod tests {
     use crate::services::commission_minutes::FIELD_NAME_KEY;
     use crate::services::commission_minutes_test_support::*;
 
+    /// Kenar çubuğunda seçilen tarihe göre üretim (kullanıcı kararı, spec §6):
+    /// bir işletmenin saati değişmeden ÖNCEki (4) ve SONRAki (8) hâli farklı
+    /// metin bastığı için iki PDF'in baytları da farklı olmalı.
+    #[tokio::test]
+    async fn as_of_pdf_differs_from_latest_after_an_hours_change() {
+        let (_dir, pool) = test_pool().await;
+        let (_company_id, before) = seed_two_period_hours_scenario(&pool).await;
+
+        let as_of_pdf = build_minutes_pdf(&pool, TERM, &ReadAt::AsOf(before)).await.unwrap();
+        let latest_pdf = build_minutes_pdf(&pool, TERM, &ReadAt::Latest).await.unwrap();
+
+        assert!(as_of_pdf.starts_with(b"%PDF") && latest_pdf.starts_with(b"%PDF"));
+        assert_ne!(
+            as_of_pdf, latest_pdf,
+            "AsOf ve Latest farklı saat basmalı, çıktı baytları aynı olmamalı"
+        );
+    }
+
     #[tokio::test]
     async fn empty_term_produces_a_valid_pdf() {
         let (_dir, pool) = test_pool().await;
 
-        let pdf = build_minutes_pdf(&pool, TERM).await.unwrap();
+        let pdf = build_minutes_pdf(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(pdf.starts_with(b"%PDF"), "PDF imzasıyla başlamalı");
         assert!(
@@ -59,14 +79,14 @@ mod tests {
     #[tokio::test]
     async fn full_scenario_compiles_and_is_larger_than_the_empty_document() {
         let (_empty_dir, empty_pool) = test_pool().await;
-        let empty = build_minutes_pdf(&empty_pool, TERM).await.unwrap();
+        let empty = build_minutes_pdf(&empty_pool, TERM, &ReadAt::Latest).await.unwrap();
 
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
         settings::set(&pool, FIELD_NAME_KEY, "Elektrik-Elektronik Teknolojisi")
             .await
             .unwrap();
-        let filled = build_minutes_pdf(&pool, TERM).await.unwrap();
+        let filled = build_minutes_pdf(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(filled.starts_with(b"%PDF"));
         assert!(
@@ -102,7 +122,7 @@ mod tests {
         seed_hours(&pool, company, 6, false).await;
         seed_assignment(&pool, teacher, company, 3, 4).await;
 
-        let pdf = build_minutes_pdf(&pool, TERM).await.unwrap();
+        let pdf = build_minutes_pdf(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(pdf.starts_with(b"%PDF"));
         assert!(pdf.len() > 2_000);
@@ -114,7 +134,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_long_table(&pool).await;
 
-        let pdf = build_minutes_pdf(&pool, TERM).await.unwrap();
+        let pdf = build_minutes_pdf(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(pdf.starts_with(b"%PDF"));
     }
@@ -123,7 +143,7 @@ mod tests {
     async fn unreadable_term_is_reported_not_swallowed() {
         let (_dir, pool) = test_pool().await;
 
-        assert!(build_minutes_pdf(&pool, "").await.is_err());
+        assert!(build_minutes_pdf(&pool, "", &ReadAt::Latest).await.is_err());
     }
 
     /// Brief'teki gerçek senaryo: 1 alan şefi + 11 alan öğretmeni imza
@@ -152,7 +172,7 @@ mod tests {
             seed_teacher_with_chief(&pool, first, last, ChiefType::None).await;
         }
 
-        let pdf = build_minutes_pdf(&pool, TERM).await.unwrap();
+        let pdf = build_minutes_pdf(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(pdf.starts_with(b"%PDF"));
     }
@@ -200,8 +220,8 @@ mod tests {
             seed_teacher_with_chief(&pool, first, last, ChiefType::None).await;
         }
 
-        let pdf = build_minutes_pdf(&pool, TERM).await.unwrap();
-        let xlsx = crate::services::commission_minutes_xlsx::build_minutes_xlsx(&pool, TERM)
+        let pdf = build_minutes_pdf(&pool, TERM, &ReadAt::Latest).await.unwrap();
+        let xlsx = crate::services::commission_minutes_xlsx::build_minutes_xlsx(&pool, TERM, &ReadAt::Latest)
             .await
             .unwrap();
 

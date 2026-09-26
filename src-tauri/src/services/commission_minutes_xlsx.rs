@@ -8,6 +8,7 @@
 //!
 //! Veri `commission_minutes::MinutesData`'dan gelir; PDF çıktısıyla aynıdır.
 
+use crate::db::read_at::ReadAt;
 use crate::error::AppResult;
 use crate::services::commission_minutes::{build_minutes_data, MinutesData, MinutesGroup};
 use rust_xlsxwriter::{Color, Format, FormatAlign, FormatBorder, Workbook, Worksheet};
@@ -524,9 +525,10 @@ pub fn render_minutes_xlsx(data: &MinutesData) -> AppResult<Vec<u8>> {
     Ok(workbook.save_to_buffer()?)
 }
 
-/// Dönemin komisyon tutanağını Excel dosyası olarak üretir.
-pub async fn build_minutes_xlsx(pool: &SqlitePool, term: &str) -> AppResult<Vec<u8>> {
-    render_minutes_xlsx(&build_minutes_data(pool, term).await?)
+/// Dönemin komisyon tutanağını Excel dosyası olarak üretir. `read_at`, kenar
+/// çubuğunda seçilen tarihtir (`Latest` = güncel durum).
+pub async fn build_minutes_xlsx(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<u8>> {
+    render_minutes_xlsx(&build_minutes_data(pool, term, read_at).await?)
 }
 
 #[cfg(test)]
@@ -556,11 +558,30 @@ mod tests {
         );
     }
 
+    /// Kenar çubuğunda seçilen tarihe göre üretim (kullanıcı kararı, spec §6):
+    /// bir işletmenin saati değişmeden ÖNCEki (4) ve SONRAki (8) hâli farklı
+    /// hücre yazdığı için iki xlsx'in baytları da farklı olmalı.
+    #[tokio::test]
+    async fn as_of_xlsx_differs_from_latest_after_an_hours_change() {
+        let (_dir, pool) = test_pool().await;
+        let (_company_id, before) = seed_two_period_hours_scenario(&pool).await;
+
+        let as_of_bytes = build_minutes_xlsx(&pool, TERM, &ReadAt::AsOf(before)).await.unwrap();
+        let latest_bytes = build_minutes_xlsx(&pool, TERM, &ReadAt::Latest).await.unwrap();
+
+        assert_is_zip(&as_of_bytes);
+        assert_is_zip(&latest_bytes);
+        assert_ne!(
+            as_of_bytes, latest_bytes,
+            "AsOf ve Latest farklı saat basmalı, çıktı baytları aynı olmamalı"
+        );
+    }
+
     #[tokio::test]
     async fn empty_term_produces_a_valid_non_empty_workbook() {
         let (_dir, pool) = test_pool().await;
 
-        let bytes = build_minutes_xlsx(&pool, TERM).await.unwrap();
+        let bytes = build_minutes_xlsx(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert!(!bytes.is_empty());
         assert_is_zip(&bytes);
@@ -572,11 +593,11 @@ mod tests {
     #[tokio::test]
     async fn full_scenario_merges_without_overlap_and_grows_with_data() {
         let (_empty_dir, empty_pool) = test_pool().await;
-        let empty = build_minutes_xlsx(&empty_pool, TERM).await.unwrap();
+        let empty = build_minutes_xlsx(&empty_pool, TERM, &ReadAt::Latest).await.unwrap();
 
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
-        let filled = build_minutes_xlsx(&pool, TERM).await.unwrap();
+        let filled = build_minutes_xlsx(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_is_zip(&filled);
         assert!(
@@ -590,7 +611,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         seed_long_table(&pool).await;
 
-        let bytes = build_minutes_xlsx(&pool, TERM).await.unwrap();
+        let bytes = build_minutes_xlsx(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_is_zip(&bytes);
     }
@@ -599,7 +620,7 @@ mod tests {
     async fn unreadable_term_is_reported_not_swallowed() {
         let (_dir, pool) = test_pool().await;
 
-        assert!(build_minutes_xlsx(&pool, "").await.is_err());
+        assert!(build_minutes_xlsx(&pool, "", &ReadAt::Latest).await.is_err());
     }
 
     /// İmza altı isim bloğu büyüdükçe tablo/onay/açıklama satırları kayar;
@@ -610,7 +631,7 @@ mod tests {
         use crate::domain::models::ChiefType;
 
         let (_empty_dir, empty_pool) = test_pool().await;
-        let empty = build_minutes_xlsx(&empty_pool, TERM).await.unwrap();
+        let empty = build_minutes_xlsx(&empty_pool, TERM, &ReadAt::Latest).await.unwrap();
 
         let (_dir, pool) = test_pool().await;
         seed_full_scenario(&pool).await;
@@ -618,7 +639,7 @@ mod tests {
         for i in 0..10 {
             seed_teacher_with_chief(&pool, "Test", &format!("Öğretmen{i}"), ChiefType::WorkshopLab).await;
         }
-        let filled = build_minutes_xlsx(&pool, TERM).await.unwrap();
+        let filled = build_minutes_xlsx(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_is_zip(&filled);
         assert!(
@@ -640,7 +661,7 @@ mod tests {
             seed_teacher_with_chief(&pool, "Test", &format!("Öğretmen{i}"), ChiefType::WorkshopLab).await;
         }
 
-        let bytes = build_minutes_xlsx(&pool, TERM).await.unwrap();
+        let bytes = build_minutes_xlsx(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_is_zip(&bytes);
     }
@@ -657,7 +678,7 @@ mod tests {
             seed_teacher_with_chief(&pool, "Test", &format!("Öğretmen{i}"), ChiefType::WorkshopLab).await;
         }
 
-        let bytes = build_minutes_xlsx(&pool, TERM).await.unwrap();
+        let bytes = build_minutes_xlsx(&pool, TERM, &ReadAt::Latest).await.unwrap();
 
         assert_is_zip(&bytes);
     }

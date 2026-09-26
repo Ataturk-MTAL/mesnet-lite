@@ -5,36 +5,40 @@ import Tooltip from 'openvue/tooltip'
 import Aura from '@openvue/themes/aura'
 import VersionsPanel from './VersionsPanel.vue'
 import { labels } from '../../i18n/labels'
+import { useAsOfDateStore } from '../../stores/asOfDate'
 import type { Version } from '../../types/models'
 
 // Ağ sınırı burada `versionsApi`/`filesApi`; gerçek Tauri komut adları
 // ImportExportView.spec.ts'te ayrıca doğrulanır.
 const listMock = vi.fn<() => Promise<Version[]>>()
-const createMock = vi.fn<(name: string) => Promise<Version>>()
+const createMock = vi.fn<(name: string, asOf: string | null) => Promise<Version>>()
 const removeMock = vi.fn<(id: number) => Promise<void>>()
 vi.mock('../../api/versions', () => ({
   versionsApi: {
     list: () => listMock(),
-    create: (name: string) => createMock(name),
+    create: (name: string, asOf: string | null = null) => createMock(name, asOf),
     remove: (id: number) => removeMock(id),
   },
 }))
 
-const exportAssignmentSheetMock = vi.fn<(fileName: string, versionId: number | null) => Promise<string>>()
-const exportVisitListsMock = vi.fn<(fileName: string, versionId: number | null) => Promise<string>>()
-const exportCommissionMinutesPdfMock = vi.fn<(fileName: string, versionId: number | null) => Promise<string>>()
-const exportCommissionMinutesXlsxMock = vi.fn<(fileName: string, versionId: number | null) => Promise<string>>()
-const exportWorkbookMock = vi.fn<(fileName: string, versionId: number | null) => Promise<string>>()
+type ExportFn = (fileName: string, versionId: number | null, asOf: string | null) => Promise<string>
+const exportAssignmentSheetMock = vi.fn<ExportFn>()
+const exportVisitListsMock = vi.fn<ExportFn>()
+const exportCommissionMinutesPdfMock = vi.fn<ExportFn>()
+const exportCommissionMinutesXlsxMock = vi.fn<ExportFn>()
+const exportWorkbookMock = vi.fn<ExportFn>()
 vi.mock('../../api/files', () => ({
   filesApi: {
-    exportAssignmentSheet: (fileName: string, versionId: number | null) =>
-      exportAssignmentSheetMock(fileName, versionId),
-    exportVisitLists: (fileName: string, versionId: number | null) => exportVisitListsMock(fileName, versionId),
-    exportCommissionMinutesPdf: (fileName: string, versionId: number | null) =>
-      exportCommissionMinutesPdfMock(fileName, versionId),
-    exportCommissionMinutesXlsx: (fileName: string, versionId: number | null) =>
-      exportCommissionMinutesXlsxMock(fileName, versionId),
-    exportWorkbook: (fileName: string, versionId: number | null) => exportWorkbookMock(fileName, versionId),
+    exportAssignmentSheet: (fileName: string, versionId: number | null = null, asOf: string | null = null) =>
+      exportAssignmentSheetMock(fileName, versionId, asOf),
+    exportVisitLists: (fileName: string, versionId: number | null = null, asOf: string | null = null) =>
+      exportVisitListsMock(fileName, versionId, asOf),
+    exportCommissionMinutesPdf: (fileName: string, versionId: number | null = null, asOf: string | null = null) =>
+      exportCommissionMinutesPdfMock(fileName, versionId, asOf),
+    exportCommissionMinutesXlsx: (fileName: string, versionId: number | null = null, asOf: string | null = null) =>
+      exportCommissionMinutesXlsxMock(fileName, versionId, asOf),
+    exportWorkbook: (fileName: string, versionId: number | null = null, asOf: string | null = null) =>
+      exportWorkbookMock(fileName, versionId, asOf),
     geocodePending: vi.fn(),
   },
 }))
@@ -60,6 +64,7 @@ function versionFixture(overrides: Partial<Version> = {}): Version {
     term: '2026-2027/1',
     createdAt: '2026-09-26T14:05:00',
     isAvailable: true,
+    asOf: null,
     ...overrides,
   }
 }
@@ -143,9 +148,12 @@ describe('VersionsPanel — çıktı al', () => {
     await flushPromises()
 
     expect(exportAssignmentSheetMock).toHaveBeenCalledTimes(1)
-    const [fileName, versionId] = exportAssignmentSheetMock.mock.calls[0]
+    const [fileName, versionId, asOf] = exportAssignmentSheetMock.mock.calls[0]
     expect(versionId).toBe(7)
     expect(fileName).toContain('surum-2026-09-26')
+    // Sürümden çıktı alınırken `asOf` GÖNDERİLMEZ; arka uç sürümün kendi
+    // kayıtlı tarihini kullanır.
+    expect(asOf).toBeNull()
     expect(toastAddMock).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'success', summary: labels.export.saved }),
     )
@@ -187,7 +195,7 @@ describe('VersionsPanel — elle kayıt', () => {
     clickTestId('version-save-save-button')
     await flushPromises()
 
-    expect(createMock).toHaveBeenCalledWith('Yeni sürüm')
+    expect(createMock).toHaveBeenCalledWith('Yeni sürüm', null)
     expect(listMock).toHaveBeenCalledTimes(2) // ilk yükleme + kayıt sonrası yenileme
     expect(document.body.querySelector('#version-save-name')).toBeNull() // diyalog kapandı
 
@@ -231,6 +239,73 @@ describe('VersionsPanel — silme', () => {
 
     expect(removeMock).toHaveBeenCalledWith(3)
     expect(listMock).toHaveBeenCalledTimes(2) // ilk yükleme + silme sonrası yenileme
+
+    wrapper.unmount()
+  })
+})
+
+describe('VersionsPanel — tarihteki durum (asOf)', () => {
+  async function typeVersionName(name: string): Promise<void> {
+    const input = document.body.querySelector<HTMLInputElement>('#version-save-name')!
+    input.value = name
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+  }
+
+  it('varsayılan görünümde Sürüm Kaydet `asOf` olarak null gönderir', async () => {
+    listMock.mockResolvedValue([])
+    createMock.mockResolvedValue(versionFixture({ id: 9, name: 'Yeni sürüm' }))
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    clickTestId('version-save-button')
+    await flushPromises()
+    await typeVersionName('Yeni sürüm')
+    clickTestId('version-save-save-button')
+    await flushPromises()
+
+    expect(createMock).toHaveBeenCalledWith('Yeni sürüm', null)
+    expect(document.body.querySelector('[data-testid="version-save-as-of-note"]')).toBeNull()
+
+    wrapper.unmount()
+  })
+
+  it('salt okunur durumda Sürüm Kaydet seçili tarihi gönderir ve pencerede kısaca söyler', async () => {
+    useAsOfDateStore().setAsOfDate('2026-09-10')
+    listMock.mockResolvedValue([])
+    createMock.mockResolvedValue(versionFixture({ id: 9, name: 'Yeni sürüm', asOf: '2026-09-10' }))
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    clickTestId('version-save-button')
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="version-save-as-of-note"]')?.textContent).toContain(
+      '10.09.2026',
+    )
+
+    await typeVersionName('Yeni sürüm')
+    clickTestId('version-save-save-button')
+    await flushPromises()
+
+    expect(createMock).toHaveBeenCalledWith('Yeni sürüm', '2026-09-10')
+
+    wrapper.unmount()
+  })
+
+  it('`asOf` dolu bir sürümün adının yanında tarih etiketi gösterir', async () => {
+    listMock.mockResolvedValue([
+      versionFixture({ id: 1, name: 'Elle kayıt', asOf: '2026-09-10' }),
+      versionFixture({ id: 2, name: 'Otomatik kayıt (10.09.2026 itibarıyla)', asOf: '2026-09-10' }),
+      versionFixture({ id: 3, name: 'Güncel kayıt', asOf: null }),
+    ])
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    const tags = wrapper.findAll('.name-cell .p-tag').map((tag) => tag.text())
+    // Elle kaydedilen (adı "itibarıyla" içermeyen) satırda etiket görünür.
+    expect(tags).toContain(labels.versions.asOfTag('10.09.2026'))
+    // Otomatik kaydın adı zaten eki içeriyor; etiket TEKRAR gösterilmez.
+    expect(tags.filter((text) => text === labels.versions.asOfTag('10.09.2026'))).toHaveLength(1)
 
     wrapper.unmount()
   })
