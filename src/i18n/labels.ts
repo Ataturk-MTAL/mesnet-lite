@@ -245,6 +245,9 @@ export const labels = {
     hoursSuffix: 'saat',
     assignedSection: 'Atanmış İşletmeler',
     districtUnknown: 'İlçe belirsiz',
+    overlapViolation: (companyName: string) =>
+      `Blok, ${companyName} işletmesinin bloğuyla çakışıyor.`,
+    unknownCompanyFallback: 'başka bir atama',
   },
   availability: {
     title: 'Öğretmen/Sınıf Programı',

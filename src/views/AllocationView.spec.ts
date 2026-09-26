@@ -40,6 +40,13 @@ vi.mock('../api/assignments', async () => {
   }
 })
 
+// AllocationView `<Toast />`'u kendi içinde barındırmaz (App.vue'da yaşar); çakışma
+// engelinde gösterilen hata mesajını DOM yerine bu casusla doğrularız.
+const toastAddMock = vi.fn<(message: { severity: string; summary?: string; detail?: string }) => void>()
+vi.mock('openvue/usetoast', () => ({
+  useToast: () => ({ add: toastAddMock }),
+}))
+
 /** Planlama evresindeki bir dönem — eski testler tarih penceresi görmeden geçer. */
 function planningTermDates(overrides: Partial<TermWithDates> = {}): TermWithDates {
   return {
@@ -139,6 +146,7 @@ beforeEach(() => {
   assignMock.mockReset()
   unassignMock.mockReset()
   clearMock.mockReset()
+  toastAddMock.mockReset()
   document.body.replaceChildren()
   const termStore = useTermStore()
   termStore.activeTerm = '2026-2027/1'
@@ -621,6 +629,93 @@ describe('AllocationView dönem başladıysa yazımlar tarih penceresinden geçe
       '2026-10-13',
     )
     expect(changeDetailsReasonInput().value).toBe('')
+    wrapper.unmount()
+  })
+})
+
+describe('AllocationView çakışma engellemesi', () => {
+  /** Bir slotu (1. gün 9. ders) başka bir işletmenin bloğuyla dolu gösteren öğretmen. */
+  function teacherWithOccupiedSlot(): BoardTeacher {
+    return teacherFixture({
+      teacherId: 1,
+      freeSlots: ['1-9'],
+      occupiedBy: { '1-9': 2 },
+      hoursPerDay: { '1': 1 },
+      assignedHours: 1,
+    })
+  }
+
+  function occupyingCompany(companyName: string): BoardCompany {
+    return companyFixture({
+      companyId: 2,
+      companyName,
+      assignedTeacherId: 1,
+      visitDay: 1,
+      visitHour: 9,
+      visitEndHour: 9,
+      awardedHours: 1,
+    })
+  }
+
+  it('çakışan yerleştirmede zorlama penceresi açılmaz, assign çağrılmaz, hata Toast’u gösterilir', async () => {
+    // Arrange — hedef işletmenin tek kural dışılığı çakışma olsun diye günü/boş saati temiz.
+    const target = companyFixture({ companyId: 1, companyName: 'Firma A', workplaceDays: [1], awardedHours: 1 })
+    const occupying = occupyingCompany('Firma B')
+    const teacher = teacherWithOccupiedSlot()
+    const wrapper = await mountView([target, occupying], { teachers: [teacher], dayStartHour: 8, dayEndHour: 16 })
+    useSelectionStore().selectedTeacherId = teacher.teacherId
+    await flushPromises()
+
+    // Act
+    await selectAndPlace(wrapper, 0, 8, 1, 9)
+    await flushPromises()
+
+    // Assert — pencere hiç açılmadı, yazma denenmedi, hata Toast'u işletme adını taşıyor.
+    expect(document.body.textContent).not.toContain(labels.allocation.forceQuestion)
+    expect(assignMock).not.toHaveBeenCalled()
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: labels.allocation.overlapViolation('Firma B') }),
+    )
+    wrapper.unmount()
+  })
+
+  it('çakışmayan ama kural dışı (boş saat dışı) yerleştirmede zorlama penceresi eskisi gibi açılır', async () => {
+    // Arrange — öğretmenin hiç boş saati yok, çakışma yok.
+    const target = companyFixture({ companyId: 1, companyName: 'Firma A', workplaceDays: [1], awardedHours: 1 })
+    const teacher = teacherFixture({ teacherId: 1, freeSlots: [], occupiedBy: {} })
+    const wrapper = await mountView([target], { teachers: [teacher], dayStartHour: 8, dayEndHour: 16 })
+    useSelectionStore().selectedTeacherId = teacher.teacherId
+    await flushPromises()
+
+    // Act
+    await selectAndPlace(wrapper, 0, 8, 1, 9)
+    await flushPromises()
+
+    // Assert — pencere açıldı, henüz yazılmadı.
+    expect(document.body.textContent).toContain(labels.allocation.forceQuestion)
+    expect(assignMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('çakışma başka bir kural dışı durumla birlikteyse de yerleştirme engellenir (çakışma baskın)', async () => {
+    // Arrange — hedef, hem işletme günü uymuyor HEM çakışıyor.
+    const target = companyFixture({ companyId: 1, companyName: 'Firma A', workplaceDays: [2], awardedHours: 1 })
+    const occupying = occupyingCompany('Firma C')
+    const teacher = teacherWithOccupiedSlot()
+    const wrapper = await mountView([target, occupying], { teachers: [teacher], dayStartHour: 8, dayEndHour: 16 })
+    useSelectionStore().selectedTeacherId = teacher.teacherId
+    await flushPromises()
+
+    // Act
+    await selectAndPlace(wrapper, 0, 8, 1, 9)
+    await flushPromises()
+
+    // Assert
+    expect(document.body.textContent).not.toContain(labels.allocation.forceQuestion)
+    expect(assignMock).not.toHaveBeenCalled()
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: labels.allocation.overlapViolation('Firma C') }),
+    )
     wrapper.unmount()
   })
 })
