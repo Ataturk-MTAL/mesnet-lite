@@ -69,6 +69,40 @@ pub async fn insert_in(conn: &mut SqliteConnection, dates: &TermDates) -> AppRes
     Ok(())
 }
 
+/// Bilinen ama `terms` satırı olmayan bir dönem için varsayılan tarihleri
+/// yazar. `INSERT OR IGNORE` kullanır: satır zaten varsa (özellikle
+/// kullanıcının onayladığı tarihlerle) HİÇ dokunulmaz — bu üç çağrı yerinin
+/// (`create_term`, `save_settings`, açılış tamamlaması) hepsinin idempotent
+/// olmasını sağlayan tek kuraldır. Tarih kuralı burada TEKRAR yazılmaz;
+/// tek kaynak `TermDates::default_for`, aynı seed migration 0006'nın
+/// kullandığı varsayılanla birebir.
+pub async fn ensure_in(conn: &mut SqliteConnection, term: &str) -> AppResult<()> {
+    if term.trim().is_empty() {
+        return Ok(());
+    }
+    let dates = TermDates::default_for(term);
+    sqlx::query(
+        "INSERT OR IGNORE INTO terms (term, start_date, end_date, dates_confirmed, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(&dates.term)
+    .bind(dates.start)
+    .bind(dates.end)
+    .bind(i64::from(dates.dates_confirmed))
+    .bind(change_log::recorded_at_now())
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// `ensure_in`'in havuz üzerinden çağrılan sürümü — transaction içinde
+/// olmayan çağıranlar (`create_term`, `save_settings`, açılış tamamlaması)
+/// için.
+pub async fn ensure(pool: &SqlitePool, term: &str) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    ensure_in(&mut conn, term).await
+}
+
 /// Dönem başı/sonunu günceller. Kabul edilirse aynı transaction içinde
 /// `projection::rebuild_term` çalışır — spec §5.1'in son maddesi.
 pub async fn update_dates(
@@ -322,5 +356,51 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let terms = list(&pool).await.unwrap();
         assert!(terms.iter().any(|t| t.term == "2026-2027/1"), "0006 tohumu aktif dönemi kaydetmeli");
+    }
+
+    /// Yeni bir dönem için `ensure_in`, `TermDates::default_for` ile birebir
+    /// aynı tarihleri ve onaysız durumu yazmalı (0006'nın seed'iyle aynı kural).
+    #[tokio::test]
+    async fn ensure_in_creates_default_unconfirmed_dates_for_a_new_term() {
+        let (_dir, pool) = test_pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+
+        ensure_in(&mut conn, "2027-2028/1").await.unwrap();
+
+        let fetched = get_in(&mut conn, "2027-2028/1").await.unwrap();
+        let expected = TermDates::default_for("2027-2028/1");
+        assert_eq!(fetched.start, expected.start);
+        assert_eq!(fetched.end, expected.end);
+        assert!(!fetched.dates_confirmed);
+    }
+
+    /// `INSERT OR IGNORE` mevcut satıra dokunmamalı — onaylanmış tarihler
+    /// yeniden çağrıda (idempotent olması gereken üç çağrı yeri için) korunur.
+    #[tokio::test]
+    async fn ensure_in_never_touches_an_existing_confirmed_row() {
+        let (_dir, pool) = test_pool().await;
+        seed_term(&pool, "2026-2027/9", ymd(2026, 10, 1), ymd(2027, 2, 15)).await;
+        let mut conn = pool.acquire().await.unwrap();
+
+        ensure_in(&mut conn, "2026-2027/9").await.unwrap();
+
+        let fetched = get_in(&mut conn, "2026-2027/9").await.unwrap();
+        assert_eq!(fetched.start, ymd(2026, 10, 1));
+        assert_eq!(fetched.end, ymd(2027, 2, 15));
+        assert!(fetched.dates_confirmed);
+    }
+
+    /// Boş dönem adı hiçbir şey yazmamalı — serbest metin kutusunun boş
+    /// bırakılması ya da henüz dönem seçilmemiş durum sessizce yutulmamalı,
+    /// ama hata da fırlatmamalı (çağıranlar zaten "boşsa çağırma" mantığında).
+    #[tokio::test]
+    async fn ensure_in_is_a_no_op_for_an_empty_term_name() {
+        let (_dir, pool) = test_pool().await;
+        let mut conn = pool.acquire().await.unwrap();
+
+        ensure_in(&mut conn, "").await.unwrap();
+
+        let err = get_in(&mut conn, "").await.unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
     }
 }
