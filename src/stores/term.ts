@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { settingsApi } from '../api/settings'
-import { termsApi } from '../api/terms'
+import { listTermsWithDates, termsApi } from '../api/terms'
+import type { TermWithDates } from '../types/models'
 
 /**
  * Aktif eğitim-öğretim yılı.
@@ -24,6 +25,19 @@ export const useTermStore = defineStore('term', () => {
   const activeTerm = ref('')
   /** Veritabanındaki dönemler + aktif dönem, en yeniden eskiye. */
   const terms = ref<string[]>([])
+  /**
+   * Aktif dönemin başlangıç/bitiş tarihi ve planlama durumu. Henüz
+   * yüklenmediyse ya da aktif dönem `list_terms_with_dates`'te yoksa `null`.
+   * Saat Ayarları ve Dağıtım ekranları, dönem başladıysa (`isPlanning ===
+   * false`) yazımdan önce yürürlük tarihi ve gerekçe sormak için bunu okur.
+   */
+  const activeTermDates = ref<TermWithDates | null>(null)
+
+  /** `activeTermDates`'i aktif döneme göre yeniden yükler. */
+  async function fetchActiveTermDates(): Promise<void> {
+    const all = await listTermsWithDates()
+    activeTermDates.value = all.find((t) => t.term === activeTerm.value) ?? null
+  }
 
   async function loadTerms(): Promise<void> {
     const settings = await settingsApi.get()
@@ -35,6 +49,7 @@ export const useTermStore = defineStore('term', () => {
 
     activeTerm.value = active
     terms.value = mergeActiveTerm(list, active)
+    await fetchActiveTermDates()
   }
 
   /** Aktif dönemi değiştirir ve ayara yazar. */
@@ -46,7 +61,8 @@ export const useTermStore = defineStore('term', () => {
 
     activeTerm.value = term
     terms.value = mergeActiveTerm(terms.value, term)
+    await fetchActiveTermDates()
   }
 
-  return { activeTerm, terms, loadTerms, setActiveTerm }
+  return { activeTerm, terms, activeTermDates, loadTerms, setActiveTerm }
 })

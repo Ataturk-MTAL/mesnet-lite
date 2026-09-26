@@ -212,6 +212,8 @@ export const labels = {
     capacity: 'Kapasite',
     removeAssignment: 'Atamayı kaldır',
     clearAll: 'Tüm Atamaları Sil',
+    clearAllDisabledHint:
+      'Dönem başladıktan sonra tüm atamalar toplu silinemez; her atama tek tek, yürürlük tarihiyle çıkarılmalıdır.',
     clearConfirm:
       'Bu dönemdeki TÜM atamalar silinecek. Saat takdirleri korunur. Devam edilsin mi?',
     cleared: 'Atamalar silindi',

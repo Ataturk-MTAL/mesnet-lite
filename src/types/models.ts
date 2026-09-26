@@ -292,6 +292,18 @@ export type ChangeCommand =
   | { type: 'revoke'; changeSetId: number }
   | { type: 'correct'; changeSetId: number; replacement: ChangeCommand }
 
+/**
+ * Doğrudan yazım komutlarına (saat kaydı, atama/çıkarma, toplu silme) eklenen
+ * isteğe bağlı yürürlük tarihi ve gerekçe. Bu komutlar `preview_change` /
+ * `commit_change` akışından GEÇMEZ; arka uç kaydı kendi içinde tarihçeye
+ * yazar. Dönem planlama evresindeyse (`isPlanning === true`) ikisi de `null`
+ * gönderilir.
+ */
+export interface EffectiveChangeInput {
+  effectiveDate: string | null
+  reason: string | null
+}
+
 /** `preview_change` / `commit_change` isteği. */
 export interface ChangeRequest {
   term: string

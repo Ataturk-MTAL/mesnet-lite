@@ -9,8 +9,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
 use super::backup::{
-    auto_backup_dir, backup_status, create_daily_backup_if_missing, create_manual_backup, embedded_max_migration_version,
-    replace_database_file, restore_from_backup, validate_backup,
+    auto_backup_dir, backup_status, create_daily_backup_if_missing, create_manual_backup, create_pre_reconcile_backup,
+    embedded_max_migration_version, replace_database_file, restore_from_backup, validate_backup,
 };
 use crate::db::init_pool;
 use crate::error::AppError;
@@ -87,6 +87,41 @@ async fn daily_backup_is_not_retaken_if_todays_backup_exists() {
     create_daily_backup_if_missing(&pool, &backup_dir, today).await.unwrap();
 
     let target = backup_dir.join("mesnet-lite-2026-09-22.db");
+    let backup_pool = open_plain(&target).await;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM companies").fetch_one(&backup_pool).await.unwrap();
+    assert_eq!(count, 0, "ikinci çağrı yedeği yeniden ALMAMALIYDI");
+    backup_pool.close().await;
+}
+
+/// Eski pano → tarihçe aktarımının yedeği (`services::legacy_reconcile`),
+/// günlük otomatik yedekle AYNI klasörde ama AYRI bir adla oturur; ikisi
+/// birbirinin dosyasını etkilemez.
+#[tokio::test]
+async fn pre_reconcile_backup_writes_a_separate_file_from_the_daily_backup() {
+    let (dir, pool) = test_pool().await;
+    let backup_dir = dir.path().join("backups");
+    let today = ymd(2026, 9, 22);
+
+    create_daily_backup_if_missing(&pool, &backup_dir, today).await.unwrap();
+    create_pre_reconcile_backup(&pool, &backup_dir, today).await.unwrap();
+
+    assert!(backup_dir.join("mesnet-lite-2026-09-22.db").exists());
+    assert!(backup_dir.join("pre-legacy-reconcile-2026-09-22.db").exists());
+}
+
+/// Aynı gün ikinci çağrı hedef dosya zaten VARSA yeniden yazmaz — aktarım
+/// başarısız olup uygulama yeniden başlatılırsa, ilk (bozulmamış) yedek korunur.
+#[tokio::test]
+async fn pre_reconcile_backup_is_not_retaken_if_todays_backup_exists() {
+    let (dir, pool) = test_pool().await;
+    let backup_dir = dir.path().join("backups");
+    let today = ymd(2026, 9, 22);
+
+    create_pre_reconcile_backup(&pool, &backup_dir, today).await.unwrap();
+    insert_company(&pool, "İkinci Çağrıdan Önce Eklendi").await;
+    create_pre_reconcile_backup(&pool, &backup_dir, today).await.unwrap();
+
+    let target = backup_dir.join("pre-legacy-reconcile-2026-09-22.db");
     let backup_pool = open_plain(&target).await;
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM companies").fetch_one(&backup_pool).await.unwrap();
     assert_eq!(count, 0, "ikinci çağrı yedeği yeniden ALMAMALIYDI");

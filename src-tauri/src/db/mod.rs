@@ -12,6 +12,8 @@ pub mod company_hours;
 pub mod history_context;
 pub mod hour_rules;
 #[cfg(test)]
+pub(crate) mod legacy_seed_test_support;
+#[cfg(test)]
 mod migration_0009_tests;
 pub mod projection;
 pub mod settings;
@@ -79,6 +81,15 @@ pub async fn init_pool(db_path: &Path) -> AppResult<SqlitePool> {
 
     backfill_company_districts(&pool).await?;
     backfill_missing_term_rows(&pool).await?;
+
+    // Tek seferlik aktarım: eski Saat Ayarları/Dağıtım panosunun LIVE
+    // değerlerini tarihçe projeksiyonlarına taşır (brief teşhisi — pano
+    // yazımları tarihçeden hiç geçmiyordu). Göçlerden ve dönem tamamlamadan
+    // SONRA, bayraklı ve idempotent çalışır; hata uygulamanın açılmasını
+    // engellemez (bkz. `services::legacy_reconcile` başlığı).
+    if let Some(parent) = db_path.parent() {
+        crate::services::legacy_reconcile::reconcile_legacy_board(&pool, parent, crate::domain::terms::today_local()).await?;
+    }
 
     Ok(pool)
 }

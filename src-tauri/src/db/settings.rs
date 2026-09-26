@@ -143,8 +143,8 @@ pub async fn known_terms(pool: &SqlitePool) -> AppResult<Vec<String>> {
         "SELECT term FROM students WHERE term <> ''
          UNION SELECT term FROM teacher_availability WHERE term <> ''
          UNION SELECT term FROM class_workplace_days WHERE term <> ''
-         UNION SELECT term FROM company_term_hours WHERE term <> ''
-         UNION SELECT term FROM assignments WHERE term <> ''
+         UNION SELECT term FROM company_hour_periods WHERE term <> ''
+         UNION SELECT term FROM coordination_periods WHERE term <> ''
          UNION SELECT term FROM term_branch_hours WHERE term <> ''
          UNION SELECT value FROM settings WHERE key = 'active_term' AND value <> ''
          ORDER BY term DESC",
@@ -267,6 +267,38 @@ mod tests {
             terms.contains(&"2026-2027/1".to_string()),
             "seed'deki aktif dönem de görünmeye devam etmeli"
         );
+    }
+
+    /// `known_terms` artık projeksiyon dönemlerini görür: eski
+    /// `company_term_hours`/`assignments` bu iş tarihinden sonra dondu ve
+    /// hiç yeni satır almaz, tek kaynak `company_hour_periods`/
+    /// `coordination_periods` oldu (brief teşhisi).
+    #[tokio::test]
+    async fn known_terms_includes_a_term_that_only_has_an_open_hours_period() {
+        let (_dir, pool) = test_pool().await;
+        crate::db::terms::ensure(&pool, "2028-2029/1").await.unwrap();
+        let company_id = crate::db::companies::create(
+            &pool,
+            &crate::domain::models::NewCompany {
+                name: "Test İşletme".into(),
+                contact_first_name: String::new(),
+                contact_last_name: String::new(),
+                phone: String::new(),
+                email: String::new(),
+                address_text: "Test adres".into(),
+                latitude: None,
+                longitude: None,
+                one_way_distance_km: Some(5.0),
+                district: String::new(),
+                notes: String::new(),
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        crate::db::legacy_seed_test_support::seed_hours(&pool, "2028-2029/1", company_id, 4, false).await;
+
+        assert!(known_terms(&pool).await.unwrap().contains(&"2028-2029/1".to_string()));
     }
 
     /// Ayar hiç girilmemişse günlük azami ders saati sayısı 9'a düşer — bu,

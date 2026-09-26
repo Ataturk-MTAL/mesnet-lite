@@ -1,30 +1,58 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import type { DOMWrapper, VueWrapper } from '@vue/test-utils'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
 import Tooltip from 'openvue/tooltip'
 import Aura from '@openvue/themes/aura'
 import AllocationView from './AllocationView.vue'
-import type { AssignmentBoard, BoardCompany, BoardTeacher } from '../api/assignments'
+import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
+import EffectiveDateField from '../components/history/EffectiveDateField.vue'
+import type {
+  AllocationProposal,
+  AssignmentBoard,
+  BoardCompany,
+  BoardTeacher,
+  NewAssignment,
+} from '../api/assignments'
 import { labels } from '../i18n/labels'
 import { useSelectionStore } from '../stores/selection'
 import { useTermStore } from '../stores/term'
+import type { EffectiveChangeInput, TermWithDates } from '../types/models'
 
 const getBoardMock = vi.fn<() => Promise<AssignmentBoard>>()
+const proposeMock = vi.fn<() => Promise<AllocationProposal>>()
+const assignMock = vi.fn<(input: NewAssignment, change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
+const unassignMock = vi.fn<(companyId: number, change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
+const clearMock = vi.fn<(change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
 vi.mock('../api/assignments', async () => {
   const actual = await vi.importActual<typeof import('../api/assignments')>('../api/assignments')
   return {
     ...actual,
     assignmentsApi: {
       get: () => getBoardMock(),
-      propose: vi.fn(),
-      assign: vi.fn(),
-      unassign: vi.fn(),
-      clear: vi.fn(),
+      propose: () => proposeMock(),
+      assign: (input: NewAssignment, change?: EffectiveChangeInput) => assignMock(input, change),
+      unassign: (companyId: number, change?: EffectiveChangeInput) => unassignMock(companyId, change),
+      clear: (change?: EffectiveChangeInput) => clearMock(change),
     },
   }
 })
+
+/** Planlama evresindeki bir dönem — eski testler tarih penceresi görmeden geçer. */
+function planningTermDates(overrides: Partial<TermWithDates> = {}): TermWithDates {
+  return {
+    term: '2026-2027/1',
+    startDate: '2026-09-01',
+    endDate: '2027-06-30',
+    datesConfirmed: true,
+    isPlanning: true,
+    defaultAsOf: '2026-09-26',
+    earliestAllowedDate: '2026-09-01',
+    ...overrides,
+  }
+}
 
 function companyFixture(overrides: Partial<BoardCompany> = {}): BoardCompany {
   return {
@@ -107,8 +135,15 @@ async function mountView(companies: BoardCompany[], boardOverrides: Partial<Assi
 
 beforeEach(() => {
   getBoardMock.mockReset()
+  proposeMock.mockReset()
+  assignMock.mockReset()
+  unassignMock.mockReset()
+  clearMock.mockReset()
   document.body.replaceChildren()
-  useTermStore().activeTerm = '2026-2027/1'
+  const termStore = useTermStore()
+  termStore.activeTerm = '2026-2027/1'
+  // Varsayılan: planlama evresi — mevcut testler tarih penceresi görmeden geçer.
+  termStore.activeTermDates = planningTermDates()
 })
 
 describe('AllocationView atanmamış işletme gruplaması', () => {
@@ -370,5 +405,222 @@ describe('AllocationView seçim kalıcılığı (Pinia store)', () => {
     const wrapper2 = await mountView([company])
     expect((wrapper2.get('.search').element as HTMLInputElement).value).toBe('Toroslar')
     wrapper2.unmount()
+  })
+})
+
+/** Izgaradaki `(day, hour)` hücresi; satırlar saate, sütunlar `DAYS = [1..5]`e göre sıralı. */
+function gridCellAt(wrapper: VueWrapper, dayStartHour: number, day: number, hour: number): DOMWrapper<Element> {
+  const flatIndex = (hour - dayStartHour) * 5 + (day - 1)
+  const cell = wrapper.findAll('.grid-cell')[flatIndex]
+  expect(cell).toBeDefined()
+  return cell as DOMWrapper<Element>
+}
+
+function changeDetailsReasonInput(): HTMLTextAreaElement {
+  return document.body.querySelector<HTMLTextAreaElement>('[data-testid="change-details-reason"]')!
+}
+
+async function fillChangeDetailsAndConfirm(wrapper: VueWrapper, date: string, reason: string): Promise<void> {
+  await wrapper.findComponent(ChangeDetailsDialog).findComponent(EffectiveDateField).vm.$emit('update:modelValue', date)
+  changeDetailsReasonInput().value = reason
+  changeDetailsReasonInput().dispatchEvent(new Event('input', { bubbles: true }))
+  await flushPromises()
+  document.body
+    .querySelector<HTMLButtonElement>('[data-testid="change-details-confirm-button"]')!
+    .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+/** Klavyeyle kart seçip hedef hücreye tıklayarak yerleştirme yapar (sürükle-bırak jsdom'da güvenilir değil). */
+async function selectAndPlace(
+  wrapper: VueWrapper,
+  companyCardIndex: number,
+  dayStartHour: number,
+  day: number,
+  hour: number,
+): Promise<void> {
+  await wrapper.findAll('.company-card')[companyCardIndex].trigger('keydown', { key: 'Enter' })
+  await gridCellAt(wrapper, dayStartHour, day, hour).trigger('click')
+}
+
+describe('AllocationView dönem başladıysa yazımlar tarih penceresinden geçer', () => {
+  function startedTeacher(): BoardTeacher {
+    return teacherFixture({
+      teacherId: 1,
+      freeSlots: ['1-9', '2-9'],
+      occupiedBy: {},
+      hoursPerDay: {},
+      assignedHours: 0,
+    })
+  }
+
+  beforeEach(() => {
+    useTermStore().activeTermDates = planningTermDates({ isPlanning: false })
+  })
+
+  it('yerleştirme önce pencere açar; onayda assign tarih ve gerekçeyle çağrılır', async () => {
+    // Arrange
+    const company = companyFixture({ companyId: 1, companyName: 'Firma A', workplaceDays: [1], awardedHours: 1 })
+    const teacher = startedTeacher()
+    const wrapper = await mountView([company], { teachers: [teacher], dayStartHour: 8, dayEndHour: 16 })
+    useSelectionStore().selectedTeacherId = teacher.teacherId
+    await flushPromises()
+    assignMock.mockResolvedValue(boardFixture([company], { teachers: [teacher] }))
+
+    // Act — kartı seç, boş hücreye tıkla.
+    await selectAndPlace(wrapper, 0, 8, 1, 9)
+    await flushPromises()
+
+    // Assert — pencere açıldı, henüz yazılmadı.
+    expect(document.body.querySelector('[data-testid="change-details-dialog"]')).not.toBeNull()
+    expect(assignMock).not.toHaveBeenCalled()
+
+    // Act
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-10', 'Ekim yerleşimi')
+    await flushPromises()
+
+    // Assert
+    expect(assignMock).toHaveBeenCalledTimes(1)
+    expect(assignMock.mock.calls[0][0]).toEqual({
+      teacherId: teacher.teacherId,
+      companyId: 1,
+      visitDay: 1,
+      visitHour: 9,
+      isForced: false,
+      forceReason: null,
+    })
+    expect(assignMock.mock.calls[0][1]).toEqual({ effectiveDate: '2026-10-10', reason: 'Ekim yerleşimi' })
+    wrapper.unmount()
+  })
+
+  it('çıkarma önce pencere açar; onayda unassign tarih ve gerekçeyle çağrılır', async () => {
+    // Arrange — işletme zaten atanmış.
+    const company = companyFixture({
+      companyId: 1,
+      companyName: 'Firma A',
+      assignedTeacherId: 1,
+      visitDay: 1,
+      visitHour: 9,
+      visitEndHour: 9,
+    })
+    const teacher = startedTeacher()
+    const wrapper = await mountView([company], { teachers: [teacher], assignedCompanyCount: 1 })
+    unassignMock.mockResolvedValue(boardFixture([company], { teachers: [teacher] }))
+
+    // Act — atanmış işletmeler listesindeki "x" düğmesi.
+    const removeButton = wrapper.findAll(`button[aria-label="${labels.allocation.removeAssignment}"]`)[0]
+    await removeButton!.trigger('click')
+    await flushPromises()
+
+    // Assert
+    expect(document.body.querySelector('[data-testid="change-details-dialog"]')).not.toBeNull()
+    expect(unassignMock).not.toHaveBeenCalled()
+
+    // Act
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-11', 'Çıkarma gerekçesi')
+    await flushPromises()
+
+    // Assert
+    expect(unassignMock).toHaveBeenCalledWith(1, { effectiveDate: '2026-10-11', reason: 'Çıkarma gerekçesi' })
+    wrapper.unmount()
+  })
+
+  it('öneri uygulama TÜM atamalar için TEK pencere açar, aynı tarihi her kaleme yollar', async () => {
+    // Arrange
+    const teacher = startedTeacher()
+    const companyA = companyFixture({ companyId: 1, companyName: 'Firma A' })
+    const companyB = companyFixture({ companyId: 2, companyName: 'Firma B' })
+    const wrapper = await mountView([companyA, companyB], { teachers: [teacher] })
+    proposeMock.mockResolvedValue({
+      assignments: [
+        {
+          companyId: 1,
+          companyName: 'Firma A',
+          teacherId: 1,
+          teacherName: teacher.teacherName,
+          awardedHours: 1,
+          visitDay: 1,
+          visitHour: 9,
+          exactBranchMatch: true,
+        },
+        {
+          companyId: 2,
+          companyName: 'Firma B',
+          teacherId: 1,
+          teacherName: teacher.teacherName,
+          awardedHours: 1,
+          visitDay: 2,
+          visitHour: 9,
+          exactBranchMatch: true,
+        },
+      ],
+      unassigned: [],
+    })
+    assignMock.mockResolvedValue(boardFixture([companyA, companyB], { teachers: [teacher] }))
+
+    // Act — öneriyi üret, uygula. Öneri diyaloğu `body`e teleport edildiğinden
+    // "Uygula" düğmesi `wrapper` yerine `document.body` üzerinden aranır.
+    const proposeButton = wrapper.findAll('button').find((b) => b.text().includes(labels.allocation.propose))
+    await proposeButton!.trigger('click')
+    await flushPromises()
+    const applyButton = Array.from(document.body.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes(labels.allocation.proposalApply),
+    )
+    expect(applyButton).toBeDefined()
+    applyButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+
+    // Assert — TEK pencere açıldı, henüz hiçbir atama yazılmadı.
+    expect(document.body.querySelectorAll('[data-testid="change-details-dialog"]')).toHaveLength(1)
+    expect(assignMock).not.toHaveBeenCalled()
+
+    // Act
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'Öneri uygulaması')
+    await flushPromises()
+
+    // Assert — her iki atama da AYNI tarih ve gerekçeyle gitti.
+    expect(assignMock).toHaveBeenCalledTimes(2)
+    expect(assignMock.mock.calls[0][1]).toEqual({ effectiveDate: '2026-10-12', reason: 'Öneri uygulaması' })
+    expect(assignMock.mock.calls[1][1]).toEqual({ effectiveDate: '2026-10-12', reason: 'Öneri uygulaması' })
+    wrapper.unmount()
+  })
+
+  it('dönem başladıysa "Tüm Atamaları Sil" devre dışıdır', async () => {
+    // Arrange & Act
+    const company = companyFixture({ companyId: 1, assignedTeacherId: 1 })
+    const wrapper = await mountView([company], { assignedCompanyCount: 1 })
+
+    // Assert
+    const clearButton = wrapper.findAll('button').find((b) => b.text().includes(labels.allocation.clearAll))
+    expect(clearButton?.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('ikinci yerleştirmede pencere son seçilen tarihle ön dolu gelir', async () => {
+    // Arrange
+    const companyA = companyFixture({ companyId: 1, companyName: 'Firma A', workplaceDays: [1], awardedHours: 1 })
+    const companyB = companyFixture({ companyId: 2, companyName: 'Firma B', workplaceDays: [2], awardedHours: 1 })
+    const teacher = startedTeacher()
+    const wrapper = await mountView([companyA, companyB], { teachers: [teacher], dayStartHour: 8, dayEndHour: 16 })
+    useSelectionStore().selectedTeacherId = teacher.teacherId
+    await flushPromises()
+    const afterFirst = boardFixture([companyA, companyB], { teachers: [teacher] })
+    assignMock.mockResolvedValue(afterFirst)
+
+    // Act — ilk yerleştirme, tarih gir ve onayla.
+    await selectAndPlace(wrapper, 0, 8, 1, 9)
+    await flushPromises()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-13', 'İlk yerleşim')
+    await flushPromises()
+
+    // Act — ikinci yerleştirme; pencere yeniden açılır.
+    await selectAndPlace(wrapper, 1, 8, 2, 9)
+    await flushPromises()
+
+    // Assert — tarih alanı bir önceki onaylanan tarihle ön dolu; gerekçe boş.
+    expect(wrapper.findComponent(ChangeDetailsDialog).findComponent(EffectiveDateField).props('modelValue')).toBe(
+      '2026-10-13',
+    )
+    expect(changeDetailsReasonInput().value).toBe('')
+    wrapper.unmount()
   })
 })

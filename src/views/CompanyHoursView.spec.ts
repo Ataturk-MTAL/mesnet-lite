@@ -8,20 +8,38 @@ import ConfirmationService from 'openvue/confirmationservice'
 import Tooltip from 'openvue/tooltip'
 import Aura from '@openvue/themes/aura'
 import CompanyHoursView from './CompanyHoursView.vue'
+import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
+import EffectiveDateField from '../components/history/EffectiveDateField.vue'
 import { labels } from '../i18n/labels'
-import type { AutoDistributeRow, DistributionOutcome, HoursBoard, HoursRow } from '../api/hours'
+import type { AutoDistributeRow, DistributionOutcome, HoursBoard, HoursInput, HoursRow } from '../api/hours'
 import { useSelectionStore } from '../stores/selection'
 import { useTermStore } from '../stores/term'
+import type { EffectiveChangeInput, TermWithDates } from '../types/models'
 
 const getBoardMock = vi.fn<() => Promise<HoursBoard>>()
+const saveMock = vi.fn<(rows: HoursInput[], change?: EffectiveChangeInput) => Promise<HoursBoard>>()
 const autoDistributeMock = vi.fn<(rows: AutoDistributeRow[]) => Promise<DistributionOutcome>>()
 vi.mock('../api/hours', () => ({
   hoursApi: {
     get: () => getBoardMock(),
-    save: vi.fn(),
+    save: (rows: HoursInput[], change?: EffectiveChangeInput) => saveMock(rows, change),
     autoDistribute: (rows: AutoDistributeRow[]) => autoDistributeMock(rows),
   },
 }))
+
+/** Planlama evresindeki bir dönem — eski testler tarih penceresi görmeden geçer. */
+function planningTermDates(overrides: Partial<TermWithDates> = {}): TermWithDates {
+  return {
+    term: '2026-2027/1',
+    startDate: '2026-09-01',
+    endDate: '2027-06-30',
+    datesConfirmed: true,
+    isPlanning: true,
+    defaultAsOf: '2026-09-26',
+    earliestAllowedDate: '2026-09-01',
+    ...overrides,
+  }
+}
 
 function hoursRow(overrides: Partial<HoursRow> = {}): HoursRow {
   return {
@@ -111,9 +129,13 @@ function saveBadge(wrapper: VueWrapper): string | null | undefined {
 
 beforeEach(() => {
   getBoardMock.mockReset()
+  saveMock.mockReset()
   autoDistributeMock.mockReset()
   document.body.replaceChildren()
-  useTermStore().activeTerm = '2026-2027/1'
+  const termStore = useTermStore()
+  termStore.activeTerm = '2026-2027/1'
+  // Varsayılan: planlama evresi — mevcut testler tarih penceresi görmeden geçer.
+  termStore.activeTermDates = planningTermDates()
 })
 
 describe('CompanyHoursView toplu kilit düğmesi', () => {
@@ -420,5 +442,94 @@ describe('CompanyHoursView seçim kalıcılığı (Pinia store)', () => {
     expect(selection.companyHoursSearch).toBe('Akdeniz')
     expect((wrapper2.get('input[type="text"]').element as HTMLInputElement).value).toBe('Akdeniz')
     wrapper2.unmount()
+  })
+})
+
+function findSaveButton(wrapper: VueWrapper): DOMWrapper<Element> {
+  const button = wrapper.findAll('button').find((b) => b.text().includes(labels.hours.save))
+  expect(button).toBeDefined()
+  return button as DOMWrapper<Element>
+}
+
+function changeDetailsReasonInput(): HTMLTextAreaElement {
+  return document.body.querySelector<HTMLTextAreaElement>('[data-testid="change-details-reason"]')!
+}
+
+async function fillChangeDetailsAndConfirm(wrapper: VueWrapper, date: string, reason: string): Promise<void> {
+  await wrapper.findComponent(ChangeDetailsDialog).findComponent(EffectiveDateField).vm.$emit('update:modelValue', date)
+  changeDetailsReasonInput().value = reason
+  changeDetailsReasonInput().dispatchEvent(new Event('input', { bubbles: true }))
+  await flushPromises()
+  document.body
+    .querySelector<HTMLButtonElement>('[data-testid="change-details-confirm-button"]')!
+    .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+describe('CompanyHoursView dönem başladıysa Kaydet tarih ister', () => {
+  it('Kaydet önce pencere açar; onayda hoursApi.save tarih ve gerekçeyle çağrılır', async () => {
+    // Arrange — dönem başlamış.
+    getBoardMock.mockResolvedValue(boardFixture([hoursRow({ companyId: 1, isLocked: false })]))
+    saveMock.mockResolvedValue(boardFixture([hoursRow({ companyId: 1, isLocked: true })]))
+    useTermStore().activeTermDates = planningTermDates({ isPlanning: false })
+    const wrapper = await mountView()
+    await rowLockButtons(wrapper)[0].trigger('click') // en az bir değişiklik yap
+
+    // Act
+    await findSaveButton(wrapper).trigger('click')
+    await flushPromises()
+
+    // Assert — pencere açıldı, hâlâ kaydedilmedi.
+    expect(document.body.querySelector('[data-testid="change-details-dialog"]')).not.toBeNull()
+    expect(saveMock).not.toHaveBeenCalled()
+
+    // Act — tarih ve gerekçeyi doldurup onayla.
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-05', 'Ekim ayı saat düzenlemesi')
+    await flushPromises()
+
+    // Assert
+    expect(saveMock).toHaveBeenCalledTimes(1)
+    expect(saveMock.mock.calls[0][1]).toEqual({ effectiveDate: '2026-10-05', reason: 'Ekim ayı saat düzenlemesi' })
+    wrapper.unmount()
+  })
+
+  it('pencerede Vazgeç denirse hoursApi.save hiç çağrılmaz', async () => {
+    // Arrange
+    getBoardMock.mockResolvedValue(boardFixture([hoursRow({ companyId: 1, isLocked: false })]))
+    useTermStore().activeTermDates = planningTermDates({ isPlanning: false })
+    const wrapper = await mountView()
+    await rowLockButtons(wrapper)[0].trigger('click')
+
+    // Act
+    await findSaveButton(wrapper).trigger('click')
+    await flushPromises()
+    document.body
+      .querySelector<HTMLButtonElement>('[data-testid="change-details-cancel-button"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+
+    // Assert
+    expect(saveMock).not.toHaveBeenCalled()
+    expect(document.body.querySelector('[data-testid="change-details-dialog"]')).toBeNull()
+    wrapper.unmount()
+  })
+})
+
+describe('CompanyHoursView planlama evresinde Kaydet', () => {
+  it('pencere açılmadan doğrudan kaydeder; tarih ve gerekçe null gider', async () => {
+    // Arrange — beforeEach zaten planlama evresini ayarlıyor.
+    getBoardMock.mockResolvedValue(boardFixture([hoursRow({ companyId: 1, isLocked: false })]))
+    saveMock.mockResolvedValue(boardFixture([hoursRow({ companyId: 1, isLocked: true })]))
+    const wrapper = await mountView()
+    await rowLockButtons(wrapper)[0].trigger('click')
+
+    // Act
+    await findSaveButton(wrapper).trigger('click')
+    await flushPromises()
+
+    // Assert
+    expect(document.body.querySelector('[data-testid="change-details-dialog"]')).toBeNull()
+    expect(saveMock).toHaveBeenCalledTimes(1)
+    expect(saveMock.mock.calls[0][1]).toEqual({ effectiveDate: null, reason: null })
+    wrapper.unmount()
   })
 })

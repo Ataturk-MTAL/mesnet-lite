@@ -160,6 +160,7 @@ pub async fn get_dashboard_stats(state: State<'_, AppState>) -> AppResult<Dashbo
 mod tests {
     use super::*;
     use crate::db::init_pool;
+    use crate::db::legacy_seed_test_support::seed_hours;
     use crate::db::teaching_load_test_support::{change_chief_type_in_planning, seed_teacher};
     use crate::domain::models::ChiefType;
     use chrono::NaiveDate;
@@ -259,20 +260,7 @@ mod tests {
         .await
         .unwrap();
         let company_id = a_company(&pool, "İşletme A").await;
-        company_hours::save_many(
-            &pool,
-            crate::db::teaching_load_test_support::TERM,
-            &[crate::db::company_hours::HoursInput {
-                company_id,
-                max_hours_snapshot: 40,
-                awarded_hours: 40,
-                is_honorary: false,
-                is_locked: false,
-                notes: String::new(),
-            }],
-        )
-        .await
-        .unwrap();
+        seed_hours(&pool, crate::db::teaching_load_test_support::TERM, company_id, 40, false).await;
 
         let stats = dashboard_stats(&pool).await.unwrap();
 
@@ -300,20 +288,7 @@ mod tests {
         .await
         .unwrap();
         let company_id = a_company(&pool, "İşletme A").await;
-        company_hours::save_many(
-            &pool,
-            crate::db::teaching_load_test_support::TERM,
-            &[crate::db::company_hours::HoursInput {
-                company_id,
-                max_hours_snapshot: 60,
-                awarded_hours: 60,
-                is_honorary: false,
-                is_locked: false,
-                notes: String::new(),
-            }],
-        )
-        .await
-        .unwrap();
+        seed_hours(&pool, crate::db::teaching_load_test_support::TERM, company_id, 60, false).await;
 
         let stats = dashboard_stats(&pool).await.unwrap();
 
@@ -327,30 +302,8 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let paid = a_company(&pool, "Ucretli").await;
         let free = a_company(&pool, "Fahri").await;
-        company_hours::save_many(
-            &pool,
-            crate::db::teaching_load_test_support::TERM,
-            &[
-                crate::db::company_hours::HoursInput {
-                    company_id: paid,
-                    max_hours_snapshot: 10,
-                    awarded_hours: 6,
-                    is_honorary: false,
-                    is_locked: false,
-                    notes: String::new(),
-                },
-                crate::db::company_hours::HoursInput {
-                    company_id: free,
-                    max_hours_snapshot: 8,
-                    awarded_hours: 8,
-                    is_honorary: true,
-                    is_locked: false,
-                    notes: String::new(),
-                },
-            ],
-        )
-        .await
-        .unwrap();
+        seed_hours(&pool, crate::db::teaching_load_test_support::TERM, paid, 6, false).await;
+        seed_hours(&pool, crate::db::teaching_load_test_support::TERM, free, 8, true).await;
 
         let stats = dashboard_stats(&pool).await.unwrap();
 

@@ -61,9 +61,10 @@ pub(super) fn validate_command(command: &ChangeCommand, day_end_hour: i64) -> Ap
         }
         ChangeCommand::SetTeacherLoad { load, .. } => validate_load(load),
         ChangeCommand::SetCompanyHours { rows } => validate_hours(rows.iter().map(|r| r.awarded_hours)),
-        ChangeCommand::AssignCoordinators { rows } => {
-            rows.iter().try_for_each(|r| validate_slot(r.visit_day, r.visit_hour, day_end_hour))
-        }
+        ChangeCommand::AssignCoordinators { rows } => rows.iter().try_for_each(|r| {
+            validate_slot(r.visit_day, r.visit_hour, day_end_hour)?;
+            validate_force_reason(r.is_forced, r.force_reason.as_deref())
+        }),
         ChangeCommand::SetTeacherSchedule { slots, .. } => {
             slots.iter().try_for_each(|s| validate_slot(s.day_of_week, s.hour, day_end_hour))
         }
@@ -155,6 +156,18 @@ fn validate_slot(day: i64, hour: i64, day_end_hour: i64) -> AppResult<()> {
             "Ders saati en fazla {} olabilir (günlük azami ders saati sayısı ayarına göre)",
             day_end_hour - 1
         )));
+    }
+    Ok(())
+}
+
+/// Eski `db/assignments.rs::validate`'in korunması gereken tek kontrolü:
+/// zorlama işaretliyse gerekçe boş bırakılamaz — denetimde "neden zorlandı"
+/// sorusunun cevabı kalmalı. `decide::company::assign_coordinators` bunu
+/// KENDİSİ denetlemez (yalnız çakışmayı `is_forced` ile atlar), bu yüzden
+/// sınırda burada tutulur.
+fn validate_force_reason(is_forced: bool, force_reason: Option<&str>) -> AppResult<()> {
+    if is_forced && force_reason.is_none_or(|r| r.trim().is_empty()) {
+        return Err(invalid("Zorlama gerekçesi boş bırakılamaz"));
     }
     Ok(())
 }
@@ -288,5 +301,32 @@ mod tests {
     fn weekend_day_is_rejected_regardless_of_the_hour_bound() {
         let command = ChangeCommand::SetTeacherSchedule { teacher_id: 1, slots: vec![Slot::new(6, 3)] };
         assert!(validate_command(&command, 10).is_err());
+    }
+
+    /// Eski `db/assignments.rs::validate`in korunması gereken kontrolü:
+    /// zorlama işaretliyken boş/yalnız boşluk gerekçe reddedilir.
+    #[test]
+    fn forcing_without_a_reason_is_rejected_at_the_command_boundary() {
+        let row = |is_forced: bool, reason: Option<&str>| CoordinatorRow {
+            company_id: 1,
+            teacher_id: 1,
+            visit_day: 1,
+            visit_hour: 3,
+            is_forced,
+            force_reason: reason.map(str::to_string),
+        };
+
+        let missing = ChangeCommand::AssignCoordinators { rows: vec![row(true, None)] };
+        assert!(validate_command(&missing, 10).is_err());
+
+        let blank = ChangeCommand::AssignCoordinators { rows: vec![row(true, Some("   "))] };
+        assert!(validate_command(&blank, 10).is_err());
+
+        let ok = ChangeCommand::AssignCoordinators { rows: vec![row(true, Some("Ulaşım zorunluluğu"))] };
+        assert!(validate_command(&ok, 10).is_ok());
+
+        // Zorlanmıyorsa gerekçe zaten aranmaz.
+        let not_forced = ChangeCommand::AssignCoordinators { rows: vec![row(false, None)] };
+        assert!(validate_command(&not_forced, 10).is_ok());
     }
 }
