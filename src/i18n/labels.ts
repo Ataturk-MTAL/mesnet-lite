@@ -786,6 +786,7 @@ export const labels = {
     sourceCode: 'Kaynak Kod',
     sourceCodeUrl: 'https://github.com/Ataturk-MTAL/mesnet-lite',
     checkUpdates: 'Güncellemeleri Denetle',
+    version: (version: string) => `Sürüm ${version}`,
   },
   update: {
     title: (version: string) => `Yeni sürüm: ${version}`,

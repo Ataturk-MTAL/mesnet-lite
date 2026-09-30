@@ -4,6 +4,9 @@
       <template #content>
         <img :src="logoUrl" :alt="labels.app.logoAlt" class="about-logo" />
         <h1 class="app-name">{{ labels.about.appName }}</h1>
+        <p v-if="appVersion" class="app-version" data-testid="about-version">
+          {{ labels.about.version(appVersion) }}
+        </p>
         <p class="school">{{ labels.about.school }}</p>
         <p class="field">{{ labels.about.field }}</p>
         <p class="purpose">{{ labels.about.purpose }}</p>
@@ -38,10 +41,12 @@
 </template>
 
 <script setup lang="ts">
-// Uygulama adı, okul bilgisi, amaç cümlesi, lisans ve kaynak kod bağlantısını
-// gösterir; sürüm numarası veya iletişim bilgisi YOKTUR. Güncelleme
-// desteklenen derlemelerde "Güncellemeleri Denetle" düğmesi de görünür.
-import { onMounted } from 'vue'
+// Uygulama adı, okul bilgisi, amaç cümlesi, lisans, kaynak kod bağlantısını
+// ve uygulama sürümünü (Tauri `getVersion()`, tauri.conf.json'dan) gösterir;
+// iletişim bilgisi YOKTUR. Sürüm okunamazsa (Tauri dışı) satır gizlenir.
+// Güncelleme desteklenen derlemelerde "Güncellemeleri Denetle" düğmesi de görünür.
+import { onMounted, ref } from 'vue'
+import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { useToast } from 'openvue/usetoast'
 import { labels } from '../i18n/labels'
@@ -51,8 +56,20 @@ import logoUrl from '../assets/ataturk-mtal.png'
 const toast = useToast()
 const { supported, checking, installing, loadSupported, checkManually } = useUpdater()
 
+// Geçici görünüm durumu; yalnız bu sayfaya ait.
+const appVersion = ref<string | null>(null)
+
+async function loadVersion(): Promise<void> {
+  try {
+    appVersion.value = await getVersion()
+  } catch (error: unknown) {
+    console.warn('Sürüm okunamadı:', error)
+  }
+}
+
 onMounted(() => {
   void loadSupported()
+  void loadVersion()
 })
 
 function showError(error: unknown): void {
@@ -94,6 +111,13 @@ async function openSourceCode(): Promise<void> {
   font-size: 1.75rem;
   font-weight: 600;
   margin: 0 0 0.75rem;
+  text-align: center;
+}
+
+.app-version {
+  margin: -0.5rem 0 0.75rem;
+  font-size: 0.875rem;
+  color: var(--p-text-muted-color);
   text-align: center;
 }
 
