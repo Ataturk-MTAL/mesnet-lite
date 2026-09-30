@@ -58,10 +58,21 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `createUpdaterArtifacts` açıkken `tauri build` güncelleme paketlerini
+          # bu anahtarla imzalar; uygulamadaki `plugins.updater.pubkey` yalnız bu
+          # anahtarın imzasını kabul eder. Anahtar yoksa derleme başarısız olur.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'MESNET.Lite ${{ github.ref_name }}'
           releaseBody: 'Kurulum dosyaları aşağıda. Windows kurulumu yönetici izni ister. Dosyalar imzasız olduğundan SmartScreen ya da Avast gibi antivirüsler uyarı verebilir; bu bir yanlış alarmdır — ayrıntı ve çözüm için README''deki "Windows: kurulum ve antivirüs uyarısı" bölümüne bakın: https://github.com/Ataturk-MTAL/mesnet-lite#windows-kurulum-ve-antivirüs-uyarısı . macOS paketleri de imzasızdır; ilk açılışta sağ tık → Aç.'
           releaseDraft: false
           prerelease: false
+          # `latest.json` (güncelleyicinin okuduğu dosya) varsayılan olarak
+          # yüklenir (`uploadUpdaterJson: true`); açıkça yazıldı ki sessizce
+          # kapatılmasın. Windows'ta hem NSIS hem MSI varsa NSIS seçilir:
+          # uygulamanın asıl kurulum biçimi odur (`bundle.windows.nsis`).
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}

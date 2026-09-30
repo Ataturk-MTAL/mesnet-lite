@@ -22,6 +22,9 @@ vi.mock('./api/users', () => ({
   },
 }))
 
+// Açılış güncelleme denetimi: testte güncelleme desteklenmez.
+vi.mock('./api/updater', () => ({ updaterApi: { isSupported: () => Promise.resolve(false) } }))
+
 function mountApp() {
   return mount(App, {
     global: {

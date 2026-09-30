@@ -59,6 +59,7 @@ declare module 'vue' {
     Textarea: typeof import('openvue/textarea')['default']
     Toast: typeof import('openvue/toast')['default']
     ToggleSwitch: typeof import('openvue/toggleswitch')['default']
+    UpdateDialog: typeof import('./src/components/layout/UpdateDialog.vue')['default']
     UserCreateDialog: typeof import('./src/components/user/UserCreateDialog.vue')['default']
     UserPinDialog: typeof import('./src/components/user/UserPinDialog.vue')['default']
     UserRenameDialog: typeof import('./src/components/user/UserRenameDialog.vue')['default']

@@ -17,6 +17,7 @@ pub mod student_commands;
 pub mod student_list_commands;
 pub mod teacher_commands;
 pub mod term_commands;
+pub mod updater_commands;
 pub mod user_commands;
 pub mod version_commands;
 

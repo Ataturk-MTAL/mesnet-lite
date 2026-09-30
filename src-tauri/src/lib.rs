@@ -6,24 +6,60 @@ mod services;
 
 use db::{init_pool, AppState};
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+/// Açılış hatası penceresinin başlığı.
+const STARTUP_ERROR_TITLE: &str = "MESNET.Lite açılamadı";
+
+/// Açılışta (veritabanı açılırken/göç öncesi yedekte) bir hata olursa kullanıcıya
+/// yerel bir pencerede gösterir. `setup`tan `Err` dönmek `run().expect(..)`i
+/// çağırır; yayın derlemesinde konsol olmadığı için bu, hiçbir şey görmeden
+/// çöken bir uygulama demektir. Pencere kapatılınca uygulama çıkar; o ana kadar
+/// ana pencere gizlenir, çünkü veritabanı durumu yokken komutlar çalışamaz.
+fn report_startup_failure(app: &tauri::App, error: &error::AppError) {
+    eprintln!("Açılış hatası: {error}");
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(e) = window.hide() {
+            eprintln!("Ana pencere gizlenemedi: {e}");
+        }
+    }
+    let handle = app.handle().clone();
+    app.dialog()
+        .message(error.to_string())
+        .title(STARTUP_ERROR_TITLE)
+        .kind(MessageDialogKind::Error)
+        .show(move |_| handle.exit(1));
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+    // Güncelleyici ve yeniden başlatma yalnız masaüstünde vardır; hangi
+    // kurulumlarda gerçekten kullanılacağına `updater_supported` komutu karar verir.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_process::init());
+
+    builder
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+
             // Veritabanı platform-doğru uygulama veri dizininde tutulur.
             let dir = app.path().app_data_dir()?;
             let db_path = dir.join(db::DB_FILE_NAME);
 
-            let pool = tauri::async_runtime::block_on(init_pool(&db_path))
-                .map_err(|e| format!("Veritabanı açılamadı: {e}"))?;
-
-            app.manage(AppState { pool });
+            match tauri::async_runtime::block_on(init_pool(&db_path)) {
+                Ok(pool) => {
+                    app.manage(AppState { pool });
+                }
+                Err(e) => report_startup_failure(app, &e),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::updater_commands::updater_supported,
             commands::company_commands::list_companies,
             commands::company_commands::get_company,
             commands::company_commands::create_company,

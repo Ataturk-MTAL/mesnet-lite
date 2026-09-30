@@ -12,6 +12,7 @@ pub mod history_service;
 pub mod import_apply;
 pub mod legacy_reconcile;
 pub mod pdf_report;
+pub mod pre_migration_backup;
 pub mod student_list_apply;
 pub mod student_list_import;
 pub mod versions;

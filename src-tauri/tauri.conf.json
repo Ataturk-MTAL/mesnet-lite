@@ -42,6 +42,18 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE2NEVEM0E3OUZGODFBOQpSV1NwZ2Y5NU91MWtDdnR3MkMrbmtLSmpqbmJGUUl3NTVkdzc5aGtBeEtBTHdhZEtnbXNLQlhzdwo=",
+      "endpoints": [
+        "https://github.com/Ataturk-MTAL/mesnet-lite/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
