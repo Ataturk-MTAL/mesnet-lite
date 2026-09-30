@@ -63,7 +63,8 @@
             <label for="teacher-chief">{{ labels.teacher.chiefType }}</label>
             <Select
               id="teacher-chief"
-              v-model="form.chiefType"
+              :modelValue="form.chiefType"
+              @update:modelValue="onChiefTypeChange"
               :options="chiefOptions"
               optionLabel="label"
               optionValue="value"
@@ -137,6 +138,12 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { labels } from '../../i18n/labels'
 import { parseBranches } from '../../types/models'
+import {
+  CHIEF_HOURS_BY_TYPE,
+  CHIEF_OPTIONS,
+  principalCapWarning,
+  principalLoadDefaults,
+} from '../../utils/chiefRules'
 import type { ChiefType, EmploymentType, NewTeacher, TeacherWithCapacity, TermWithDates } from '../../types/models'
 import ChangeDetailsDialog from '../history/ChangeDetailsDialog.vue'
 
@@ -192,26 +199,24 @@ const employmentOptions = [
   { value: 'contracted' as const, label: labels.employmentType.contracted },
 ]
 
-const chiefOptions = [
-  { value: 'none' as const, label: labels.chiefType.none },
-  { value: 'workshop_lab' as const, label: labels.chiefType.workshop_lab },
-  { value: 'department' as const, label: labels.chiefType.department },
-]
+const chiefOptions = CHIEF_OPTIONS
 
-/** MADDE 6/4 — saat türetilir, kullanıcı giremez. */
-const chiefHoursByType: Record<ChiefType, number> = {
-  none: 0,
-  workshop_lab: 6,
-  department: 10,
-}
-
-const chiefHours = computed(() => chiefHoursByType[form.chiefType])
+const chiefHours = computed(() => CHIEF_HOURS_BY_TYPE[form.chiefType])
 
 // Şeflik saati azamî ek ders tavanının İÇİNDEN düşer; tavan şeflikten küçükse
-// kayıt tutarsızdır ve Rust tarafı da reddeder.
-const capacityWarning = computed<string | null>(() =>
-  form.maxExtraHours < chiefHours.value ? labels.teacher.capacityWarning : null,
-)
+// kayıt tutarsızdır ve Rust tarafı da reddeder. Müdür/müdür yardımcısında ayrıca
+// MADDE 6/1-a tavanı (6 saat) uygulanır.
+const capacityWarning = computed<string | null>(() => {
+  if (form.maxExtraHours < chiefHours.value) return labels.teacher.capacityWarning
+  return principalCapWarning(form.chiefType, form.maxExtraHours)
+})
+
+/** Kullanıcı unvanı değiştirince müdür kadrosunun sabit saatleri forma yazılır. */
+function onChiefTypeChange(value: ChiefType): void {
+  form.chiefType = value
+  const defaults = principalLoadDefaults(value)
+  if (defaults) Object.assign(form, defaults)
+}
 
 const isValid = computed(
   () =>

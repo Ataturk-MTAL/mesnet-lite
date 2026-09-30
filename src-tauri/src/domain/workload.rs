@@ -52,6 +52,28 @@ pub fn coordinator_capacity(
     statutory_cap.min(remaining_budget).max(0)
 }
 
+/// MADDE 6/1-a: "Müdür, müdür başyardımcısı ve müdür yardımcılarına haftada
+/// 6 saate kadar ek ders görevi verilebilir." Müdür ve müdür yardımcısının
+/// `max_extra_hours` değeri bunu aşamaz.
+///
+/// (MADDE 5/1-a müdür/müdür yardımcısı aylık karşılığı ders saatinin 6 olduğunu
+/// söyler; o bir varsayılandır, zorunlu kural değildir ve burada uygulanmaz.)
+pub const MANAGEMENT_MAX_EXTRA_HOURS: i64 = 6;
+
+/// Yük MADDE 6/1-a'yı çiğniyorsa kullanıcıya gösterilecek Türkçe mesajı döner.
+///
+/// Kuralın TEK yeri burasıdır: sınırdaki doğrulama
+/// (`services/change_input.rs`) ve karar katmanının net-sonuç denetimi
+/// (`domain/history/decide/chief.rs`) aynı fonksiyonu çağırır.
+pub fn management_extra_hours_violation(load: &crate::domain::history::events::TeacherLoad) -> Option<String> {
+    if !load.chief_type.is_school_management() || load.max_extra_hours <= MANAGEMENT_MAX_EXTRA_HOURS {
+        return None;
+    }
+    Some(format!(
+        "Müdür ve müdür yardımcılarına haftada en fazla {MANAGEMENT_MAX_EXTRA_HOURS} saat ek ders verilebilir (MADDE 6/1-a)."
+    ))
+}
+
 /// Bir öğretmenin ek ders tavanı, dönemin o günkü `TeacherLoad` durumundan.
 ///
 /// `teacher_commands.rs`, `assignment_commands.rs` ve `dashboard_commands.rs`
@@ -147,5 +169,29 @@ mod tests {
         let cap = statutory_cap(InstitutionType::Other, true);
         assert_eq!(coordinator_capacity(24, 10, 20, cap), 0);
         assert_eq!(coordinator_capacity(6, 10, 0, cap), 0);
+    }
+
+    fn load_of(chief_type: ChiefType, max_extra_hours: i64) -> TeacherLoad {
+        TeacherLoad { base_hours: 15, max_extra_hours, other_extra_hours: 0, chief_type, employment_type: EmploymentType::Tenured }
+    }
+
+    /// MADDE 6/1-a: müdür ve müdür yardımcısına en fazla 6 saat; 6 kabul, 7 ret.
+    #[test]
+    fn school_management_extra_hours_are_capped_at_six() {
+        for title in [ChiefType::Principal, ChiefType::DeputyPrincipal] {
+            assert_eq!(management_extra_hours_violation(&load_of(title, 6)), None, "{title:?} 6 saat kabul");
+            assert_eq!(management_extra_hours_violation(&load_of(title, 0)), None, "{title:?} 0 saat kabul");
+            let message = management_extra_hours_violation(&load_of(title, 7)).expect("7 saat reddedilmeli");
+            assert!(message.contains("MADDE 6/1-a"), "mesaj maddeyi anmalı: {message}");
+            assert!(message.contains("6 saat"), "mesaj sınırı söylemeli: {message}");
+        }
+    }
+
+    /// Kural yalnız okul yönetimine özgüdür: öğretmen ve şefler 24'e kadar ek ders alabilir.
+    #[test]
+    fn six_hour_cap_does_not_apply_to_teachers_or_chiefs() {
+        for title in [ChiefType::None, ChiefType::WorkshopLab, ChiefType::Department] {
+            assert_eq!(management_extra_hours_violation(&load_of(title, 24)), None, "{title:?}");
+        }
     }
 }

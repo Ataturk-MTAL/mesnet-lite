@@ -18,6 +18,7 @@ use crate::domain::history::decide::{
 };
 use crate::domain::history::events::TeacherLoad;
 use crate::domain::models::{ChiefType, EmploymentType, NewCompany, NewStudent, NewTeacher};
+use crate::domain::workload::management_extra_hours_violation;
 use crate::error::{AppError, AppResult};
 
 /// Ziyaret günü ve boş saat günü Pazartesi–Cuma'dır (bkz.
@@ -117,6 +118,7 @@ fn validate_teacher_profile(teacher: &NewTeacherProfile) -> AppResult<()> {
 
 /// MADDE 6/1-c: azamî ek ders tavanı; şeflik saati (MADDE 6/4) bu tavanın
 /// İÇİNDE verilir, bu yüzden şeflik saatinden küçük bir tavan tutarsızdır.
+/// MADDE 6/1-a: müdür ve müdür yardımcısı için tavan ayrıca en fazla 6'dır.
 fn validate_load(load: &TeacherLoad) -> AppResult<()> {
     if load.base_hours < 0 || load.other_extra_hours < 0 {
         return Err(invalid("Saatler negatif olamaz"));
@@ -128,7 +130,10 @@ fn validate_load(load: &TeacherLoad) -> AppResult<()> {
             load.max_extra_hours
         )));
     }
-    Ok(())
+    match management_extra_hours_violation(load) {
+        Some(message) => Err(invalid(message)),
+        None => Ok(()),
+    }
 }
 
 fn validate_hours(awarded: impl Iterator<Item = i64>) -> AppResult<()> {
@@ -237,6 +242,8 @@ fn chief_column(chief: ChiefType) -> &'static str {
         ChiefType::None => "none",
         ChiefType::WorkshopLab => "workshop_lab",
         ChiefType::Department => "department",
+        ChiefType::Principal => "principal",
+        ChiefType::DeputyPrincipal => "deputy_principal",
     }
 }
 
@@ -328,5 +335,49 @@ mod tests {
         // Zorlanmıyorsa gerekçe zaten aranmaz.
         let not_forced = ChangeCommand::AssignCoordinators { rows: vec![row(false, None)] };
         assert!(validate_command(&not_forced, 10).is_ok());
+    }
+
+    fn load_command(chief_type: ChiefType, max_extra_hours: i64) -> (ChangeCommand, ChangeCommand) {
+        let load = TeacherLoad { base_hours: 15, max_extra_hours, other_extra_hours: 0, chief_type, employment_type: EmploymentType::Tenured };
+        let profile = NewTeacherProfile {
+            first_name: "Test".into(),
+            last_name: "Kişi".into(),
+            registry_no: String::new(),
+            field: "Elektrik".into(),
+            branches: vec![],
+            is_active: true,
+        };
+        (
+            ChangeCommand::CreateTeacher { teacher: profile, load: load.clone() },
+            ChangeCommand::SetTeacherLoad { teacher_id: 1, load },
+        )
+    }
+
+    /// MADDE 6/1-a sınırda: müdür ve müdür yardımcısı için 6 saat kabul, 7 ret;
+    /// oluşturma, yük değiştirme ve düzeltme (`correct`) yollarının HEPSİNDE.
+    #[test]
+    fn school_management_above_six_hours_is_rejected_on_every_load_path() {
+        for title in [ChiefType::Principal, ChiefType::DeputyPrincipal] {
+            let (create_ok, set_ok) = load_command(title, 6);
+            let (create_bad, set_bad) = load_command(title, 7);
+            let correct_bad = ChangeCommand::Correct { change_set_id: 1, replacement: Box::new(set_bad.clone()) };
+
+            for ok in [&create_ok, &set_ok] {
+                assert!(validate_command(ok, 10).is_ok(), "{title:?} 6 saat kabul edilmeli");
+            }
+            for bad in [&create_bad, &set_bad, &correct_bad] {
+                let err = validate_command(bad, 10).unwrap_err();
+                assert!(matches!(&err, AppError::Validation(m) if m.contains("MADDE 6/1-a")), "{title:?}: {err:?}");
+            }
+        }
+    }
+
+    /// Yeni unvanlar kolonda mevcut CHECK metinleriyle aynı serde adını taşır.
+    #[test]
+    fn chief_column_uses_the_same_text_as_serde() {
+        for chief in [ChiefType::None, ChiefType::WorkshopLab, ChiefType::Department, ChiefType::Principal, ChiefType::DeputyPrincipal] {
+            let serde_text = serde_json::to_string(&chief).unwrap();
+            assert_eq!(serde_text, format!("\"{}\"", chief_column(chief)), "{chief:?}");
+        }
     }
 }

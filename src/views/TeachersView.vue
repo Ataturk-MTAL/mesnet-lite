@@ -7,19 +7,23 @@
 
     <AsOfReadOnlyBanner />
 
+    <small class="muted sort-hint">{{ labels.teacher.sortHint }}</small>
+
     <DataTable
-      :value="teachers"
+      :value="rows"
       :loading="isLoading"
       paginator
       :rows="20"
       dataKey="id"
-      sortMode="single"
+      sortMode="multiple"
+      removableSort
+      v-model:multiSortMeta="sortMeta"
       stripedRows
     >
       <template #empty>{{ labels.teacher.empty }}</template>
 
-      <Column field="lastName" :header="labels.teacher.lastName" sortable />
-      <Column field="firstName" :header="labels.teacher.firstName" sortable />
+      <Column field="firstName" sortField="firstNameSortKey" :header="labels.teacher.firstName" sortable />
+      <Column field="lastName" sortField="lastNameSortKey" :header="labels.teacher.lastName" sortable />
       <Column field="registryNo" :header="labels.teacher.registryNo" />
 
       <Column :header="labels.teacher.branches">
@@ -36,7 +40,7 @@
         </template>
       </Column>
 
-      <Column :header="labels.teacher.chiefType">
+      <Column :header="labels.teacher.chiefType" sortField="chiefRank" sortable>
         <template #body="{ data }">
           {{ labels.chiefType[data.chiefType as ChiefType] }}
           <span v-if="data.chiefHours > 0" class="muted"> ({{ data.chiefHours }} sa.)</span>
@@ -105,8 +109,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import type { DataTableSortMeta } from 'openvue/datatable'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import TeacherFormDialog from '../components/teacher/TeacherFormDialog.vue'
@@ -118,6 +123,7 @@ import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
 import { useAsOfDateStore } from '../stores/asOfDate'
 import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
+import { buildTeacherRows } from '../utils/chiefRules'
 import { parseBranches } from '../types/models'
 import type { ChiefType, NewTeacher, TeacherWithCapacity, TermWithDates } from '../types/models'
 
@@ -127,6 +133,15 @@ const { activeTerm } = storeToRefs(useTermStore())
 const { requestAsOf, isReadOnly } = storeToRefs(useAsOfDateStore())
 
 const teachers = ref<TeacherWithCapacity[]>([])
+/** Tabloya giden satırlar: rütbe ve Türkçe harf sırası için sıralama anahtarlı. */
+const rows = computed(() => buildTeacherRows(teachers.value))
+
+/** Varsayılan sıralama: unvan (rütbe), sonra ad. */
+const sortMeta = ref<DataTableSortMeta[]>([
+  { field: 'chiefRank', order: 1 },
+  { field: 'firstNameSortKey', order: 1 },
+])
+
 const knownBranches = ref<string[]>([])
 const isLoading = ref(false)
 const isDialogOpen = ref(false)

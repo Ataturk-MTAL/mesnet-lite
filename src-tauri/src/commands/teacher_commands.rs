@@ -501,4 +501,58 @@ mod tests {
         let err = ReadAt::resolve(&pool, TERM, Some("2025-12-31".into())).await.unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
+
+    /// MADDE 6/1-a: müdür ve müdür yardımcısı 24 saat ek dersle OLUŞTURULAMAZ;
+    /// kapı reddeder ve hiçbir şey yazılmaz.
+    #[tokio::test]
+    async fn create_teacher_rejects_school_management_above_six_hours() {
+        let (_dir, pool) = test_pool().await;
+        let sets_before = count(&pool, "change_sets", None).await;
+
+        for title in ["principal", "deputy_principal"] {
+            let mut input = valid_input(title, title);
+            input.max_extra_hours = 24;
+            let result = create_teacher_impl(&pool, input, None, None, planning_today()).await;
+            assert!(matches!(&result, Err(AppError::Validation(m)) if m.contains("MADDE 6/1-a")), "{title}: {result:?}");
+        }
+        assert_eq!(count(&pool, "change_sets", None).await, sets_before, "reddedilince hiçbir şey yazılmamalı");
+    }
+
+    /// 6 saat sınırın kendisidir: kabul edilir, unvan eski tabloya ve projeksiyona
+    /// yazılır (yeni CHECK değerleri) ve şeflik saati 0 kalır (MADDE 6/4).
+    #[tokio::test]
+    async fn create_teacher_accepts_school_management_at_six_hours_and_they_are_not_chiefs() {
+        let (_dir, pool) = test_pool().await;
+        for title in ["principal", "deputy_principal"] {
+            let mut input = valid_input(title, title);
+            input.max_extra_hours = 6;
+            let created = create_teacher_impl(&pool, input, None, None, planning_today()).await.unwrap();
+            assert_eq!(created.chief_type, title);
+        }
+        let hours = teaching_load::chief_planning_hours(&pool, crate::db::teaching_load_test_support::TERM, ymd(2026, 10, 1))
+            .await
+            .unwrap();
+        assert_eq!(hours, 0, "müdür/müdür yardımcısı havuza şeflik saati katmaz");
+    }
+
+    /// Düzenleme yolu: mevcut öğretmen 24 saatle müdür yapılamaz; kapı reddeder ve
+    /// eski tablo da değişmez. Tavan 6'ya indirilirse geçer.
+    #[tokio::test]
+    async fn update_teacher_rejects_school_management_above_six_hours_and_writes_nothing() {
+        let (_dir, pool) = test_pool().await;
+        let created = create_teacher_impl(&pool, valid_input("Ada", "none"), None, None, planning_today()).await.unwrap();
+        let sets_before = count(&pool, "change_sets", None).await;
+
+        let bad = valid_input("Ada", "principal");
+        let result = update_teacher_impl(&pool, created.id, bad, None, None, planning_today()).await;
+        assert!(matches!(&result, Err(AppError::Validation(m)) if m.contains("MADDE 6/1-a")), "{result:?}");
+        assert_eq!(count(&pool, "change_sets", None).await, sets_before);
+        assert_eq!(teachers::get(&pool, created.id).await.unwrap().chief_type, "none", "eski tablo değişmemeli");
+
+        let mut good = valid_input("Ada", "principal");
+        good.max_extra_hours = 6;
+        let updated = update_teacher_impl(&pool, created.id, good, None, None, planning_today()).await.unwrap();
+        assert_eq!(updated.chief_type, "principal");
+        assert_eq!(updated.max_extra_hours, 6);
+    }
 }

@@ -73,6 +73,9 @@ const TEACHERS_SIGNATURE_LABEL: &str = "Alan Öğretmenleri İmza";
 
 /// Atölye/Laboratuvar şefinin unvanı (MADDE 6/4: haftada 6 saat).
 const WORKSHOP_LAB_TITLE: &str = "Atölye/Laboratuvar Şefi";
+/// Müdür yardımcısının unvanı. Müdürün unvanı onay bloğundaki
+/// `PRINCIPAL_TITLE_LINE` ile aynı metindir (tek kaynak).
+const DEPUTY_PRINCIPAL_TITLE: &str = "Müdür Yardımcısı";
 /// Hiçbir şeflik taşımayan öğretmenin unvanı. Kullanıcının açık isteği:
 /// "şef değil" değil, sade "Öğretmen" yazılır.
 const TEACHER_TITLE: &str = "Öğretmen";
@@ -498,11 +501,14 @@ fn extend_teacher_groups(
     }
 }
 
-/// Şeflik türünün imza şeridinde basılacak unvanı (MADDE 6/4). Bölüm şefliği
+/// Unvanın imza şeridinde basılacak metni (MADDE 6/4). Bölüm şefliği
 /// burada hiç görünmez; o zaten kendi bloğuna (chief_name) ayrılmıştır.
+/// Müdür ve müdür yardımcısı şef değildir, kendi unvanlarıyla basılır.
 fn signature_title(chief_type: ChiefType) -> &'static str {
     match chief_type {
         ChiefType::WorkshopLab => WORKSHOP_LAB_TITLE,
+        ChiefType::Principal => PRINCIPAL_TITLE_LINE,
+        ChiefType::DeputyPrincipal => DEPUTY_PRINCIPAL_TITLE,
         ChiefType::None | ChiefType::Department => TEACHER_TITLE,
     }
 }
@@ -1197,6 +1203,25 @@ mod tests {
             data.field_teachers
         );
         assert!(data.field_teachers.is_empty());
+    }
+
+    /// Müdür ve müdür yardımcısı imza şeridinde kendi unvanıyla basılır ve alan
+    /// şefi sayılmaz (MADDE 6/4 yalnız şefleri kapsar).
+    #[tokio::test]
+    async fn school_management_get_their_own_titles_and_are_not_the_chief() {
+        let (_dir, pool) = test_pool().await;
+        seed_teacher_with_chief(&pool, "Ayşe", "Yılmaz", ChiefType::Principal).await;
+        seed_teacher_with_chief(&pool, "Bora", "Kaya", ChiefType::DeputyPrincipal).await;
+        seed_teacher_with_chief(&pool, "Can", "Er", ChiefType::None).await;
+
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
+
+        assert_eq!(data.chief_name, "", "müdür alan şefi olarak basılmamalı");
+        let titles: Vec<(&str, &str)> = data.field_teachers.iter().map(|t| (t.name.as_str(), t.title.as_str())).collect();
+        assert_eq!(
+            titles,
+            [("Ayşe YILMAZ", "Okul Müdürü"), ("Bora KAYA", "Müdür Yardımcısı"), ("Can ER", "Öğretmen")]
+        );
     }
 
     #[tokio::test]

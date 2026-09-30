@@ -10,25 +10,37 @@ pub enum GeocodeStatus {
     Manual,
 }
 
-/// Şeflik görevi. Saat değeri buradan türetilir, veritabanında saklanmaz.
+/// Öğretmenin unvanı: şeflik görevi ya da okul yönetimi. Şeflik saati buradan
+/// türetilir, veritabanında saklanmaz. Serde adları (`snake_case`)
+/// `teachers.chief_type` sütunundaki metinlerle birebir aynıdır.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChiefType {
     None,
     WorkshopLab,
     Department,
+    /// Okul müdürü. Şef DEĞİLDİR; ek ders tavanı MADDE 6/1-a ile sınırlıdır.
+    Principal,
+    /// Müdür yardımcısı. Şef DEĞİLDİR; ek ders tavanı MADDE 6/1-a ile sınırlıdır.
+    DeputyPrincipal,
 }
 
 impl ChiefType {
     /// MADDE 6/4: bölüm şefleri için haftada 10, atölye ve laboratuvar şefleri
     /// için haftada 6 saat. Bu saatler azamî ek ders tavanının İÇİNDE verilir,
-    /// üstüne eklenmez.
+    /// üstüne eklenmez. MADDE 6/4 yalnız şefleri kapsar: müdür ve müdür
+    /// yardımcısı için 0'dır.
     pub fn weekly_hours(self) -> i64 {
         match self {
-            ChiefType::None => 0,
+            ChiefType::None | ChiefType::Principal | ChiefType::DeputyPrincipal => 0,
             ChiefType::WorkshopLab => 6,
             ChiefType::Department => 10,
         }
+    }
+
+    /// Müdür ve müdür yardımcısı mı? MADDE 6/1-a ek ders sınırı bunlara uygulanır.
+    pub fn is_school_management(self) -> bool {
+        matches!(self, ChiefType::Principal | ChiefType::DeputyPrincipal)
     }
 }
 
@@ -195,6 +207,27 @@ mod tests {
         assert_eq!(ChiefType::Department.weekly_hours(), 10);
         assert_eq!(ChiefType::WorkshopLab.weekly_hours(), 6);
         assert_eq!(ChiefType::None.weekly_hours(), 0);
+    }
+
+    /// MADDE 6/4 yalnız şefleri kapsar: müdür ve müdür yardımcısı şef
+    /// sayılmaz, havuza ve kapasiteden düşülen şeflik saatine 0 katkı verir.
+    #[test]
+    fn school_management_titles_carry_no_chief_hours() {
+        assert_eq!(ChiefType::Principal.weekly_hours(), 0);
+        assert_eq!(ChiefType::DeputyPrincipal.weekly_hours(), 0);
+        assert!(ChiefType::Principal.is_school_management());
+        assert!(ChiefType::DeputyPrincipal.is_school_management());
+        for other in [ChiefType::None, ChiefType::WorkshopLab, ChiefType::Department] {
+            assert!(!other.is_school_management(), "{other:?} okul yönetimi değil");
+        }
+    }
+
+    /// Arayüz ve veritabanı aynı snake_case metni kullanır.
+    #[test]
+    fn school_management_titles_serialize_as_snake_case() {
+        assert_eq!(serde_json::to_string(&ChiefType::Principal).unwrap(), "\"principal\"");
+        assert_eq!(serde_json::to_string(&ChiefType::DeputyPrincipal).unwrap(), "\"deputy_principal\"");
+        assert_eq!(serde_json::from_str::<ChiefType>("\"deputy_principal\"").unwrap(), ChiefType::DeputyPrincipal);
     }
 
     /// Saat tavanı kuralları gidiş-dönüş mesafe kullanır: tek yönün iki katı.

@@ -708,6 +708,18 @@ mod tests {
         assert_eq!(chief_planning_hours(&pool, TERM, as_of).await.unwrap(), 9 * 6 + 10);
     }
 
+    /// Müdür ve müdür yardımcısı şef değildir: havuza 0 saat katar (MADDE 6/4),
+    /// yalnız gerçek şef sayılır.
+    #[tokio::test]
+    async fn school_management_adds_nothing_to_the_chief_pool() {
+        let (_dir, pool) = test_pool().await;
+        seed_teacher(&pool, "Mudur", ChiefType::Principal).await;
+        seed_teacher(&pool, "Yardimci", ChiefType::DeputyPrincipal).await;
+        seed_teacher(&pool, "Atolye", ChiefType::WorkshopLab).await;
+
+        assert_eq!(chief_planning_hours(&pool, TERM, ymd(2026, 10, 1)).await.unwrap(), 6);
+    }
+
     /// Göç 0008 birden fazla kez uygulanırsa (ör. tekrar dağıtım) projeksiyonu
     /// zaten olan öğretmene ikinci bir satır YAZMAMALI — `UNIQUE(teacher_id,
     /// term, valid_from)` kısıtına çarpıp göçü kırmamalı.

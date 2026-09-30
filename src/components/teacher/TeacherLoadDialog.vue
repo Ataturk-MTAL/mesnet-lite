@@ -29,7 +29,8 @@
           <label for="teacher-load-chief">{{ labels.teacherLoadChange.chiefType }}</label>
           <Select
             id="teacher-load-chief"
-            v-model="form.chiefType"
+            :modelValue="form.chiefType"
+            @update:modelValue="onChiefTypeChange"
             :options="chiefOptions"
             optionLabel="label"
             optionValue="value"
@@ -85,6 +86,7 @@ import { labels } from '../../i18n/labels'
 import { useChange } from '../../composables/useChange'
 import EffectiveDateField from '../history/EffectiveDateField.vue'
 import ImpactDialog from '../history/ImpactDialog.vue'
+import { CHIEF_HOURS_BY_TYPE, CHIEF_OPTIONS, principalCapWarning, principalLoadDefaults } from '../../utils/chiefRules'
 import type { ChangeRequest, ChiefType, EmploymentType, TeacherWithCapacity, TermWithDates } from '../../types/models'
 
 const props = defineProps<{
@@ -128,18 +130,20 @@ const employmentOptions = [
   { value: 'contracted' as const, label: labels.employmentType.contracted },
 ]
 
-const chiefOptions = [
-  { value: 'none' as const, label: labels.chiefType.none },
-  { value: 'workshop_lab' as const, label: labels.chiefType.workshop_lab },
-  { value: 'department' as const, label: labels.chiefType.department },
-]
+const chiefOptions = CHIEF_OPTIONS
 
-/** MADDE 6/4 — şeflik saati, azami ek ders tavanının içinden düşer. */
-const chiefHoursByType: Record<ChiefType, number> = { none: 0, workshop_lab: 6, department: 10 }
+/** MADDE 6/4 — şeflik saati, azami ek ders tavanının içinden düşer; MADDE 6/1-a müdür tavanı. */
+const capacityWarning = computed<string | null>(() => {
+  if (form.maxExtraHours < CHIEF_HOURS_BY_TYPE[form.chiefType]) return labels.teacher.capacityWarning
+  return principalCapWarning(form.chiefType, form.maxExtraHours)
+})
 
-const capacityWarning = computed<string | null>(() =>
-  form.maxExtraHours < chiefHoursByType[form.chiefType] ? labels.teacher.capacityWarning : null,
-)
+/** Kullanıcı unvanı değiştirince müdür kadrosunun sabit saatleri forma yazılır. */
+function onChiefTypeChange(value: ChiefType): void {
+  form.chiefType = value
+  const defaults = principalLoadDefaults(value)
+  if (defaults) Object.assign(form, defaults)
+}
 
 const isReasonEmpty = computed(() => reason.value.trim().length === 0)
 const isDateMissing = computed(() => !props.term.isPlanning && effectiveDate.value === null)

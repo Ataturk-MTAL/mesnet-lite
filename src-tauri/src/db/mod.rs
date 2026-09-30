@@ -15,6 +15,8 @@ pub mod hour_rules;
 pub(crate) mod legacy_seed_test_support;
 #[cfg(test)]
 mod migration_0009_tests;
+#[cfg(test)]
+mod migration_0015_tests;
 pub mod projection;
 pub mod read_at;
 pub mod settings;

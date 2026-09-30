@@ -13,6 +13,10 @@
 //! şeflikten ayrılmayı iptal edip ikinci bir `Department` doğurabilir; düzeltme
 //! ise ayrılışı geri alıp yerine şefliği sürdüren bir yük koyabilir.
 //!
+//! Aynı dosya, komut türünden bağımsız ikinci bir net-sonuç kuralını da taşır:
+//! müdür ve müdür yardımcısının ek ders tavanı (`enforce_management_extra_hours`,
+//! MADDE 6/1-a). Aynı gerekçeyle `revoke`/`correct` da bu kuralı delemez.
+//!
 //! Yalnız YENİ günler denetlenir: zaten `Department` olan öğretmenin saatini
 //! düzenlemek yeni gün doğurmaz; göçten gelen mevcut ihlal bu yüzden
 //! düzenlemeleri kilitlemez.
@@ -25,6 +29,7 @@ use crate::domain::history::apply::apply_load;
 use crate::domain::history::events::Stream;
 use crate::domain::history::rejection::{Rejection, RejectionCode};
 use crate::domain::models::ChiefType;
+use crate::domain::workload::management_extra_hours_violation;
 
 use super::{with_pending, Decision, DecisionContext};
 
@@ -63,6 +68,37 @@ pub(super) fn enforce_single_department(ctx: &DecisionContext, decision: &Decisi
         });
         if let Some((holder_id, held)) = holder {
             return Err(already_assigned(ctx, holder_id, &held));
+        }
+    }
+    Ok(())
+}
+
+/// Kararın net sonucunda bir öğretmenin YENİ oluşan yük aralığı müdür/müdür
+/// yardımcısı unvanıyla MADDE 6/1-a tavanını (6 saat) aşıyorsa reddeder.
+///
+/// Sınırdaki doğrulama (`change_input::validate_load`) oluşturma, yük değiştirme
+/// ve `correct`'in yerine geçen komutunu zaten yakalar; bu denetim, kararın
+/// başka bir yoldan (ör. `revoke` ile eski bir aralığın geri gelmesi) böyle bir
+/// aralık doğurmasına karşı ikinci kapıdır. Kural metni tek yerdedir
+/// (`workload::management_extra_hours_violation`). `InvalidRequest`, mevcut bir
+/// kodun yeniden kullanımıdır: sorun yalnız komutun içeriğidir, başka bir
+/// kayıtla çelişki ya da tavan hesabı değildir.
+pub(super) fn enforce_management_extra_hours(ctx: &DecisionContext, decision: &Decision) -> Result<(), Rejection> {
+    let affected: BTreeSet<i64> = decision.events.iter().filter(|e| e.stream == Stream::TeacherLoad).map(|e| e.subject_id).collect();
+    if affected.is_empty() {
+        return Ok(());
+    }
+
+    let after = with_pending(ctx, &decision.events);
+    for teacher_id in affected {
+        let before = ctx.timeline(Stream::TeacherLoad, teacher_id, apply_load).intervals;
+        let after_intervals = after.timeline(Stream::TeacherLoad, teacher_id, apply_load).intervals;
+        let violation = after_intervals
+            .iter()
+            .filter(|now| !before.iter().any(|old| old.state == now.state && old.valid_from == now.valid_from && old.valid_to == now.valid_to))
+            .find_map(|now| management_extra_hours_violation(&now.state));
+        if let Some(message) = violation {
+            return Err(Rejection::new(RejectionCode::InvalidRequest, message));
         }
     }
     Ok(())
@@ -364,5 +400,70 @@ mod tests {
             command: ChangeCommand::Correct { change_set_id: leave_set, replacement: Box::new(replacement) },
         };
         assert!(decide(&ctx, &correct).is_ok(), "ayrılış öne alınırsa Ali'nin 10 Ekim şefliğiyle çakışma olmaz");
+    }
+
+    fn load_with_max(chief_type: ChiefType, max_extra_hours: i64) -> TeacherLoad {
+        TeacherLoad { max_extra_hours, ..load(chief_type, 0) }
+    }
+
+    fn expect_management_rejection(result: Result<super::super::Decision, Rejection>) {
+        let rejection = result.unwrap_err();
+        assert_eq!(rejection.code, RejectionCode::InvalidRequest, "beklenen kod: {rejection:?}");
+        assert!(rejection.message.contains("MADDE 6/1-a"), "mesaj maddeyi anmalı: {}", rejection.message);
+    }
+
+    /// MADDE 6/1-a: yeni öğretmen müdür/müdür yardımcısı ise ek ders tavanı en fazla 6.
+    #[test]
+    fn create_teacher_as_school_management_above_six_hours_is_rejected() {
+        let ctx = with_new_teacher_materialized(world(ChiefType::None));
+        for title in [ChiefType::Principal, ChiefType::DeputyPrincipal] {
+            let (mut req, _) = new_teacher_request(title);
+            let profile = match req.command {
+                ChangeCommand::CreateTeacher { teacher, .. } => teacher,
+                _ => unreachable!(),
+            };
+            req.command = ChangeCommand::CreateTeacher { teacher: profile.clone(), load: load_with_max(title, 7) };
+            expect_management_rejection(decide(&ctx, &req));
+
+            req.command = ChangeCommand::CreateTeacher { teacher: profile, load: load_with_max(title, 6) };
+            assert!(decide(&ctx, &req).is_ok(), "{title:?} 6 saat kabul edilmeli");
+        }
+    }
+
+    /// Aynı kural yük değiştirmede: sıradan öğretmen 24 saatle müdür yardımcısı yapılamaz.
+    #[test]
+    fn set_load_to_school_management_above_six_hours_is_rejected() {
+        let ctx = world(ChiefType::None);
+        expect_management_rejection(decide(&ctx, &set_load(OTHER, ymd(2026, 10, 15), load_with_max(ChiefType::DeputyPrincipal, 24))));
+        assert!(decide(&ctx, &set_load(OTHER, ymd(2026, 10, 15), load_with_max(ChiefType::DeputyPrincipal, 6))).is_ok());
+    }
+
+    /// `correct` yerine geçen yükü de denetler; düzeltme kuralı delme yolu olamaz.
+    #[test]
+    fn correct_cannot_smuggle_school_management_above_six_hours() {
+        let (ctx, _, leave_set) = world_where_chief_leaves_on_oct_10();
+        let replacement = ChangeCommand::SetTeacherLoad { teacher_id: CHIEF, load: load_with_max(ChiefType::Principal, 24) };
+        let correct = ChangeRequest {
+            term: TERM_ID.into(),
+            effective_date: Some(ymd(2026, 10, 10)),
+            document_date: None,
+            reason: "düzelt".into(),
+            command: ChangeCommand::Correct { change_set_id: leave_set, replacement: Box::new(replacement) },
+        };
+        expect_management_rejection(decide(&ctx, &correct));
+    }
+
+    /// Müdür/müdür yardımcısı şef sayılmaz: alan şefi tekliğini tüketmez ve
+    /// onlar varken bir öğretmen alan şefi olabilir.
+    #[test]
+    fn school_management_does_not_occupy_the_single_department_seat() {
+        let ctx = ContextBuilder::new(ymd(2026, 10, 12), term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
+            .with_teacher(CHIEF, "Ayşe Yılmaz")
+            .with_teacher(OTHER, "Ali Veli")
+            .with_change_set(opening_facts())
+            .with_event(load_event(1, OPENING_SET, CHIEF, ymd(2026, 9, 1), ChiefType::Principal, true))
+            .with_event(load_event(2, OPENING_SET, OTHER, ymd(2026, 9, 1), ChiefType::None, true))
+            .build();
+        assert!(decide(&ctx, &set_chief(OTHER, ymd(2026, 10, 15), ChiefType::Department)).is_ok());
     }
 }
