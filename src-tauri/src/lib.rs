@@ -31,6 +31,16 @@ fn report_startup_failure(app: &tauri::App, error: &error::AppError) {
         .show(move |_| handle.exit(1));
 }
 
+/// Eski kimliğin veri klasörünü (yeni klasörün kardeşi) yeni klasöre kopyalar.
+fn migrate_from_legacy_dir(new_dir: &std::path::Path) -> error::AppResult<()> {
+    let Some(parent) = new_dir.parent() else {
+        return Ok(());
+    };
+    let old_dir = parent.join(services::data_dir_migration::LEGACY_DATA_DIR_NAME);
+    tauri::async_runtime::block_on(services::data_dir_migration::migrate_legacy_data_dir(&old_dir, new_dir))?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -48,6 +58,13 @@ pub fn run() {
 
             // Veritabanı platform-doğru uygulama veri dizininde tutulur.
             let dir = app.path().app_data_dir()?;
+
+            // Kimlik değişimi sonrası eski klasörden tek seferlik kopya; başarısızsa
+            // `init_pool` ÇALIŞMAZ (boş DB oluşup taşıma bir daha denenmezdi).
+            if let Err(e) = migrate_from_legacy_dir(&dir) {
+                report_startup_failure(app, &e);
+                return Ok(());
+            }
             let db_path = dir.join(db::DB_FILE_NAME);
 
             match tauri::async_runtime::block_on(init_pool(&db_path)) {
