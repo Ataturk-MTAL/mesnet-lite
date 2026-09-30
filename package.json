@@ -1,7 +1,7 @@
 {
   "name": "mesnet-lite",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": "Hakan Gülen (https://github.com/hkngln)",
   "license": "Apache-2.0",
   "repository": "github:Ataturk-MTAL/mesnet-lite",
@@ -15,9 +15,11 @@
   },
   "dependencies": {
     "@openvue/themes": "^1.0.0",
-    "@tauri-apps/api": "^2",
+    "@tauri-apps/api": "~2.12",
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.13.0",
     "leaflet": "^1.9.4",
     "openvue": "^1.0.0",
     "pinia": "^4.0.3",

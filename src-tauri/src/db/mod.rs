@@ -17,6 +17,8 @@ pub(crate) mod legacy_seed_test_support;
 mod migration_0009_tests;
 #[cfg(test)]
 mod migration_0015_tests;
+#[cfg(test)]
+mod pre_migration_backup_tests;
 pub mod projection;
 pub mod read_at;
 pub mod settings;
@@ -61,19 +63,9 @@ pub async fn init_pool(db_path: &Path) -> AppResult<SqlitePool> {
         .await
         .map_err(|e| AppError::Database(format!("Havuz açılamadı: {e}")))?;
 
-    // Otomatik günlük yedek, migration'lardan ÖNCE alınır: bozuk bir
-    // migration'dan bu yedekle geri dönülebilsin. Yedek BAŞARISIZ olsa bile
-    // uygulama açılmaya devam eder (veriye erişimi engellememeli); hata
-    // burada yutulmaz, en azından konsola yazılır.
     if db_existed_before_open {
         if let Some(parent) = db_path.parent() {
-            let backup_dir = crate::services::backup::auto_backup_dir(parent);
-            if let Err(e) =
-                crate::services::backup::create_daily_backup_if_missing(&pool, &backup_dir, crate::domain::terms::today_local())
-                    .await
-            {
-                eprintln!("Otomatik yedek alınamadı: {e}");
-            }
+            backup_before_migrations(&pool, parent).await?;
         }
     }
 
@@ -95,6 +87,32 @@ pub async fn init_pool(db_path: &Path) -> AppResult<SqlitePool> {
     }
 
     Ok(pool)
+}
+
+/// Migration'lardan ÖNCE alınan iki yedek. Bozuk bir migration'dan bu
+/// yedeklerle geri dönülebilsin diye sıra önemlidir: yedekler göçten önce.
+///
+/// 1) Günlük otomatik yedek: BAŞARISIZ olsa bile uygulama açılmaya devam eder
+///    (veriye erişimi engellememeli); hata yutulmaz, konsola yazılır.
+/// 2) Göç öncesi yedek (bekleyen göç varsa): günlük yedek o gün zaten
+///    alınmışsa atlandığı için gün içi girişleri korumaz; bu yüzden ayrı ve
+///    ZORUNLUDUR — başarısızsa hata döner ve göç hiç çalışmaz.
+async fn backup_before_migrations(pool: &SqlitePool, app_data_dir: &Path) -> AppResult<()> {
+    let backup_dir = crate::services::backup::auto_backup_dir(app_data_dir);
+    if let Err(e) =
+        crate::services::backup::create_daily_backup_if_missing(pool, &backup_dir, crate::domain::terms::today_local()).await
+    {
+        eprintln!("Otomatik yedek alınamadı: {e}");
+    }
+
+    crate::services::pre_migration_backup::backup_if_migration_pending(
+        pool,
+        &backup_dir,
+        crate::services::backup::embedded_max_migration_version(),
+        crate::domain::terms::now_local(),
+    )
+    .await?;
+    Ok(())
 }
 
 /// Açılış tamamlaması: `settings::known_terms`in bildiği ama `terms`

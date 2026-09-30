@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MESNET.Lite",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "identifier": "ai.alplab.mesnet-lite",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -42,6 +42,18 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE2NEVEM0E3OUZGODFBOQpSV1NwZ2Y5NU91MWtDdnR3MkMrbmtLSmpqbmJGUUl3NTVkdzc5aGtBeEtBTHdhZEtnbXNLQlhzdwo=",
+      "endpoints": [
+        "https://github.com/Ataturk-MTAL/mesnet-lite/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
