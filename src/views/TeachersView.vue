@@ -7,19 +7,23 @@
 
     <AsOfReadOnlyBanner />
 
+    <small class="muted sort-hint">{{ labels.teacher.sortHint }}</small>
+
     <DataTable
-      :value="teachers"
+      :value="rows"
       :loading="isLoading"
       paginator
       :rows="20"
       dataKey="id"
-      sortMode="single"
+      sortMode="multiple"
+      removableSort
+      v-model:multiSortMeta="sortMeta"
       stripedRows
     >
       <template #empty>{{ labels.teacher.empty }}</template>
 
-      <Column field="lastName" :header="labels.teacher.lastName" sortable />
-      <Column field="firstName" :header="labels.teacher.firstName" sortable />
+      <Column field="firstName" sortField="firstNameSortKey" :header="labels.teacher.firstName" sortable />
+      <Column field="lastName" sortField="lastNameSortKey" :header="labels.teacher.lastName" sortable />
       <Column field="registryNo" :header="labels.teacher.registryNo" />
 
       <Column :header="labels.teacher.branches">
@@ -36,7 +40,7 @@
         </template>
       </Column>
 
-      <Column :header="labels.teacher.chiefType">
+      <Column :header="labels.teacher.chiefType" sortField="chiefRank" sortable>
         <template #body="{ data }">
           {{ labels.chiefType[data.chiefType as ChiefType] }}
           <span v-if="data.chiefHours > 0" class="muted"> ({{ data.chiefHours }} sa.)</span>
@@ -92,6 +96,7 @@
       :known-branches="knownBranches"
       :term="term"
       @save="handleSave"
+      @update="handleUpdate"
     />
 
     <TeacherLoadDialog
@@ -105,8 +110,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import type { DataTableSortMeta } from 'openvue/datatable'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import TeacherFormDialog from '../components/teacher/TeacherFormDialog.vue'
@@ -118,8 +124,9 @@ import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
 import { useAsOfDateStore } from '../stores/asOfDate'
 import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
+import { buildTeacherRows } from '../utils/chiefRules'
 import { parseBranches } from '../types/models'
-import type { ChiefType, NewTeacher, TeacherWithCapacity, TermWithDates } from '../types/models'
+import type { ChiefType, NewTeacher, NewTeacherProfile, TeacherWithCapacity, TermWithDates } from '../types/models'
 
 const toast = useToast()
 const confirm = useConfirm()
@@ -127,6 +134,15 @@ const { activeTerm } = storeToRefs(useTermStore())
 const { requestAsOf, isReadOnly } = storeToRefs(useAsOfDateStore())
 
 const teachers = ref<TeacherWithCapacity[]>([])
+/** Tabloya giden satırlar: rütbe ve Türkçe harf sırası için sıralama anahtarlı. */
+const rows = computed(() => buildTeacherRows(teachers.value))
+
+/** Varsayılan sıralama: unvan (rütbe), sonra ad. */
+const sortMeta = ref<DataTableSortMeta[]>([
+  { field: 'chiefRank', order: 1 },
+  { field: 'firstNameSortKey', order: 1 },
+])
+
 const knownBranches = ref<string[]>([])
 const isLoading = ref(false)
 const isDialogOpen = ref(false)
@@ -189,12 +205,18 @@ async function handleSave(
   input: NewTeacher,
   details: { effectiveDate: string | null; reason: string | null },
 ): Promise<void> {
+  await persist(() => teachersApi.create(input, details.effectiveDate, details.reason))
+}
+
+async function handleUpdate(profile: NewTeacherProfile): Promise<void> {
+  const target = selected.value
+  if (!target) return
+  await persist(() => teachersApi.update(target.id, profile))
+}
+
+async function persist(action: () => Promise<unknown>): Promise<void> {
   try {
-    if (selected.value) {
-      await teachersApi.update(selected.value.id, input, details.effectiveDate, details.reason)
-    } else {
-      await teachersApi.create(input, details.effectiveDate, details.reason)
-    }
+    await action()
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
     await load()
     await loadKnownBranches()

@@ -7,7 +7,12 @@ export interface LatLng {
 }
 
 export type GeocodeStatus = 'pending' | 'resolved' | 'failed' | 'manual'
-export type ChiefType = 'none' | 'workshop_lab' | 'department'
+export type ChiefType =
+  | 'none'
+  | 'workshop_lab'
+  | 'department'
+  | 'deputy_principal'
+  | 'principal'
 export type EmploymentType = 'tenured' | 'contracted'
 
 export interface Company {

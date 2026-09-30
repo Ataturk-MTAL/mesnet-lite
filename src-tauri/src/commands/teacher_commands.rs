@@ -4,29 +4,29 @@ use crate::domain::history::decide::{ChangeCommand, ChangeRequest, ImpactSummary
 use crate::domain::history::events::TeacherLoad;
 use crate::domain::models::{NewTeacher, Teacher};
 use crate::domain::terms::today_local;
-use crate::domain::workload::{statutory_cap, teacher_capacity, InstitutionType};
+use crate::domain::workload::{statutory_cap, MANAGEMENT_MAX_EXTRA_HOURS, teacher_capacity, InstitutionType};
 use crate::error::{AppError, AppResult};
+use crate::services::change_input::{chief_column, employment_column};
 use crate::services::change_service::{execute_change, ChangeMode, ChangeOutcome};
 use chrono::NaiveDate;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::State;
 
-/// `create_teacher`/`update_teacher` gerekçe vermezse yazılan varsayılan.
+/// `create_teacher` gerekçe vermezse yazılan varsayılan.
 /// Gerekçe geldiğinde (arayüzden `reason`) onun yerine geçer.
 const DEFAULT_CREATE_REASON: &str = "Öğretmen ekranından eklendi";
-const DEFAULT_UPDATE_REASON: &str = "Öğretmen ekranından güncellendi";
 
 /// Öğretmen + mevzuattan türetilen kapasite bilgisi.
 /// Kapasite hesabı yalnızca Rust tarafında yapılır; arayüz onu yeniden hesaplamaz.
 ///
-/// `teacher` eski `teachers` tablosundan gelir; `chiefHours`/`capacity` ise
-/// `teacher_load_periods` PROJEKSİYONUNDAN türetilir. `update_teacher_impl`
-/// yük değiştiğinde eski sütunu da AYNI çağrıda güncellediği için normal
-/// düzenleme akışında ikisi senkron kalır. Yalnız yükü tarihçe ekranından
-/// (`commit_change` ile doğrudan `SetTeacherLoad`) değiştiren bir düzeltme
-/// bu komutu ATLAR — o durumda `teacher.baseHours` vb. ham alanlar donuk
-/// kalır, `chiefHours`/`capacity` yine doğrudur (bkz. brief R5c, bilinen sınır).
+/// `teacher`in kimlik alanları `teachers` tablosundan gelir; yük alanları
+/// (`chiefType`, `baseHours`, `maxExtraHours`, `otherExtraHours`,
+/// `employmentType`) ise okunan günün `teacher_load_periods` PROJEKSİYONUNDAN
+/// doldurulur. Yük tarihçe ekranından (`commit_change` ile doğrudan
+/// `SetTeacherLoad`) değiştiğinde eski sütunlar güncellenmez; arayüz unvanı
+/// buradan okuduğu için eski sütuna bakmak unvanı donuk gösterirdi. JSON
+/// alan adları değişmez (`flatten`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeacherWithCapacity {
@@ -34,10 +34,21 @@ pub struct TeacherWithCapacity {
     pub teacher: Teacher,
     /// MADDE 6/4: bölüm şefi 10, atölye/laboratuvar şefi 6, şef değilse 0.
     pub chief_hours: i64,
-    /// MADDE 15/2 tavanı (okul tipi ve büyükşehir durumuna göre).
+    /// Kişinin bağlı olduğu yasal tavan (MADDE 15/2; müdür/müdür yrd. için
+    /// ayrıca MADDE 6/1-a).
     pub statutory_cap: i64,
     /// Koordinatörlük için kalan haftalık saat.
     pub capacity: i64,
+}
+
+/// Okul tavanı (MADDE 15/2) ile müdür/müdür yardımcısının ek ders sınırının
+/// (MADDE 6/1-a, 6 saat) küçüğü; diğer öğretmenlerde okul tavanı aynen kalır.
+fn personal_statutory_cap(school_cap: i64, load: &TeacherLoad) -> i64 {
+    if load.chief_type.is_school_management() {
+        school_cap.min(MANAGEMENT_MAX_EXTRA_HOURS)
+    } else {
+        school_cap
+    }
 }
 
 #[tauri::command]
@@ -72,10 +83,19 @@ async fn list_teachers_with_capacity_impl(
         .map(|entry| {
             let chief_hours = entry.load.chief_type.weekly_hours();
             let capacity = teacher_capacity(&entry.load, cap);
+            let personal_cap = personal_statutory_cap(cap, &entry.load);
+            let teacher = Teacher {
+                chief_type: chief_column(entry.load.chief_type).to_string(),
+                employment_type: employment_column(entry.load.employment_type).to_string(),
+                base_hours: entry.load.base_hours,
+                max_extra_hours: entry.load.max_extra_hours,
+                other_extra_hours: entry.load.other_extra_hours,
+                ..entry.teacher
+            };
             TeacherWithCapacity {
-                teacher: entry.teacher,
+                teacher,
                 chief_hours,
-                statutory_cap: cap,
+                statutory_cap: personal_cap,
                 capacity,
             }
         })
@@ -118,18 +138,6 @@ fn load_from_input(input: &NewTeacher) -> TeacherLoad {
     }
 }
 
-/// Girilen yük, öğretmenin şu an kayıtlı yükünden (eski `teachers` sütunu —
-/// `update_teacher_impl` yük DEĞİŞMEDİĞİNDE bu sütunu da değiştirmediği için
-/// projeksiyonla aynı durumdadır) FARKLI mı? Yalnız farklıysa MADDE 6/4
-/// olayı üretilir; aksi hâlde günlüğe anlamsız bir "değişiklik" yazılmaz.
-fn load_changed(current: &Teacher, input: &NewTeacher) -> bool {
-    current.base_hours != input.base_hours
-        || current.max_extra_hours != input.max_extra_hours
-        || current.other_extra_hours != input.other_extra_hours
-        || current.chief_type != input.chief_type
-        || current.employment_type != input.employment_type
-}
-
 /// Tek değişiklik kapısından geçirir; `Rejected`/`Stale` kullanıcıya
 /// `Validation` olarak iletilir (spec §5, `availability_commands::commit_schedule_change`
 /// ile aynı desen). Başarılıysa etki özetini döner — `create_teacher_impl`
@@ -166,7 +174,7 @@ async fn commit_teacher_change(
 /// ders şeflik saatinden küçük olamaz) artık TEK yerde,
 /// `services/change_input.rs::validate_load`dadır; `create_teacher_impl`
 /// zaten kapıdan geçtiği için burada tekrarlanmaz (DRY).
-fn validate_identity(input: &NewTeacher) -> AppResult<()> {
+fn validate_identity(input: &NewTeacherProfile) -> AppResult<()> {
     if input.first_name.trim().is_empty() || input.last_name.trim().is_empty() {
         return Err(AppError::Validation("Ad ve soyad boş olamaz".into()));
     }
@@ -201,29 +209,16 @@ async fn create_teacher_impl(
     teachers::get(pool, teacher_id).await
 }
 
-/// Öğretmeni günceller: yük/şeflik alanları değiştiyse `SetTeacherLoad`
-/// olayı kapıdan geçer (spec R5c madde 1); kimlik alanları (ad, soyad,
-/// sicil, alan, branşlar, aktiflik) eski yoldan (`teachers::update`)
-/// yazılmaya devam eder. Kapı reddederse (ör. dönem başlamış, tarih
-/// verilmemiş) HİÇBİR şey yazılmaz — kimlik güncellemesi de dahil.
-async fn update_teacher_impl(
-    pool: &SqlitePool,
-    id: i64,
-    input: NewTeacher,
-    effective_date: Option<NaiveDate>,
-    reason: Option<String>,
-    today: NaiveDate,
-) -> AppResult<Teacher> {
+/// Öğretmenin yalnız KİMLİK alanlarını (ad, soyad, sicil, alan, branşlar,
+/// aktiflik) günceller. Yük/şeflik alanlarına ve tarihçeye (olay günlüğü,
+/// projeksiyon) dokunmaz: yük yalnız tarihçe (`SetTeacherLoad`) yolundan
+/// değişir. Düzenleme penceresi yükü göstermediği için burada yük yazmak,
+/// kullanıcının görmediği değerlerle ileri tarihli planlı değişikliği
+/// sessizce ezerdi (issue #29). `is_active` bugün olduğu gibi tarihçe olayı
+/// üretmeden doğrudan yazılır.
+async fn update_teacher_impl(pool: &SqlitePool, id: i64, input: NewTeacherProfile) -> AppResult<Teacher> {
     validate_identity(&input)?;
-    let current = teachers::get(pool, id).await?;
-
-    if load_changed(&current, &input) {
-        let term = settings::get_active_term(pool).await?;
-        let command = ChangeCommand::SetTeacherLoad { teacher_id: id, load: load_from_input(&input) };
-        commit_teacher_change(pool, &term, command, effective_date, reason, DEFAULT_UPDATE_REASON, today).await?;
-    }
-
-    teachers::update(pool, id, &input).await
+    teachers::update_profile(pool, id, &input).await
 }
 
 #[tauri::command]
@@ -237,14 +232,8 @@ pub async fn create_teacher(
 }
 
 #[tauri::command]
-pub async fn update_teacher(
-    state: State<'_, AppState>,
-    id: i64,
-    input: NewTeacher,
-    effective_date: Option<NaiveDate>,
-    reason: Option<String>,
-) -> AppResult<Teacher> {
-    update_teacher_impl(&state.pool, id, input, effective_date, reason, today_local()).await
+pub async fn update_teacher(state: State<'_, AppState>, id: i64, input: NewTeacherProfile) -> AppResult<Teacher> {
+    update_teacher_impl(&state.pool, id, input).await
 }
 
 #[tauri::command]
@@ -263,6 +252,8 @@ mod tests {
         let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
         (dir, pool)
     }
+
+    const TEST_REASON: &str = "Test kurulumu";
 
     fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
@@ -308,18 +299,18 @@ mod tests {
 
     #[test]
     fn rejects_blank_names_and_field() {
-        let mut input = valid_input("Ogretmen", "none");
+        let mut input = profile_from_input(&valid_input("Ogretmen", "none"));
         input.first_name = " ".into();
         assert!(validate_identity(&input).is_err());
 
-        let mut input = valid_input("Ogretmen", "none");
+        let mut input = profile_from_input(&valid_input("Ogretmen", "none"));
         input.field = String::new();
         assert!(validate_identity(&input).is_err());
     }
 
     #[test]
     fn accepts_valid_identity() {
-        assert!(validate_identity(&valid_input("Ogretmen", "none")).is_ok());
+        assert!(validate_identity(&profile_from_input(&valid_input("Ogretmen", "none"))).is_ok());
     }
 
     /// Asıl regresyon: `create_teacher`, olay günlüğünden ve projeksiyondan
@@ -361,69 +352,63 @@ mod tests {
         assert_eq!(count(&pool, "change_sets", None).await, sets_before, "reddedilince hiçbir şey yazılmamalı");
     }
 
-    /// Şefliği `none` → `department` yapan güncelleme olay üretir; havuz
-    /// değişir. Eski `teachers.chief_type` de (bu komutun kimlik-dışı yolu
-    /// üzerinden) aynı değere gelir çünkü ikisi birden yazılır.
+    /// Kimlik güncellemesi olay günlüğüne hiç uğramaz; yük yalnız tarihçe
+    /// (`SetTeacherLoad`) yolundan değişir.
     #[tokio::test]
-    async fn updating_the_chief_type_emits_a_load_event_and_the_pool_changes() {
-        let (_dir, pool) = test_pool().await;
-        let created = create_teacher_impl(&pool, valid_input("Once", "none"), None, None, planning_today())
-            .await
-            .unwrap();
-
-        let mut input = valid_input("Once", "department");
-        let updated = update_teacher_impl(&pool, created.id, input.clone(), Some(ymd(2026, 11, 5)), None, november_today())
-            .await
-            .unwrap();
-        input.chief_type = "department".into();
-
-        assert_eq!(count(&pool, "change_sets", Some("set_teacher_load")).await, 1);
-        assert_eq!(updated.chief_type, "department");
-
-        let hours = teaching_load::chief_planning_hours(&pool, crate::db::teaching_load_test_support::TERM, ymd(2026, 11, 10))
-            .await
-            .unwrap();
-        assert_eq!(hours, 10);
-    }
-
-    /// Kimlik alanı değişip yük DEĞİŞMEDİYSE gate'e hiç uğranmaz — günlüğe
-    /// anlamsız bir "yük değişti" olayı yazılmaz.
-    #[tokio::test]
-    async fn updating_only_identity_fields_does_not_touch_the_change_log() {
+    async fn updating_identity_fields_does_not_touch_the_change_log() {
         let (_dir, pool) = test_pool().await;
         let created = create_teacher_impl(&pool, valid_input("Isim", "none"), None, None, planning_today())
             .await
             .unwrap();
         let sets_before = count(&pool, "change_sets", None).await;
 
-        let mut input = valid_input("YeniIsim", "none");
-        input.first_name = "Yeni".into();
-        let updated = update_teacher_impl(&pool, created.id, input, None, None, planning_today())
-            .await
-            .unwrap();
+        let mut profile = profile_from_input(&valid_input("YeniIsim", "none"));
+        profile.first_name = "Yeni".into();
+        let updated = update_teacher_impl(&pool, created.id, profile).await.unwrap();
 
         assert_eq!(updated.first_name, "Yeni");
-        assert_eq!(count(&pool, "change_sets", None).await, sets_before, "yük değişmediyse olay yazılmamalı");
+        assert_eq!(count(&pool, "change_sets", None).await, sets_before, "olay yazılmamalı");
     }
 
-    /// Dönem başladıysa yük değişikliği tarih ister; tarih verilmezse
-    /// `Validation` ile reddedilir ve HİÇBİR şey yazılmaz (ne olay ne eski
-    /// tablo).
+    /// Issue #29: düzenleme penceresi yükü göstermez; ad değiştirmek ileri
+    /// tarihli planlı yük değişikliğini (burada 2026-11-01'de müdür yardımcısı,
+    /// MADDE 6/1-a: 6 saat) ezmemeli.
     #[tokio::test]
-    async fn changing_load_after_the_term_started_without_a_date_writes_nothing() {
+    async fn renaming_keeps_a_future_dated_planned_load_change() {
         let (_dir, pool) = test_pool().await;
-        let created = create_teacher_impl(&pool, valid_input("Ada", "none"), None, None, planning_today())
+        let created = create_teacher_impl(&pool, valid_input("Plan", "none"), None, None, planning_today())
             .await
             .unwrap();
-        let sets_before = count(&pool, "change_sets", None).await;
+        let mut deputy = valid_input("Plan", "deputy_principal");
+        deputy.max_extra_hours = 6;
+        commit_teacher_change(
+            &pool,
+            TERM,
+            ChangeCommand::SetTeacherLoad { teacher_id: created.id, load: load_from_input(&deputy) },
+            Some(ymd(2026, 11, 1)),
+            None,
+            TEST_REASON,
+            planning_today(),
+        )
+        .await
+        .unwrap();
+        let events_before = count(&pool, "change_sets", Some("set_teacher_load")).await;
 
-        let input = valid_input("Ada", "department");
-        let result = update_teacher_impl(&pool, created.id, input, None, None, november_today()).await;
+        let mut profile = profile_from_input(&valid_input("YeniAd", "none"));
+        profile.first_name = "Yeni".into();
+        let updated = update_teacher_impl(&pool, created.id, profile).await.unwrap();
 
-        assert!(matches!(result, Err(AppError::Validation(_))), "Validation beklenirdi: {result:?}");
-        assert_eq!(count(&pool, "change_sets", None).await, sets_before);
-        let unchanged = teachers::get(&pool, created.id).await.unwrap();
-        assert_eq!(unchanged.chief_type, "none", "eski tablo da değişmemeli");
+        assert_eq!(updated.last_name, "YeniAd");
+        assert_eq!(count(&pool, "change_sets", Some("set_teacher_load")).await, events_before);
+        let future: (String, String, i64) = sqlx::query_as(
+            "SELECT valid_from, chief_type, max_extra_hours FROM teacher_load_periods
+             WHERE teacher_id = ?1 AND valid_to IS NULL",
+        )
+        .bind(created.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(future, ("2026-11-01".to_string(), "deputy_principal".to_string(), 6));
     }
 
     /// Kilit test: `list_teachers_with_capacity`in kapasitesi projeksiyondan
@@ -451,7 +436,7 @@ mod tests {
             ChangeCommand::SetTeacherLoad { teacher_id: created.id, load: load_from_input(&valid_input("Sef", "department")) },
             None,
             None,
-            DEFAULT_UPDATE_REASON,
+            TEST_REASON,
             planning_today(),
         )
         .await
@@ -466,10 +451,179 @@ mod tests {
         );
     }
 
+    /// Unvan hücresi `teacher.chiefType`ten okunur; yük yalnız kapıdan
+    /// (eski sütunu yazmayan yol) değiştiğinde de projeksiyonu yansıtmalıdır.
+    /// Müdür yardımcısı: MADDE 6/1-a, azami ek ders 6 saat.
+    #[tokio::test]
+    async fn list_teachers_with_capacity_reports_load_fields_from_the_projection_not_the_legacy_columns() {
+        let (_dir, pool) = test_pool().await;
+        let created = create_teacher_impl(&pool, valid_input("Yrd", "none"), None, None, planning_today())
+            .await
+            .unwrap();
+        let mut deputy = valid_input("Yrd", "deputy_principal");
+        deputy.max_extra_hours = 6;
+        deputy.base_hours = 18;
+        deputy.other_extra_hours = 2;
+        deputy.employment_type = "contracted".into();
+        let term = TERM.to_string();
+        commit_teacher_change(
+            &pool,
+            &term,
+            ChangeCommand::SetTeacherLoad { teacher_id: created.id, load: load_from_input(&deputy) },
+            None,
+            None,
+            TEST_REASON,
+            planning_today(),
+        )
+        .await
+        .unwrap();
+
+        let rows = list_teachers_with_capacity_impl(&pool, &ReadAt::Latest).await.unwrap();
+
+        assert_eq!(rows[0].teacher.chief_type, "deputy_principal");
+        assert_eq!(rows[0].teacher.max_extra_hours, 6);
+        assert_eq!(rows[0].teacher.base_hours, 18);
+        assert_eq!(rows[0].teacher.other_extra_hours, 2);
+        assert_eq!(rows[0].teacher.employment_type, "contracted");
+        assert_eq!(teachers::get(&pool, created.id).await.unwrap().chief_type, "none", "eski sütun donuk");
+    }
+
+    /// As-of: değişiklikten ÖNCEKİ gün eski unvan (`none`), sonrası yeni unvan.
+    #[tokio::test]
+    async fn list_teachers_with_capacity_as_of_reports_the_title_in_force_on_that_day() {
+        let (_dir, pool) = test_pool().await;
+        let created = create_teacher_impl(&pool, valid_input("Yrd", "none"), None, None, planning_today())
+            .await
+            .unwrap();
+        let mut deputy = valid_input("Yrd", "deputy_principal");
+        deputy.max_extra_hours = 6;
+        commit_teacher_change(
+            &pool,
+            TERM,
+            ChangeCommand::SetTeacherLoad { teacher_id: created.id, load: load_from_input(&deputy) },
+            Some(ymd(2026, 9, 14)),
+            None,
+            TEST_REASON,
+            planning_today(),
+        )
+        .await
+        .unwrap();
+
+        let before = ReadAt::resolve(&pool, TERM, Some("2026-09-10".into())).await.unwrap();
+        let rows_before = list_teachers_with_capacity_impl(&pool, &before).await.unwrap();
+        assert_eq!(rows_before[0].teacher.chief_type, "none");
+        assert_eq!(rows_before[0].teacher.max_extra_hours, 24);
+
+        let after = ReadAt::resolve(&pool, TERM, Some("2026-09-15".into())).await.unwrap();
+        let rows_after = list_teachers_with_capacity_impl(&pool, &after).await.unwrap();
+        assert_eq!(rows_after[0].teacher.chief_type, "deputy_principal");
+        assert_eq!(rows_after[0].teacher.max_extra_hours, 6);
+    }
+
+    /// MADDE 6/1-a: müdür yardımcısının kişisel tavanı 6'dır (okul tavanı değil);
+    /// düz öğretmende okul tavanı (MADDE 15/2) aynen kalır.
+    #[tokio::test]
+    async fn statutory_cap_is_six_for_school_management_and_the_school_cap_for_others() {
+        let (_dir, pool) = test_pool().await;
+        settings::set(&pool, "institution_type", "other").await.unwrap();
+        settings::set(&pool, "is_metropolitan_district", "true").await.unwrap();
+        let school_cap = {
+            let rows = list_teachers_with_capacity_impl(&pool, &ReadAt::Latest).await.unwrap();
+            assert!(rows.is_empty());
+            statutory_cap(InstitutionType::Other, true)
+        };
+        assert!(school_cap > MANAGEMENT_MAX_EXTRA_HOURS, "test ayırt edici olmalı");
+        create_teacher_impl(&pool, valid_input("Duz", "none"), None, None, planning_today()).await.unwrap();
+        let mut deputy = valid_input("Yrd", "deputy_principal");
+        deputy.max_extra_hours = 6;
+        create_teacher_impl(&pool, deputy, None, None, planning_today()).await.unwrap();
+
+        let rows = list_teachers_with_capacity_impl(&pool, &ReadAt::Latest).await.unwrap();
+
+        let by_name = |n: &str| rows.iter().find(|r| r.teacher.last_name == n).unwrap();
+        assert_eq!(by_name("Duz").statutory_cap, school_cap);
+        assert_eq!(by_name("Yrd").statutory_cap, MANAGEMENT_MAX_EXTRA_HOURS);
+    }
+
+    /// Kurulum: `none`/24 öğretmen, kapıdan `deputy_principal`/6 (eski sütun donuk).
+    async fn frozen_legacy_deputy(pool: &SqlitePool) -> i64 {
+        let created = create_teacher_impl(pool, valid_input("Eski", "none"), None, None, planning_today())
+            .await
+            .unwrap();
+        let mut deputy = valid_input("Eski", "deputy_principal");
+        deputy.max_extra_hours = 6;
+        commit_teacher_change(
+            pool,
+            TERM,
+            ChangeCommand::SetTeacherLoad { teacher_id: created.id, load: load_from_input(&deputy) },
+            None,
+            None,
+            TEST_REASON,
+            planning_today(),
+        )
+        .await
+        .unwrap();
+        created.id
+    }
+
+    /// Eski sütun donuk (`none`/24), projeksiyon müdür yardımcısı/6: ad
+    /// güncellemesi ikisine de dokunmaz, yeni yük olayı üretilmez.
+    #[tokio::test]
+    async fn update_leaves_the_projection_and_the_legacy_load_columns_untouched() {
+        let (_dir, pool) = test_pool().await;
+        let id = frozen_legacy_deputy(&pool).await;
+        let sets_before = count(&pool, "change_sets", Some("set_teacher_load")).await;
+
+        let profile = profile_from_input(&valid_input("YeniAd", "none"));
+        let updated = update_teacher_impl(&pool, id, profile).await.unwrap();
+
+        assert_eq!(updated.last_name, "YeniAd");
+        assert_eq!(updated.chief_type, "none", "eski sütun yazılmamalı");
+        assert_eq!(updated.max_extra_hours, 24, "eski sütun yazılmamalı");
+        assert_eq!(count(&pool, "change_sets", Some("set_teacher_load")).await, sets_before);
+        let rows = list_teachers_with_capacity_impl(&pool, &ReadAt::Latest).await.unwrap();
+        assert_eq!(rows[0].teacher.chief_type, "deputy_principal");
+        assert_eq!(rows[0].teacher.max_extra_hours, 6);
+    }
+
+    /// `is_active` kimlik alanıdır: tarihçe olayı üretmeden doğrudan yazılır.
+    #[tokio::test]
+    async fn update_writes_is_active_without_a_history_event() {
+        let (_dir, pool) = test_pool().await;
+        let created = create_teacher_impl(&pool, valid_input("Aktif", "none"), None, None, planning_today())
+            .await
+            .unwrap();
+        let sets_before = count(&pool, "change_sets", None).await;
+
+        let mut profile = profile_from_input(&valid_input("Aktif", "none"));
+        profile.is_active = false;
+        let updated = update_teacher_impl(&pool, created.id, profile).await.unwrap();
+
+        assert_eq!(updated.is_active, 0);
+        assert_eq!(count(&pool, "change_sets", None).await, sets_before);
+    }
+
+    /// Kimlik doğrulaması korunur: boş ad reddedilir, hiçbir şey yazılmaz.
+    #[tokio::test]
+    async fn update_rejects_a_blank_name() {
+        let (_dir, pool) = test_pool().await;
+        let created = create_teacher_impl(&pool, valid_input("Ada", "none"), None, None, planning_today())
+            .await
+            .unwrap();
+
+        let mut profile = profile_from_input(&valid_input("Ada", "none"));
+        profile.first_name = " ".into();
+        let result = update_teacher_impl(&pool, created.id, profile).await;
+
+        assert!(matches!(result, Err(AppError::Validation(_))), "{result:?}");
+        assert_eq!(teachers::get(&pool, created.id).await.unwrap().first_name, "Test");
+    }
+
     // --- R5 spec §6: `list_teachers_with_capacity` tarih itibarıyla okur ---
 
     use crate::db::teaching_load_test_support::{change_chief_type_in_planning, seed_teacher, TERM};
     use crate::domain::models::ChiefType;
+    use crate::domain::workload::MANAGEMENT_MAX_EXTRA_HOURS;
 
     /// Şeflik dönem başında yok, 2026-09-10'dan itibaren bölüm şefliğine
     /// (MADDE 6/4, 10 saat) dönüşür. Bu tarih oturumun GERÇEK bugününden
@@ -500,5 +654,38 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let err = ReadAt::resolve(&pool, TERM, Some("2025-12-31".into())).await.unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    /// MADDE 6/1-a: müdür ve müdür yardımcısı 24 saat ek dersle OLUŞTURULAMAZ;
+    /// kapı reddeder ve hiçbir şey yazılmaz.
+    #[tokio::test]
+    async fn create_teacher_rejects_school_management_above_six_hours() {
+        let (_dir, pool) = test_pool().await;
+        let sets_before = count(&pool, "change_sets", None).await;
+
+        for title in ["principal", "deputy_principal"] {
+            let mut input = valid_input(title, title);
+            input.max_extra_hours = 24;
+            let result = create_teacher_impl(&pool, input, None, None, planning_today()).await;
+            assert!(matches!(&result, Err(AppError::Validation(m)) if m.contains("MADDE 6/1-a")), "{title}: {result:?}");
+        }
+        assert_eq!(count(&pool, "change_sets", None).await, sets_before, "reddedilince hiçbir şey yazılmamalı");
+    }
+
+    /// 6 saat sınırın kendisidir: kabul edilir, unvan eski tabloya ve projeksiyona
+    /// yazılır (yeni CHECK değerleri) ve şeflik saati 0 kalır (MADDE 6/4).
+    #[tokio::test]
+    async fn create_teacher_accepts_school_management_at_six_hours_and_they_are_not_chiefs() {
+        let (_dir, pool) = test_pool().await;
+        for title in ["principal", "deputy_principal"] {
+            let mut input = valid_input(title, title);
+            input.max_extra_hours = 6;
+            let created = create_teacher_impl(&pool, input, None, None, planning_today()).await.unwrap();
+            assert_eq!(created.chief_type, title);
+        }
+        let hours = teaching_load::chief_planning_hours(&pool, crate::db::teaching_load_test_support::TERM, ymd(2026, 10, 1))
+            .await
+            .unwrap();
+        assert_eq!(hours, 0, "müdür/müdür yardımcısı havuza şeflik saati katmaz");
     }
 }

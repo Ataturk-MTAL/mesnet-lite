@@ -1,5 +1,5 @@
 import { call } from './client'
-import type { NewTeacher, Teacher, TeacherWithCapacity } from '../types/models'
+import type { NewTeacher, NewTeacherProfile, Teacher, TeacherWithCapacity } from '../types/models'
 
 export const teachersApi = {
   list: (): Promise<Teacher[]> => call('list_teachers'),
@@ -20,11 +20,8 @@ export const teachersApi = {
     effectiveDate: string | null = null,
     reason: string | null = null,
   ): Promise<Teacher> => call('create_teacher', { input, effectiveDate, reason }),
-  update: (
-    id: number,
-    input: NewTeacher,
-    effectiveDate: string | null = null,
-    reason: string | null = null,
-  ): Promise<Teacher> => call('update_teacher', { id, input, effectiveDate, reason }),
+  /** Yalnız profil alanları; yük alanları `TeacherLoadDialog` (tarihçe) yolundan değişir. */
+  update: (id: number, input: NewTeacherProfile): Promise<Teacher> =>
+    call('update_teacher', { id, input }),
   remove: (id: number): Promise<void> => call('delete_teacher', { id }),
 }

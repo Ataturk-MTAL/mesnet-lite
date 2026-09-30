@@ -5,7 +5,6 @@ import ToastService from 'openvue/toastservice'
 import ConfirmationService from 'openvue/confirmationservice'
 import Aura from '@openvue/themes/aura'
 import TeachersView from './TeachersView.vue'
-import EffectiveDateField from '../components/history/EffectiveDateField.vue'
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
 import { useAsOfDateStore } from '../stores/asOfDate'
@@ -76,8 +75,8 @@ beforeEach(() => {
   useTermStore().activeTerm = '2026-2027/1'
 })
 
-describe('TeachersView — yürürlük tarihi/gerekçe akışı update_teacher üzerinde', () => {
-  it('dönem başladıktan sonra istihdam türünü değiştirirken önce tarih/gerekçe sorar, sonra bunları update_teacher isteğine ekler', async () => {
+describe('TeachersView — düzenleme update_teacher üzerinde yalnız profil yollar', () => {
+  it('dönem başlamış olsa da tarih/gerekçe sormaz; update_teacher { id, input } yalnız profil alanlarıyla çağrılır', async () => {
     mockDefaultCommands()
     const wrapper = mountView()
 
@@ -89,38 +88,26 @@ describe('TeachersView — yürürlük tarihi/gerekçe akışı update_teacher �
       .dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
 
-    wrapper.findAllComponents({ name: 'Select' })[0].vm.$emit('update:modelValue', 'contracted')
-    await flushPromises()
-
     document.body
       .querySelector<HTMLButtonElement>('[data-testid="teacher-form-save-button"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
 
-    await vi.waitFor(() =>
-      expect(document.body.querySelector('[data-testid="change-details-dialog"]')).not.toBeNull(),
-    )
-
-    await wrapper.findComponent(EffectiveDateField).vm.$emit('update:modelValue', '2026-10-20')
-    const reasonField = document.body.querySelector<HTMLTextAreaElement>('[data-testid="change-details-reason"]')!
-    reasonField.value = 'sözleşme türü değişti'
-    reasonField.dispatchEvent(new Event('input', { bubbles: true }))
-    await flushPromises()
-
-    document.body
-      .querySelector<HTMLButtonElement>('[data-testid="change-details-confirm-button"]')!
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
-
     await vi.waitFor(() => expect(callMock).toHaveBeenCalledWith('update_teacher', expect.anything()))
+    expect(document.body.querySelector('[data-testid="change-details-dialog"]')).toBeNull()
 
-    const updateArgs = callMock.mock.calls.find((call) => call[0] === 'update_teacher')![1] as {
-      id: number
-      effectiveDate: string | null
-      reason: string | null
-    }
-    expect(updateArgs.id).toBe(5)
-    expect(updateArgs.effectiveDate).toBe('2026-10-20')
-    expect(updateArgs.reason).toBe('sözleşme türü değişti')
+    const updateArgs = callMock.mock.calls.find((call) => call[0] === 'update_teacher')![1]
+    expect(updateArgs).toEqual({
+      id: 5,
+      input: {
+        firstName: 'Ahmet',
+        lastName: 'Yılmaz',
+        registryNo: '12345',
+        field: 'Elektrik-Elektronik Teknolojisi',
+        branches: [],
+        isActive: true,
+      },
+    })
 
     wrapper.unmount()
   })

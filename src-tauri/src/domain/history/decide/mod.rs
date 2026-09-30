@@ -269,11 +269,13 @@ pub(super) fn with_pending(ctx: &DecisionContext, pending: &[PlannedEvent]) -> D
 }
 
 /// Ortak komut dağıtımı. Her kol kendi dosyasına yönlenir. Tek istisna,
-/// komut türünden bağımsız NET sonuç kuralıdır (alan şefi tekliği, `chief.rs`):
-/// `revoke`/`correct` da şefliği doğurabildiği için kararın tamamına bakılır.
+/// komut türünden bağımsız NET sonuç kurallarıdır (alan şefi tekliği ve müdür/
+/// müdür yardımcısı ek ders sınırı, `chief.rs`): `revoke`/`correct` da bu
+/// durumları doğurabildiği için kararın tamamına bakılır.
 pub fn decide(ctx: &DecisionContext, req: &ChangeRequest) -> Result<Decision, Rejection> {
     let decision = dispatch(ctx, req)?;
     chief::enforce_single_department(ctx, &decision)?;
+    chief::enforce_management_extra_hours(ctx, &decision)?;
     Ok(decision)
 }
 
