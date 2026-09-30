@@ -23,6 +23,9 @@ const checkMock = vi.fn<() => Promise<unknown>>()
 vi.mock('@tauri-apps/plugin-updater', () => ({ check: () => checkMock() }))
 vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: vi.fn() }))
 
+const getVersionMock = vi.fn<() => Promise<string>>()
+vi.mock('@tauri-apps/api/app', () => ({ getVersion: () => getVersionMock() }))
+
 function mountView() {
   return mount(AboutView, {
     global: {
@@ -37,6 +40,8 @@ beforeEach(() => {
   isSupportedMock.mockReset()
   isSupportedMock.mockResolvedValue(false)
   checkMock.mockReset()
+  getVersionMock.mockReset()
+  getVersionMock.mockResolvedValue('0.1.5')
   toastAddMock.mockReset()
 })
 
@@ -122,6 +127,33 @@ describe('AboutView', () => {
     expect(toastAddMock).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'info', detail: labels.update.upToDate }),
     )
+    wrapper.unmount()
+  })
+
+  it('uygulama sürümünü gösterir', async () => {
+    // Arrange & Act
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Assert
+    expect(wrapper.find('[data-testid="about-version"]').text()).toBe('Sürüm 0.1.5')
+    wrapper.unmount()
+  })
+
+  it('sürüm okunamazsa sayfa yine çizilir, sürüm metni olmaz', async () => {
+    // Arrange
+    getVersionMock.mockRejectedValue(new Error('tauri yok'))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    // Act
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Assert
+    expect(wrapper.text()).toContain(labels.about.appName)
+    expect(wrapper.find('[data-testid="about-version"]').exists()).toBe(false)
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
     wrapper.unmount()
   })
 })
