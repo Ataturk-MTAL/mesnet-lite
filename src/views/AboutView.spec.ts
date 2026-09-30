@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import OpenVue from 'openvue/config'
 import ToastService from 'openvue/toastservice'
 import Aura from '@openvue/themes/aura'
@@ -10,6 +10,18 @@ const openUrlMock = vi.fn<(url: string) => Promise<void>>()
 vi.mock('@tauri-apps/plugin-opener', () => ({
   openUrl: (url: string) => openUrlMock(url),
 }))
+
+const toastAddMock = vi.fn<(message: { severity: string; summary?: string; detail?: string }) => void>()
+vi.mock('openvue/usetoast', () => ({ useToast: () => ({ add: toastAddMock }) }))
+
+const isSupportedMock = vi.fn<() => Promise<boolean>>()
+vi.mock('../api/updater', () => ({
+  updaterApi: { isSupported: () => isSupportedMock() },
+}))
+
+const checkMock = vi.fn<() => Promise<unknown>>()
+vi.mock('@tauri-apps/plugin-updater', () => ({ check: () => checkMock() }))
+vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: vi.fn() }))
 
 function mountView() {
   return mount(AboutView, {
@@ -22,6 +34,10 @@ function mountView() {
 beforeEach(() => {
   openUrlMock.mockReset()
   openUrlMock.mockResolvedValue(undefined)
+  isSupportedMock.mockReset()
+  isSupportedMock.mockResolvedValue(false)
+  checkMock.mockReset()
+  toastAddMock.mockReset()
 })
 
 describe('AboutView', () => {
@@ -77,6 +93,35 @@ describe('AboutView', () => {
 
     // Assert
     expect(openUrlMock).toHaveBeenCalledWith(labels.about.sourceCodeUrl)
+    wrapper.unmount()
+  })
+
+  it('güncelleme desteklenmiyorsa "Güncellemeleri Denetle" düğmesini göstermez', async () => {
+    // Arrange & Act
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Assert
+    expect(wrapper.find('[data-testid="about-check-updates"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('güncelleme destekleniyorsa düğmeyi gösterir; güncelse bildirim çıkarır', async () => {
+    // Arrange
+    isSupportedMock.mockResolvedValue(true)
+    checkMock.mockResolvedValue(null)
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Act
+    await wrapper.find('[data-testid="about-check-updates"]').trigger('click')
+    await flushPromises()
+
+    // Assert
+    expect(checkMock).toHaveBeenCalledTimes(1)
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'info', detail: labels.update.upToDate }),
+    )
     wrapper.unmount()
   })
 })

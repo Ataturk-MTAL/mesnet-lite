@@ -18,6 +18,18 @@
             :aria-label="labels.about.sourceCode"
             @click="openSourceCode"
           />
+          <Button
+            v-if="supported"
+            :label="labels.about.checkUpdates"
+            icon="pi pi-refresh"
+            severity="secondary"
+            outlined
+            :loading="checking"
+            :disabled="checking || installing"
+            :aria-label="labels.about.checkUpdates"
+            data-testid="about-check-updates"
+            @click="checkManually"
+          />
           <p class="logo-license-note">{{ labels.about.logoLicenseNote }}</p>
         </div>
       </template>
@@ -27,13 +39,21 @@
 
 <script setup lang="ts">
 // Uygulama adı, okul bilgisi, amaç cümlesi, lisans ve kaynak kod bağlantısını
-// gösterir; sürüm numarası veya iletişim bilgisi YOKTUR.
+// gösterir; sürüm numarası veya iletişim bilgisi YOKTUR. Güncelleme
+// desteklenen derlemelerde "Güncellemeleri Denetle" düğmesi de görünür.
+import { onMounted } from 'vue'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { useToast } from 'openvue/usetoast'
 import { labels } from '../i18n/labels'
+import { useUpdater } from '../composables/useUpdater'
 import logoUrl from '../assets/ataturk-mtal.png'
 
 const toast = useToast()
+const { supported, checking, installing, loadSupported, checkManually } = useUpdater()
+
+onMounted(() => {
+  void loadSupported()
+})
 
 function showError(error: unknown): void {
   const detail = error instanceof Error ? error.message : labels.common.error
