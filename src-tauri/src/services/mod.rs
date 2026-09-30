@@ -16,7 +16,7 @@ pub mod student_list_apply;
 pub mod student_list_import;
 pub mod versions;
 
-mod change_input;
+pub(crate) mod change_input;
 mod legacy_reconcile_plan;
 
 #[cfg(test)]

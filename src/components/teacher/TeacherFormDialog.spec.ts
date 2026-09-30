@@ -5,6 +5,7 @@ import OpenVue from 'openvue/config'
 import Aura from '@openvue/themes/aura'
 import TeacherFormDialog from './TeacherFormDialog.vue'
 import EffectiveDateField from '../history/EffectiveDateField.vue'
+import { labels } from '../../i18n/labels'
 import type { NewTeacher, TeacherWithCapacity, TermWithDates } from '../../types/models'
 
 const teacherFixture: TeacherWithCapacity = {
@@ -182,5 +183,24 @@ describe('TeacherFormDialog — yürürlük tarihi/gerekçe penceresi', () => {
     expect(wrapper.emitted('save')).toHaveLength(1)
 
     wrapper.unmount()
+  })
+})
+
+describe('TeacherFormDialog — müdür unvanı (MADDE 6/1-a)', () => {
+  it('yeni kayıtta Müdür seçilince aylık karşılığı ve azami ek dersi 6 yapar, 7 girilince uyarır', async () => {
+    const wrapper = mountDialog({ teacher: null, term: planningTerm })
+    await nextTick()
+
+    wrapper.findAllComponents({ name: 'Select' })[1].vm.$emit('update:modelValue', 'principal')
+    await nextTick()
+
+    expect(document.body.querySelector<HTMLInputElement>('#teacher-max-extra input')!.value).toBe('6')
+    expect(document.body.querySelector<HTMLInputElement>('#teacher-base input')!.value).toBe('6')
+    expect(document.body.textContent).not.toContain(labels.teacher.principalCapWarning)
+
+    setInput('teacher-max-extra input', '7')
+    document.body.querySelector('#teacher-max-extra input')!.dispatchEvent(new Event('blur'))
+    await nextTick()
+    expect(document.body.textContent).toContain(labels.teacher.principalCapWarning)
   })
 })

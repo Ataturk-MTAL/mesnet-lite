@@ -24,11 +24,13 @@ pub fn decode_branches(raw: &str) -> Vec<String> {
 }
 
 /// Metin değeri `ChiefType` enum'una çevirir. Tanınmayan değer şeflik yok sayılır;
-/// şema zaten CHECK kısıtı ile üç değere sınırlıdır.
+/// şema zaten CHECK kısıtı ile beş değere sınırlıdır (bkz. göç 0015).
 pub fn parse_chief_type(raw: &str) -> ChiefType {
     match raw {
         "department" => ChiefType::Department,
         "workshop_lab" => ChiefType::WorkshopLab,
+        "principal" => ChiefType::Principal,
+        "deputy_principal" => ChiefType::DeputyPrincipal,
         _ => ChiefType::None,
     }
 }
@@ -339,6 +341,19 @@ mod tests {
         assert_eq!(parse_chief_type(&plain.chief_type).weekly_hours(), 0);
     }
 
+    /// Yeni unvanlar şemanın CHECK kısıtından geçer (göç 0015) ve aynen okunur.
+    #[tokio::test]
+    async fn school_management_titles_pass_the_schema_check() {
+        let (_dir, pool) = test_pool().await;
+
+        let principal = create(&pool, &sample("Müdür", "principal")).await.unwrap();
+        let deputy = create(&pool, &sample("Yardımcı", "deputy_principal")).await.unwrap();
+
+        assert_eq!(get(&pool, principal.id).await.unwrap().chief_type, "principal");
+        assert_eq!(get(&pool, deputy.id).await.unwrap().chief_type, "deputy_principal");
+        assert!(create(&pool, &sample("Geçersiz", "muhtar")).await.is_err(), "tanınmayan unvan CHECK'e takılmalı");
+    }
+
     #[tokio::test]
     async fn list_active_excludes_inactive_teachers() {
         let (_dir, pool) = test_pool().await;
@@ -410,6 +425,15 @@ mod tests {
     #[test]
     fn parse_chief_type_falls_back_to_none_for_unknown_value() {
         assert_eq!(parse_chief_type("bilinmeyen"), ChiefType::None);
+    }
+
+    /// Okul yönetimi unvanları metinden doğru okunur; şeflik saati 0'dır (MADDE 6/4).
+    #[test]
+    fn parse_chief_type_reads_school_management_titles() {
+        assert_eq!(parse_chief_type("principal"), ChiefType::Principal);
+        assert_eq!(parse_chief_type("deputy_principal"), ChiefType::DeputyPrincipal);
+        assert_eq!(parse_chief_type("principal").weekly_hours(), 0);
+        assert_eq!(parse_chief_type("deputy_principal").weekly_hours(), 0);
     }
 
     #[test]

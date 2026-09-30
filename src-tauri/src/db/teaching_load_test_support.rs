@@ -11,6 +11,7 @@ use sqlx::SqlitePool;
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewTeacherProfile};
 use crate::domain::history::events::TeacherLoad;
 use crate::domain::models::{ChiefType, EmploymentType};
+use crate::domain::workload::MANAGEMENT_MAX_EXTRA_HOURS;
 use crate::services::change_service::{execute_change, ChangeMode, ChangeOutcome};
 
 /// `init_pool`'un tohumladığı dönem: 2026-09-01 – 2027-01-31.
@@ -34,7 +35,8 @@ fn november_today() -> NaiveDate {
 fn load_with(chief_type: ChiefType) -> TeacherLoad {
     TeacherLoad {
         base_hours: 15,
-        max_extra_hours: 24,
+        // Müdür/müdür yardımcısı için 24 MADDE 6/1-a'ya aykırıdır; kapı reddeder.
+        max_extra_hours: if chief_type.is_school_management() { MANAGEMENT_MAX_EXTRA_HOURS } else { 24 },
         other_extra_hours: 0,
         chief_type,
         employment_type: EmploymentType::Tenured,

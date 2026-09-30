@@ -73,6 +73,9 @@ const TEACHERS_SIGNATURE_LABEL: &str = "Alan Öğretmenleri İmza";
 
 /// Atölye/Laboratuvar şefinin unvanı (MADDE 6/4: haftada 6 saat).
 const WORKSHOP_LAB_TITLE: &str = "Atölye/Laboratuvar Şefi";
+/// Müdür yardımcısının unvanı. Müdürün unvanı onay bloğundaki
+/// `PRINCIPAL_TITLE_LINE` ile aynı metindir (tek kaynak).
+const DEPUTY_PRINCIPAL_TITLE: &str = "Müdür Yardımcısı";
 /// Hiçbir şeflik taşımayan öğretmenin unvanı. Kullanıcının açık isteği:
 /// "şef değil" değil, sade "Öğretmen" yazılır.
 const TEACHER_TITLE: &str = "Öğretmen";
@@ -498,17 +501,24 @@ fn extend_teacher_groups(
     }
 }
 
-/// Şeflik türünün imza şeridinde basılacak unvanı (MADDE 6/4). Bölüm şefliği
-/// burada hiç görünmez; o zaten kendi bloğuna (chief_name) ayrılmıştır.
-fn signature_title(chief_type: ChiefType) -> &'static str {
+/// Unvanın "Alan Öğretmenleri İmza" listesinde basılacak metni; listede
+/// yer almayanlar için `None` (filtrenin tek kaynağı burasıdır).
+/// - Bölüm şefi (MADDE 6/4): kendi bloğuna (chief_name) ayrılmıştır.
+/// - Okul müdürü: onay bloğunda ("Okul Müdürü" satırı, ayarlardaki
+///   `principal_name`) zaten imzalar; listede çift görünmez.
+/// - Müdür yardımcısı: koordinatörlük görevi kendilerine tevdi edildiği için
+///   listede "Müdür Yardımcısı" unvanıyla kalır.
+fn signature_title(chief_type: ChiefType) -> Option<&'static str> {
     match chief_type {
-        ChiefType::WorkshopLab => WORKSHOP_LAB_TITLE,
-        ChiefType::None | ChiefType::Department => TEACHER_TITLE,
+        ChiefType::WorkshopLab => Some(WORKSHOP_LAB_TITLE),
+        ChiefType::DeputyPrincipal => Some(DEPUTY_PRINCIPAL_TITLE),
+        ChiefType::None => Some(TEACHER_TITLE),
+        ChiefType::Department | ChiefType::Principal => None,
     }
 }
 
-/// İmza şeridi: alan şefinin adı ve şef DIŞINDAKİ aktif öğretmenlerin ad ve
-/// unvan listesi, ADA göre Türkçe sırayla (kullanıcı isteği; tablodaki
+/// İmza şeridi: alan şefinin adı ve şef ile müdür DIŞINDAKİ aktif öğretmenlerin
+/// ad ve unvan listesi (müdür onay bloğunda imzalar, bkz. `signature_title`), ADA göre Türkçe sırayla (kullanıcı isteği; tablodaki
 /// koordinatör sırası bundan bağımsızdır, bkz. `ordered_companies`). Şeflik
 /// `teacher_load_periods` projeksiyonundan (`as_of` günü geçerli aralık)
 /// okunur; eski `teachers.chief_type` sütunu artık kaynak değildir (bkz.
@@ -533,10 +543,11 @@ fn build_signature_block(mut with_load: Vec<TeacherWithLoadAsOf>) -> (String, Ve
 
     let field_teachers = with_load
         .into_iter()
-        .filter(|t| t.load.chief_type != ChiefType::Department)
-        .map(|t| SignatureTeacher {
-            name: teacher_display_name(&t.teacher),
-            title: signature_title(t.load.chief_type).to_string(),
+        .filter_map(|t| {
+            signature_title(t.load.chief_type).map(|title| SignatureTeacher {
+                name: teacher_display_name(&t.teacher),
+                title: title.to_string(),
+            })
         })
         .collect();
 
@@ -1197,6 +1208,32 @@ mod tests {
             data.field_teachers
         );
         assert!(data.field_teachers.is_empty());
+    }
+
+    /// Müdür onay bloğunda zaten imzalar; alan öğretmenleri listesinde çift
+    /// görünmez. Müdür yardımcısına koordinatörlük tevdi edildiği için listede
+    /// kendi unvanıyla kalır. İkisi de alan şefi sayılmaz (MADDE 6/4 yalnız
+    /// şefleri kapsar).
+    #[tokio::test]
+    async fn principal_is_excluded_from_signature_list_but_deputy_stays() {
+        let (_dir, pool) = test_pool().await;
+        seed_teacher_with_chief(&pool, "Ayşe", "Yılmaz", ChiefType::Principal).await;
+        seed_teacher_with_chief(&pool, "Bora", "Kaya", ChiefType::DeputyPrincipal).await;
+        seed_teacher_with_chief(&pool, "Can", "Er", ChiefType::None).await;
+
+        let data = build_minutes_data(&pool, TERM, &ReadAt::Latest).await.unwrap();
+
+        assert_eq!(data.chief_name, "", "müdür alan şefi olarak basılmamalı");
+        assert!(
+            data.field_teachers.iter().all(|t| t.name != "Ayşe YILMAZ"),
+            "müdür onay bloğunda imzaladığı için listede olmamalı: {:?}",
+            data.field_teachers
+        );
+        let titles: Vec<(&str, &str)> = data.field_teachers.iter().map(|t| (t.name.as_str(), t.title.as_str())).collect();
+        assert_eq!(
+            titles,
+            [("Bora KAYA", "Müdür Yardımcısı"), ("Can ER", "Öğretmen")]
+        );
     }
 
     #[tokio::test]

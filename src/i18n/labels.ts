@@ -100,7 +100,7 @@ export const labels = {
     baseHours: 'Aylık Karşılığı Ders',
     maxExtraHours: 'Azami Ek Ders',
     otherExtraHours: 'Diğer Ek Dersler',
-    chiefType: 'Şeflik',
+    chiefType: 'Unvan',
     chiefHours: 'Şeflik Saati',
     capacity: 'Koordinatörlük Kapasitesi',
     isActive: 'Aktif',
@@ -108,12 +108,17 @@ export const labels = {
     branchesHint: 'Öğretmenin koordinatörlük yapabileceği dallar. Yazıp Enter ile ekleyin.',
     capacityWarning:
       'Azami ek ders, şeflik saatinden küçük olamaz. Şeflik saati bu tavanın içinden düşer (MADDE 6/4).',
+    principalCapWarning:
+      'Müdür ve müdür yardımcılarına haftada en fazla 6 saat ek ders verilebilir (MADDE 6/1-a).',
+    sortHint: 'Birden çok sütuna göre sıralamak için Ctrl (macOS\'ta ⌘) tuşuna basılı tutarak sütun başlıklarına tıklayın.',
     deleteConfirm: 'Bu öğretmeni silmek istediğinize emin misiniz? Atamaları da silinir.',
   },
   chiefType: {
     none: 'Öğretmen',
     workshop_lab: 'Atölye/Laboratuvar Şefi',
     department: 'Bölüm Şefi',
+    deputy_principal: 'Müdür Yardımcısı',
+    principal: 'Müdür',
   },
   employmentType: { tenured: 'Kadrolu', contracted: 'Sözleşmeli' },
   hours: {
@@ -729,7 +734,7 @@ export const labels = {
     baseHours: 'Aylık Karşılığı Ders',
     maxExtraHours: 'Azami Ek Ders',
     otherExtraHours: 'Diğer Ek Dersler',
-    chiefType: 'Şeflik',
+    chiefType: 'Unvan',
     employmentType: 'Kadro Tipi',
   },
   companyMerge: {

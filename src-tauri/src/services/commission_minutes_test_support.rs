@@ -10,6 +10,7 @@ use crate::db::{companies, init_pool, teachers};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, NewStudentInput, NewTeacherProfile};
 use crate::domain::history::events::TeacherLoad;
 use crate::domain::models::{ChiefType, EmploymentType, NewCompany, NewTeacher};
+use crate::domain::workload::MANAGEMENT_MAX_EXTRA_HOURS;
 use crate::services::change_service::{execute_change, ChangeMode, ChangeOutcome};
 use chrono::NaiveDate;
 use sqlx::SqlitePool;
@@ -190,7 +191,8 @@ pub async fn seed_teacher_with_chief(
     };
     let load = TeacherLoad {
         base_hours: 15,
-        max_extra_hours: 24,
+        // Müdür/müdür yardımcısı için 24 MADDE 6/1-a'ya aykırıdır; kapı reddeder.
+        max_extra_hours: if chief_type.is_school_management() { MANAGEMENT_MAX_EXTRA_HOURS } else { 24 },
         other_extra_hours: 0,
         chief_type,
         employment_type: EmploymentType::Tenured,
