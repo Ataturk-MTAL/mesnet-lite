@@ -35,10 +35,10 @@ describe('chiefRules', () => {
     expect(principalLoadDefaults('department')).toBeNull()
   })
 
-  it('Türkçe harf sırasını korur: Işık, İbrahim, Ömer, Özdemir', () => {
-    const keys = turkishSortKeys(['Özdemir', 'İbrahim', 'Ömer', 'Ali', 'Işık'])
+  it('Türkçe harf sırasını korur: Işık, İlker, Ömer, Özge', () => {
+    const keys = turkishSortKeys(['Özge', 'İlker', 'Ömer', 'Ali', 'Işık'])
     const ordered = [...keys.entries()].sort((a, b) => a[1] - b[1]).map(([name]) => name)
-    expect(ordered).toEqual(['Ali', 'Işık', 'İbrahim', 'Ömer', 'Özdemir'])
+    expect(ordered).toEqual(['Ali', 'Işık', 'İlker', 'Ömer', 'Özge'])
   })
 
   it('rütbe anahtarı müdürden öğretmene doğru artar', () => {
