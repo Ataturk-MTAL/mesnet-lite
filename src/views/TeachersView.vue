@@ -96,6 +96,7 @@
       :known-branches="knownBranches"
       :term="term"
       @save="handleSave"
+      @update="handleUpdate"
     />
 
     <TeacherLoadDialog
@@ -125,7 +126,7 @@ import { useAsOfDateStore } from '../stores/asOfDate'
 import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
 import { buildTeacherRows } from '../utils/chiefRules'
 import { parseBranches } from '../types/models'
-import type { ChiefType, NewTeacher, TeacherWithCapacity, TermWithDates } from '../types/models'
+import type { ChiefType, NewTeacher, NewTeacherProfile, TeacherWithCapacity, TermWithDates } from '../types/models'
 
 const toast = useToast()
 const confirm = useConfirm()
@@ -204,12 +205,18 @@ async function handleSave(
   input: NewTeacher,
   details: { effectiveDate: string | null; reason: string | null },
 ): Promise<void> {
+  await persist(() => teachersApi.create(input, details.effectiveDate, details.reason))
+}
+
+async function handleUpdate(profile: NewTeacherProfile): Promise<void> {
+  const target = selected.value
+  if (!target) return
+  await persist(() => teachersApi.update(target.id, profile))
+}
+
+async function persist(action: () => Promise<unknown>): Promise<void> {
   try {
-    if (selected.value) {
-      await teachersApi.update(selected.value.id, input, details.effectiveDate, details.reason)
-    } else {
-      await teachersApi.create(input, details.effectiveDate, details.reason)
-    }
+    await action()
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
     await load()
     await loadKnownBranches()

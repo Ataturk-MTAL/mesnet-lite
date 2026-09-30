@@ -133,7 +133,7 @@ describe('TeacherFormDialog — yürürlük tarihi/gerekçe penceresi', () => {
     wrapper.unmount()
   })
 
-  it('dönem başlamış olsa da yalnız kimlik alanı değişen bir düzenlemeyi doğrudan kaydeder', async () => {
+  it('dönem başlamış olsa da düzenlemede tarih/gerekçe adımı çıkmaz, yalnız profil alanlarını yayar', async () => {
     const wrapper = mountDialog({ teacher: teacherFixture, term: startedTerm })
     await nextTick()
     setInput('teacher-last', 'Demir')
@@ -143,29 +143,30 @@ describe('TeacherFormDialog — yürürlük tarihi/gerekçe penceresi', () => {
     await nextTick()
 
     expect(document.body.querySelector('[data-testid="change-details-dialog"]')).toBeNull()
-    const emitted = wrapper.emitted('save')
+    expect(wrapper.emitted('save')).toBeUndefined()
+    const emitted = wrapper.emitted('update')
     expect(emitted).toHaveLength(1)
-    const [input, details] = emitted![0] as SavePayload
-    expect(input.lastName).toBe('Demir')
-    expect(details).toEqual({ effectiveDate: null, reason: null })
+    expect(emitted![0]).toEqual([
+      {
+        firstName: 'Ahmet',
+        lastName: 'Demir',
+        registryNo: '12345',
+        field: 'Elektrik-Elektronik Teknolojisi',
+        branches: [],
+        isActive: true,
+      },
+    ])
 
     wrapper.unmount()
   })
 
-  it('dönem başladıktan sonra istihdam türü (yük alanı) değişince pencereyi açar', async () => {
+  it('düzenlemede yük alanları (istihdam türü, şeflik, saatler) gösterilmez', async () => {
     const wrapper = mountDialog({ teacher: teacherFixture, term: startedTerm })
     await nextTick()
 
-    // İstihdam türü Select'i düzenlemede de gösterilir; `load_changed`
-    // kontrolündeki beş alandan biridir (bkz. Rust `load_changed`).
-    wrapper.findAllComponents({ name: 'Select' })[0].vm.$emit('update:modelValue', 'contracted')
-    await nextTick()
-
-    saveButton().dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await nextTick()
-
-    expect(document.body.querySelector('[data-testid="change-details-dialog"]')).not.toBeNull()
-    expect(wrapper.emitted('save')).toBeUndefined()
+    expect(wrapper.findAllComponents({ name: 'Select' })).toHaveLength(0)
+    expect(document.body.querySelector('#teacher-max-extra')).toBeNull()
+    expect(document.body.querySelector('#teacher-base')).toBeNull()
 
     wrapper.unmount()
   })

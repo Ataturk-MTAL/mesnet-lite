@@ -1,3 +1,4 @@
+use crate::domain::history::decide::NewTeacherProfile;
 use crate::domain::history::events::TeacherLoad;
 use crate::domain::models::{ChiefType, EmploymentType, NewTeacher, Teacher};
 use crate::error::{AppError, AppResult};
@@ -230,24 +231,23 @@ pub async fn remove_in(conn: &mut SqliteConnection, id: i64) -> AppResult<()> {
     Ok(())
 }
 
-pub async fn update(pool: &SqlitePool, id: i64, input: &NewTeacher) -> AppResult<Teacher> {
+/// Yalnız KİMLİK sütunlarını yazar. Yük sütunlarına (`employment_type`,
+/// `base_hours`, `max_extra_hours`, `other_extra_hours`, `chief_type`)
+/// dokunmaz: yük yalnız tarihçe (`SetTeacherLoad`) yolundan değişir; düzenleme
+/// formu yükü göstermediği için eski değerleri geri yazmak ileri tarihli
+/// planlı yük değişikliğini ezerdi (MADDE 6/4 şeflik saati dahil).
+pub async fn update_profile(pool: &SqlitePool, id: i64, input: &NewTeacherProfile) -> AppResult<Teacher> {
     let affected = sqlx::query(
         "UPDATE teachers SET
             first_name = ?1, last_name = ?2, registry_no = ?3, field = ?4, branches = ?5,
-            employment_type = ?6, base_hours = ?7, max_extra_hours = ?8,
-            other_extra_hours = ?9, chief_type = ?10, is_active = ?11
-         WHERE id = ?12",
+            is_active = ?6
+         WHERE id = ?7",
     )
     .bind(&input.first_name)
     .bind(&input.last_name)
     .bind(&input.registry_no)
     .bind(&input.field)
     .bind(encode_branches(&input.branches)?)
-    .bind(&input.employment_type)
-    .bind(input.base_hours)
-    .bind(input.max_extra_hours)
-    .bind(input.other_extra_hours)
-    .bind(&input.chief_type)
     .bind(i64::from(input.is_active))
     .bind(id)
     .execute(pool)
@@ -369,17 +369,29 @@ mod tests {
         assert_eq!(active[0].last_name, "Aktif");
     }
 
+    /// Yük sütunları (`chief_type` dahil) yalnız tarihçe yolundan değişir;
+    /// kimlik güncellemesi onlara dokunmamalı.
     #[tokio::test]
-    async fn update_changes_chief_type_and_branches() {
+    async fn update_profile_changes_identity_and_leaves_load_columns() {
         let (_dir, pool) = test_pool().await;
         let created = create(&pool, &sample("Yılmaz", "none")).await.unwrap();
 
-        let mut input = sample("Yılmaz", "department");
-        input.branches = vec!["Elektrik Tesisatları ve Pano Montörlüğü".into()];
-        let updated = update(&pool, created.id, &input).await.unwrap();
+        let profile = NewTeacherProfile {
+            first_name: "Yeni".into(),
+            last_name: "Ad".into(),
+            registry_no: "999".into(),
+            field: "Elektrik".into(),
+            branches: vec!["Elektrik Tesisatları ve Pano Montörlüğü".into()],
+            is_active: false,
+        };
+        let updated = update_profile(&pool, created.id, &profile).await.unwrap();
 
-        assert_eq!(updated.chief_type, "department");
+        assert_eq!((updated.first_name.as_str(), updated.registry_no.as_str()), ("Yeni", "999"));
         assert_eq!(decode_branches(&updated.branches).len(), 1);
+        assert_eq!(updated.is_active, 0);
+        assert_eq!(updated.chief_type, "none");
+        assert_eq!(updated.max_extra_hours, 24);
+        assert_eq!(updated.base_hours, 20);
     }
 
     #[tokio::test]

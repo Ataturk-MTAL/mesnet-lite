@@ -1,5 +1,5 @@
 use crate::db::read_at::ReadAt;
-use crate::db::{settings, teachers, terms, AppState};
+use crate::db::{settings, teachers, AppState};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, ImpactSummary, NewTeacherProfile};
 use crate::domain::history::events::TeacherLoad;
 use crate::domain::models::{NewTeacher, Teacher};
@@ -13,10 +13,9 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::State;
 
-/// `create_teacher`/`update_teacher` gerekçe vermezse yazılan varsayılan.
+/// `create_teacher` gerekçe vermezse yazılan varsayılan.
 /// Gerekçe geldiğinde (arayüzden `reason`) onun yerine geçer.
 const DEFAULT_CREATE_REASON: &str = "Öğretmen ekranından eklendi";
-const DEFAULT_UPDATE_REASON: &str = "Öğretmen ekranından güncellendi";
 
 /// Öğretmen + mevzuattan türetilen kapasite bilgisi.
 /// Kapasite hesabı yalnızca Rust tarafında yapılır; arayüz onu yeniden hesaplamaz.
@@ -139,32 +138,6 @@ fn load_from_input(input: &NewTeacher) -> TeacherLoad {
     }
 }
 
-/// Girilen yük, olayın uygulanacağı gündeki PROJEKSİYON yükünden farklı mı?
-/// Eski `teachers` sütunu donuk olabilir (yük `commit_change` ile değişince
-/// güncellenmez) ve düzenleme formu liste yanıtındaki projeksiyon değerlerini
-/// geri yollar; eski sütunla kıyaslamak gereksiz `SetTeacherLoad` üretir ya da
-/// eski değerleri güncel yükün üstüne yazar. Projeksiyonda satır yoksa
-/// (geçiş anomalisi) değişmiş sayılır; kapı kararı verir. Yalnız farklıysa
-/// MADDE 6/4 olayı üretilir; aksi hâlde günlüğe anlamsız "değişiklik" yazılmaz.
-fn load_changed(projected: Option<&TeacherLoad>, input: &NewTeacher) -> bool {
-    projected != Some(&load_from_input(input))
-}
-
-/// Yük karşılaştırmasının yapılacağı gün: kapının kullanacağı yürürlük tarihi
-/// (`TermDates::resolve_effective_date`). Çözülemezse (dönem başladı ama tarih
-/// yok) varsayılan "tarihteki durum" günü kullanılır: tarihsiz bir istek yük
-/// değişikliği niyeti taşımaz; yük gerçekten farklıysa kapı zaten tarihi ister.
-async fn comparison_day(
-    pool: &SqlitePool,
-    term: &str,
-    effective_date: Option<NaiveDate>,
-    today: NaiveDate,
-) -> AppResult<NaiveDate> {
-    let mut conn = pool.acquire().await?;
-    let dates = terms::get_in(&mut conn, term).await?;
-    Ok(dates.resolve_effective_date(effective_date, today).unwrap_or_else(|_| dates.default_as_of(today)))
-}
-
 /// Tek değişiklik kapısından geçirir; `Rejected`/`Stale` kullanıcıya
 /// `Validation` olarak iletilir (spec §5, `availability_commands::commit_schedule_change`
 /// ile aynı desen). Başarılıysa etki özetini döner — `create_teacher_impl`
@@ -201,7 +174,7 @@ async fn commit_teacher_change(
 /// ders şeflik saatinden küçük olamaz) artık TEK yerde,
 /// `services/change_input.rs::validate_load`dadır; `create_teacher_impl`
 /// zaten kapıdan geçtiği için burada tekrarlanmaz (DRY).
-fn validate_identity(input: &NewTeacher) -> AppResult<()> {
+fn validate_identity(input: &NewTeacherProfile) -> AppResult<()> {
     if input.first_name.trim().is_empty() || input.last_name.trim().is_empty() {
         return Err(AppError::Validation("Ad ve soyad boş olamaz".into()));
     }
@@ -236,32 +209,16 @@ async fn create_teacher_impl(
     teachers::get(pool, teacher_id).await
 }
 
-/// Öğretmeni günceller: yük/şeflik alanları değiştiyse `SetTeacherLoad`
-/// olayı kapıdan geçer (spec R5c madde 1); kimlik alanları (ad, soyad,
-/// sicil, alan, branşlar, aktiflik) eski yoldan (`teachers::update`)
-/// yazılmaya devam eder. Kapı reddederse (ör. dönem başlamış, tarih
-/// verilmemiş) HİÇBİR şey yazılmaz — kimlik güncellemesi de dahil.
-async fn update_teacher_impl(
-    pool: &SqlitePool,
-    id: i64,
-    input: NewTeacher,
-    effective_date: Option<NaiveDate>,
-    reason: Option<String>,
-    today: NaiveDate,
-) -> AppResult<Teacher> {
+/// Öğretmenin yalnız KİMLİK alanlarını (ad, soyad, sicil, alan, branşlar,
+/// aktiflik) günceller. Yük/şeflik alanlarına ve tarihçeye (olay günlüğü,
+/// projeksiyon) dokunmaz: yük yalnız tarihçe (`SetTeacherLoad`) yolundan
+/// değişir. Düzenleme penceresi yükü göstermediği için burada yük yazmak,
+/// kullanıcının görmediği değerlerle ileri tarihli planlı değişikliği
+/// sessizce ezerdi (issue #29). `is_active` bugün olduğu gibi tarihçe olayı
+/// üretmeden doğrudan yazılır.
+async fn update_teacher_impl(pool: &SqlitePool, id: i64, input: NewTeacherProfile) -> AppResult<Teacher> {
     validate_identity(&input)?;
-    // Kayıt yoksa erken ve anlaşılır hata (kimlik güncellemesine varmadan).
-    teachers::get(pool, id).await?;
-
-    let term = settings::get_active_term(pool).await?;
-    let day = comparison_day(pool, &term, effective_date, today).await?;
-    let projected = teachers::load_as_of_by_teacher(pool, &term, day).await?;
-    if load_changed(projected.get(&id), &input) {
-        let command = ChangeCommand::SetTeacherLoad { teacher_id: id, load: load_from_input(&input) };
-        commit_teacher_change(pool, &term, command, effective_date, reason, DEFAULT_UPDATE_REASON, today).await?;
-    }
-
-    teachers::update(pool, id, &input).await
+    teachers::update_profile(pool, id, &input).await
 }
 
 #[tauri::command]
@@ -275,14 +232,8 @@ pub async fn create_teacher(
 }
 
 #[tauri::command]
-pub async fn update_teacher(
-    state: State<'_, AppState>,
-    id: i64,
-    input: NewTeacher,
-    effective_date: Option<NaiveDate>,
-    reason: Option<String>,
-) -> AppResult<Teacher> {
-    update_teacher_impl(&state.pool, id, input, effective_date, reason, today_local()).await
+pub async fn update_teacher(state: State<'_, AppState>, id: i64, input: NewTeacherProfile) -> AppResult<Teacher> {
+    update_teacher_impl(&state.pool, id, input).await
 }
 
 #[tauri::command]
@@ -301,6 +252,8 @@ mod tests {
         let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
         (dir, pool)
     }
+
+    const TEST_REASON: &str = "Test kurulumu";
 
     fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
@@ -346,18 +299,18 @@ mod tests {
 
     #[test]
     fn rejects_blank_names_and_field() {
-        let mut input = valid_input("Ogretmen", "none");
+        let mut input = profile_from_input(&valid_input("Ogretmen", "none"));
         input.first_name = " ".into();
         assert!(validate_identity(&input).is_err());
 
-        let mut input = valid_input("Ogretmen", "none");
+        let mut input = profile_from_input(&valid_input("Ogretmen", "none"));
         input.field = String::new();
         assert!(validate_identity(&input).is_err());
     }
 
     #[test]
     fn accepts_valid_identity() {
-        assert!(validate_identity(&valid_input("Ogretmen", "none")).is_ok());
+        assert!(validate_identity(&profile_from_input(&valid_input("Ogretmen", "none"))).is_ok());
     }
 
     /// Asıl regresyon: `create_teacher`, olay günlüğünden ve projeksiyondan
@@ -399,69 +352,63 @@ mod tests {
         assert_eq!(count(&pool, "change_sets", None).await, sets_before, "reddedilince hiçbir şey yazılmamalı");
     }
 
-    /// Şefliği `none` → `department` yapan güncelleme olay üretir; havuz
-    /// değişir. Eski `teachers.chief_type` de (bu komutun kimlik-dışı yolu
-    /// üzerinden) aynı değere gelir çünkü ikisi birden yazılır.
+    /// Kimlik güncellemesi olay günlüğüne hiç uğramaz; yük yalnız tarihçe
+    /// (`SetTeacherLoad`) yolundan değişir.
     #[tokio::test]
-    async fn updating_the_chief_type_emits_a_load_event_and_the_pool_changes() {
-        let (_dir, pool) = test_pool().await;
-        let created = create_teacher_impl(&pool, valid_input("Once", "none"), None, None, planning_today())
-            .await
-            .unwrap();
-
-        let mut input = valid_input("Once", "department");
-        let updated = update_teacher_impl(&pool, created.id, input.clone(), Some(ymd(2026, 11, 5)), None, november_today())
-            .await
-            .unwrap();
-        input.chief_type = "department".into();
-
-        assert_eq!(count(&pool, "change_sets", Some("set_teacher_load")).await, 1);
-        assert_eq!(updated.chief_type, "department");
-
-        let hours = teaching_load::chief_planning_hours(&pool, crate::db::teaching_load_test_support::TERM, ymd(2026, 11, 10))
-            .await
-            .unwrap();
-        assert_eq!(hours, 10);
-    }
-
-    /// Kimlik alanı değişip yük DEĞİŞMEDİYSE gate'e hiç uğranmaz — günlüğe
-    /// anlamsız bir "yük değişti" olayı yazılmaz.
-    #[tokio::test]
-    async fn updating_only_identity_fields_does_not_touch_the_change_log() {
+    async fn updating_identity_fields_does_not_touch_the_change_log() {
         let (_dir, pool) = test_pool().await;
         let created = create_teacher_impl(&pool, valid_input("Isim", "none"), None, None, planning_today())
             .await
             .unwrap();
         let sets_before = count(&pool, "change_sets", None).await;
 
-        let mut input = valid_input("YeniIsim", "none");
-        input.first_name = "Yeni".into();
-        let updated = update_teacher_impl(&pool, created.id, input, None, None, planning_today())
-            .await
-            .unwrap();
+        let mut profile = profile_from_input(&valid_input("YeniIsim", "none"));
+        profile.first_name = "Yeni".into();
+        let updated = update_teacher_impl(&pool, created.id, profile).await.unwrap();
 
         assert_eq!(updated.first_name, "Yeni");
-        assert_eq!(count(&pool, "change_sets", None).await, sets_before, "yük değişmediyse olay yazılmamalı");
+        assert_eq!(count(&pool, "change_sets", None).await, sets_before, "olay yazılmamalı");
     }
 
-    /// Dönem başladıysa yük değişikliği tarih ister; tarih verilmezse
-    /// `Validation` ile reddedilir ve HİÇBİR şey yazılmaz (ne olay ne eski
-    /// tablo).
+    /// Issue #29: düzenleme penceresi yükü göstermez; ad değiştirmek ileri
+    /// tarihli planlı yük değişikliğini (burada 2026-11-01'de müdür yardımcısı,
+    /// MADDE 6/1-a: 6 saat) ezmemeli.
     #[tokio::test]
-    async fn changing_load_after_the_term_started_without_a_date_writes_nothing() {
+    async fn renaming_keeps_a_future_dated_planned_load_change() {
         let (_dir, pool) = test_pool().await;
-        let created = create_teacher_impl(&pool, valid_input("Ada", "none"), None, None, planning_today())
+        let created = create_teacher_impl(&pool, valid_input("Plan", "none"), None, None, planning_today())
             .await
             .unwrap();
-        let sets_before = count(&pool, "change_sets", None).await;
+        let mut deputy = valid_input("Plan", "deputy_principal");
+        deputy.max_extra_hours = 6;
+        commit_teacher_change(
+            &pool,
+            TERM,
+            ChangeCommand::SetTeacherLoad { teacher_id: created.id, load: load_from_input(&deputy) },
+            Some(ymd(2026, 11, 1)),
+            None,
+            TEST_REASON,
+            planning_today(),
+        )
+        .await
+        .unwrap();
+        let events_before = count(&pool, "change_sets", Some("set_teacher_load")).await;
 
-        let input = valid_input("Ada", "department");
-        let result = update_teacher_impl(&pool, created.id, input, None, None, november_today()).await;
+        let mut profile = profile_from_input(&valid_input("YeniAd", "none"));
+        profile.first_name = "Yeni".into();
+        let updated = update_teacher_impl(&pool, created.id, profile).await.unwrap();
 
-        assert!(matches!(result, Err(AppError::Validation(_))), "Validation beklenirdi: {result:?}");
-        assert_eq!(count(&pool, "change_sets", None).await, sets_before);
-        let unchanged = teachers::get(&pool, created.id).await.unwrap();
-        assert_eq!(unchanged.chief_type, "none", "eski tablo da değişmemeli");
+        assert_eq!(updated.last_name, "YeniAd");
+        assert_eq!(count(&pool, "change_sets", Some("set_teacher_load")).await, events_before);
+        let future: (String, String, i64) = sqlx::query_as(
+            "SELECT valid_from, chief_type, max_extra_hours FROM teacher_load_periods
+             WHERE teacher_id = ?1 AND valid_to IS NULL",
+        )
+        .bind(created.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(future, ("2026-11-01".to_string(), "deputy_principal".to_string(), 6));
     }
 
     /// Kilit test: `list_teachers_with_capacity`in kapasitesi projeksiyondan
@@ -489,7 +436,7 @@ mod tests {
             ChangeCommand::SetTeacherLoad { teacher_id: created.id, load: load_from_input(&valid_input("Sef", "department")) },
             None,
             None,
-            DEFAULT_UPDATE_REASON,
+            TEST_REASON,
             planning_today(),
         )
         .await
@@ -525,7 +472,7 @@ mod tests {
             ChangeCommand::SetTeacherLoad { teacher_id: created.id, load: load_from_input(&deputy) },
             None,
             None,
-            DEFAULT_UPDATE_REASON,
+            TEST_REASON,
             planning_today(),
         )
         .await
@@ -552,11 +499,11 @@ mod tests {
         deputy.max_extra_hours = 6;
         commit_teacher_change(
             &pool,
-            &TERM.to_string(),
+            TERM,
             ChangeCommand::SetTeacherLoad { teacher_id: created.id, load: load_from_input(&deputy) },
             Some(ymd(2026, 9, 14)),
             None,
-            DEFAULT_UPDATE_REASON,
+            TEST_REASON,
             planning_today(),
         )
         .await
@@ -607,11 +554,11 @@ mod tests {
         deputy.max_extra_hours = 6;
         commit_teacher_change(
             pool,
-            &TERM.to_string(),
+            TERM,
             ChangeCommand::SetTeacherLoad { teacher_id: created.id, load: load_from_input(&deputy) },
             None,
             None,
-            DEFAULT_UPDATE_REASON,
+            TEST_REASON,
             planning_today(),
         )
         .await
@@ -619,40 +566,57 @@ mod tests {
         created.id
     }
 
-    /// Form projeksiyondaki yükü geri yollar: yalnız ad değişir, eski sütun
-    /// donuk olsa da yeni yük olayı ÜRETİLMEMELİ, güncel yük geri alınmamalı.
+    /// Eski sütun donuk (`none`/24), projeksiyon müdür yardımcısı/6: ad
+    /// güncellemesi ikisine de dokunmaz, yeni yük olayı üretilmez.
     #[tokio::test]
-    async fn update_with_the_projection_load_and_a_new_name_emits_no_load_event() {
+    async fn update_leaves_the_projection_and_the_legacy_load_columns_untouched() {
         let (_dir, pool) = test_pool().await;
         let id = frozen_legacy_deputy(&pool).await;
         let sets_before = count(&pool, "change_sets", Some("set_teacher_load")).await;
 
-        let mut input = valid_input("YeniAd", "deputy_principal");
-        input.max_extra_hours = 6;
-        let updated = update_teacher_impl(&pool, id, input, None, None, planning_today()).await.unwrap();
+        let profile = profile_from_input(&valid_input("YeniAd", "none"));
+        let updated = update_teacher_impl(&pool, id, profile).await.unwrap();
 
         assert_eq!(updated.last_name, "YeniAd");
+        assert_eq!(updated.chief_type, "none", "eski sütun yazılmamalı");
+        assert_eq!(updated.max_extra_hours, 24, "eski sütun yazılmamalı");
         assert_eq!(count(&pool, "change_sets", Some("set_teacher_load")).await, sets_before);
         let rows = list_teachers_with_capacity_impl(&pool, &ReadAt::Latest).await.unwrap();
         assert_eq!(rows[0].teacher.chief_type, "deputy_principal");
         assert_eq!(rows[0].teacher.max_extra_hours, 6);
     }
 
-    /// Yön sınaması: eski sütundaki değerlere (`none`/24) dönmek projeksiyona
-    /// göre GERÇEK değişikliktir, olay üretilir.
+    /// `is_active` kimlik alanıdır: tarihçe olayı üretmeden doğrudan yazılır.
     #[tokio::test]
-    async fn update_with_the_legacy_column_values_is_a_real_change_and_emits_an_event() {
+    async fn update_writes_is_active_without_a_history_event() {
         let (_dir, pool) = test_pool().await;
-        let id = frozen_legacy_deputy(&pool).await;
-        let sets_before = count(&pool, "change_sets", Some("set_teacher_load")).await;
+        let created = create_teacher_impl(&pool, valid_input("Aktif", "none"), None, None, planning_today())
+            .await
+            .unwrap();
+        let sets_before = count(&pool, "change_sets", None).await;
 
-        update_teacher_impl(&pool, id, valid_input("Eski", "none"), None, None, planning_today())
+        let mut profile = profile_from_input(&valid_input("Aktif", "none"));
+        profile.is_active = false;
+        let updated = update_teacher_impl(&pool, created.id, profile).await.unwrap();
+
+        assert_eq!(updated.is_active, 0);
+        assert_eq!(count(&pool, "change_sets", None).await, sets_before);
+    }
+
+    /// Kimlik doğrulaması korunur: boş ad reddedilir, hiçbir şey yazılmaz.
+    #[tokio::test]
+    async fn update_rejects_a_blank_name() {
+        let (_dir, pool) = test_pool().await;
+        let created = create_teacher_impl(&pool, valid_input("Ada", "none"), None, None, planning_today())
             .await
             .unwrap();
 
-        assert_eq!(count(&pool, "change_sets", Some("set_teacher_load")).await, sets_before + 1);
-        let rows = list_teachers_with_capacity_impl(&pool, &ReadAt::Latest).await.unwrap();
-        assert_eq!(rows[0].teacher.chief_type, "none");
+        let mut profile = profile_from_input(&valid_input("Ada", "none"));
+        profile.first_name = " ".into();
+        let result = update_teacher_impl(&pool, created.id, profile).await;
+
+        assert!(matches!(result, Err(AppError::Validation(_))), "{result:?}");
+        assert_eq!(teachers::get(&pool, created.id).await.unwrap().first_name, "Test");
     }
 
     // --- R5 spec §6: `list_teachers_with_capacity` tarih itibarıyla okur ---
@@ -723,26 +687,5 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(hours, 0, "müdür/müdür yardımcısı havuza şeflik saati katmaz");
-    }
-
-    /// Düzenleme yolu: mevcut öğretmen 24 saatle müdür yapılamaz; kapı reddeder ve
-    /// eski tablo da değişmez. Tavan 6'ya indirilirse geçer.
-    #[tokio::test]
-    async fn update_teacher_rejects_school_management_above_six_hours_and_writes_nothing() {
-        let (_dir, pool) = test_pool().await;
-        let created = create_teacher_impl(&pool, valid_input("Ada", "none"), None, None, planning_today()).await.unwrap();
-        let sets_before = count(&pool, "change_sets", None).await;
-
-        let bad = valid_input("Ada", "principal");
-        let result = update_teacher_impl(&pool, created.id, bad, None, None, planning_today()).await;
-        assert!(matches!(&result, Err(AppError::Validation(m)) if m.contains("MADDE 6/1-a")), "{result:?}");
-        assert_eq!(count(&pool, "change_sets", None).await, sets_before);
-        assert_eq!(teachers::get(&pool, created.id).await.unwrap().chief_type, "none", "eski tablo değişmemeli");
-
-        let mut good = valid_input("Ada", "principal");
-        good.max_extra_hours = 6;
-        let updated = update_teacher_impl(&pool, created.id, good, None, None, planning_today()).await.unwrap();
-        assert_eq!(updated.chief_type, "principal");
-        assert_eq!(updated.max_extra_hours, 6);
     }
 }

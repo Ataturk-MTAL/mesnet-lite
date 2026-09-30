@@ -23,7 +23,8 @@
           <label for="teacher-registry">{{ labels.teacher.registryNo }}</label>
           <InputText id="teacher-registry" v-model="form.registryNo" />
         </div>
-        <div class="field">
+        <!-- İstihdam türü bir yük alanıdır; yalnız yeni kayıtta girilir. -->
+        <div v-if="!isEdit" class="field">
           <label for="teacher-employment">{{ labels.teacher.employmentType }}</label>
           <Select
             id="teacher-employment"
@@ -120,9 +121,9 @@
     </template>
   </Dialog>
 
-  <!-- Dönem başladıktan sonra yük/şeflik değişen bir kayıt, yürürlük tarihi
-       ve gerekçe girilmeden Rust tarafından reddedilir; bu pencere onları
-       burada sorar. Yalnız kimlik alanları değiştiyse hiç açılmaz. -->
+  <!-- Dönem başladıktan sonra oluşturulan YENİ kayıt, yürürlük tarihi ve
+       gerekçe girilmeden Rust tarafından reddedilir; bu pencere onları burada
+       sorar. Düzenlemede hiç açılmaz (yük tarihçeden değişir). -->
   <ChangeDetailsDialog
     :visible="isChangeDetailsOpen"
     :term="changeDetailsTerm"
@@ -144,7 +145,7 @@ import {
   principalCapWarning,
   principalLoadDefaults,
 } from '../../utils/chiefRules'
-import type { ChiefType, EmploymentType, NewTeacher, TeacherWithCapacity, TermWithDates } from '../../types/models'
+import type { ChiefType, NewTeacher, NewTeacherProfile, TeacherWithCapacity, TermWithDates } from '../../types/models'
 import ChangeDetailsDialog from '../history/ChangeDetailsDialog.vue'
 
 const props = defineProps<{
@@ -158,17 +159,11 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
+  /** Yalnız yeni kayıt: yük alanları dahil, tarih/gerekçe ile. */
   save: [input: NewTeacher, details: { effectiveDate: string | null; reason: string | null }]
+  /** Yalnız düzenleme: yalnız profil alanları; yük tarihçe yolundan değişir. */
+  update: [profile: NewTeacherProfile]
 }>()
-
-/** `update_teacher`'ın `load_changed` kontrolüyle birebir aynı alan kümesi. */
-interface LoadSnapshot {
-  employmentType: EmploymentType
-  baseHours: number
-  maxExtraHours: number
-  otherExtraHours: number
-  chiefType: ChiefType
-}
 
 function emptyForm(): NewTeacher {
   return {
@@ -188,8 +183,6 @@ function emptyForm(): NewTeacher {
 
 const form = reactive<NewTeacher>(emptyForm())
 const branchSuggestions = ref<string[]>([])
-/** Düzenlemede pencere açılırken alınan yük anlık görüntüsü; yeni kayıtta `null`. */
-const originalLoad = ref<LoadSnapshot | null>(null)
 const isChangeDetailsOpen = ref(false)
 
 const isEdit = computed(() => props.teacher !== null)
@@ -223,31 +216,12 @@ const isValid = computed(
     form.firstName.trim().length > 0 &&
     form.lastName.trim().length > 0 &&
     form.field.trim().length > 0 &&
-    capacityWarning.value === null,
+    (isEdit.value || capacityWarning.value === null),
 )
 
-/**
- * `update_teacher` içindeki `load_changed` denetimiyle birebir aynı beş
- * alanı karşılaştırır. Yeni kayıtta karşılaştıracak bir öncekisi yoktur;
- * Rust tarafı `create_teacher`'da yükü KOŞULSUZ tarihçeye yazdığından
- * (bkz. `decide/teacher.rs::create_teacher`), burada da koşulsuz `true`.
- */
-const loadChanged = computed<boolean>(() => {
-  if (!isEdit.value) return true
-  if (!originalLoad.value) return false
-  const original = originalLoad.value
-  return (
-    form.employmentType !== original.employmentType ||
-    form.baseHours !== original.baseHours ||
-    form.maxExtraHours !== original.maxExtraHours ||
-    form.otherExtraHours !== original.otherExtraHours ||
-    form.chiefType !== original.chiefType
-  )
-})
-
-/** Dönem başlamışsa VE yük/şeflik değişiyorsa yürürlük tarihi/gerekçe sorulur. */
+/** Yalnız yeni kayıtta, dönem başlamışsa yürürlük tarihi/gerekçe sorulur. */
 const needsChangeDetails = computed(
-  () => props.term !== null && !props.term.isPlanning && loadChanged.value,
+  () => !isEdit.value && props.term !== null && !props.term.isPlanning,
 )
 
 // `ChangeDetailsDialog` `TermWithDates` zorunlu kılar; dönem henüz
@@ -290,16 +264,8 @@ watch(
         chiefType: teacher.chiefType,
         isActive: teacher.isActive === 1,
       })
-      originalLoad.value = {
-        employmentType: teacher.employmentType,
-        baseHours: teacher.baseHours,
-        maxExtraHours: teacher.maxExtraHours,
-        otherExtraHours: teacher.otherExtraHours,
-        chiefType: teacher.chiefType,
-      }
     } else {
       Object.assign(form, emptyForm())
-      originalLoad.value = null
     }
     isChangeDetailsOpen.value = false
   },
@@ -316,9 +282,26 @@ function emitSave(effectiveDate: string | null, reason: string | null): void {
   close()
 }
 
-/** Yalnız kimlik alanları değiştiyse doğrudan kaydeder; yük/şeflik değiştiyse
- * önce yürürlük tarihi ve gerekçeyi soran pencereyi açar. */
+/** Formdan yalnız profil alanlarını alır (yük alanları dahil edilmez). */
+function toProfile(): NewTeacherProfile {
+  return {
+    firstName: form.firstName,
+    lastName: form.lastName,
+    registryNo: form.registryNo,
+    field: form.field,
+    branches: [...form.branches],
+    isActive: form.isActive,
+  }
+}
+
+/** Düzenlemede yalnız profili yayar; yeni kayıtta dönem başlamışsa önce
+ * yürürlük tarihi ve gerekçeyi soran pencereyi açar. */
 function save(): void {
+  if (isEdit.value) {
+    emit('update', toProfile())
+    close()
+    return
+  }
   if (needsChangeDetails.value) {
     isChangeDetailsOpen.value = true
     return
