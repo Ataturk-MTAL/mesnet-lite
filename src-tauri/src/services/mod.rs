@@ -16,12 +16,15 @@ pub mod pre_migration_backup;
 pub mod student_list_apply;
 pub mod student_list_import;
 pub mod versions;
+pub mod data_dir_migration;
 
 pub(crate) mod change_input;
 mod legacy_reconcile_plan;
 
 #[cfg(test)]
 mod backup_tests;
+#[cfg(test)]
+mod data_dir_migration_tests;
 #[cfg(test)]
 mod versions_tests;
 #[cfg(test)]

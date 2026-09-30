@@ -85,7 +85,7 @@ Tüm veriler yalnız kendi bilgisayarınızdaki yerel SQLite dosyasında tutulur
 
 > This program will not transfer any information to other networked systems unless specifically requested by the user.
 
-Kaldırma: Windows'ta *Ayarlar → Uygulamalar*, macOS'ta uygulamayı Çöp Kutusu'na taşıma, Linux'ta paket yöneticisi. Veriler ayrı klasörde kalır (Windows: `%APPDATA%\ai.alplab.mesnet-lite`, macOS: `~/Library/Application Support/ai.alplab.mesnet-lite`, Linux: `~/.local/share/ai.alplab.mesnet-lite`); tamamen silmek için bu klasörü de silin.
+Kaldırma: Windows'ta *Ayarlar → Uygulamalar*, macOS'ta uygulamayı Çöp Kutusu'na taşıma, Linux'ta paket yöneticisi. Veriler ayrı klasörde kalır (Windows: `%APPDATA%\org.ataturkmtal.mesnet-lite`, macOS: `~/Library/Application Support/org.ataturkmtal.mesnet-lite`, Linux: `~/.local/share/org.ataturkmtal.mesnet-lite`); tamamen silmek için bu klasörü de silin. 0.1.5 öncesi sürümler verileri `ai.alplab.mesnet-lite` adlı klasörde tutuyordu; 0.1.5 ilk açılışta bunları yeni klasöre kopyalar ve eski klasörü yedek olarak yerinde bırakır — yeni sürümde verilerinizin tam olduğunu gördükten sonra eski klasörü silebilirsiniz.
 
 ## Yazar
 
