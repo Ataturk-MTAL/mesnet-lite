@@ -237,7 +237,7 @@ fn teacher_row(teacher: &NewTeacherProfile, load: &TeacherLoad) -> NewTeacher {
 }
 
 /// `teachers.chief_type` sütununun CHECK kısıtındaki değerler.
-fn chief_column(chief: ChiefType) -> &'static str {
+pub(crate) fn chief_column(chief: ChiefType) -> &'static str {
     match chief {
         ChiefType::None => "none",
         ChiefType::WorkshopLab => "workshop_lab",
@@ -248,7 +248,7 @@ fn chief_column(chief: ChiefType) -> &'static str {
 }
 
 /// `teachers.employment_type` sütununun değerleri.
-fn employment_column(employment: EmploymentType) -> &'static str {
+pub(crate) fn employment_column(employment: EmploymentType) -> &'static str {
     match employment {
         EmploymentType::Tenured => "tenured",
         EmploymentType::Contracted => "contracted",
