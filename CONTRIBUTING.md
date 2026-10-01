@@ -17,7 +17,7 @@
    ```
 2. `main`'e ve `dev`'e **doğrudan commit/push yapılmaz**. Her değişiklik bir Pull Request ile girer.
 3. İş dalı PR ile **`dev`'e** birleştirilir; CI yeşil olmadan birleştirilmez.
-4. Sürüm zamanı `dev` → `main` PR'ı açılır; birleşince `main` üzerinde sürüm etiketi (`vX.Y.Z`) gönderilir.
+4. Sürüm zamanı `dev` → `main` PR'ı açılır; birleşince sürüm kendiliğinden derlenip yayımlanır ve `vX.Y.Z` etiketi o anda oluşur (bkz. *Sürüm çıkarma*).
 5. Acil düzeltme (hotfix) de aynı yoldan gider: `dev`'den dal → `dev` → `main`.
 
 ## Dal adları
@@ -46,7 +46,7 @@ Depo herkese açıktır. **Gerçek öğrenci, veli, öğretmen ya da işletme ve
 
 ## Sürüm çıkarma
 
-1. `dev`'de `package.json` ve `src-tauri/tauri.conf.json` sürümünü artır (bir `chore/` dalında).
-2. `dev` → `main` PR'ı; CI yeşil → birleştir.
-3. `git switch main && git pull && git tag vX.Y.Z && git push origin vX.Y.Z`
-4. Actions Windows, macOS ve Linux kurulum dosyalarını derleyip sürümü yayınlar.
+1. Bir `chore/` dalında `package.json`, `src-tauri/Cargo.toml` ve `src-tauri/tauri.conf.json` sürümünü artır; `release-notes/X.Y.Z.md` dosyasına kullanıcıya dönük Türkçe sürüm notlarını yaz. Bu metin hem GitHub sürüm sayfasında hem uygulama içi güncelleme penceresinde görünür. Dosya yoksa sürüm işi durur.
+2. Bu dalı `dev`'e, ardından `dev` → `main` PR'ını birleştir (CI yeşil olmadan değil).
+3. `main`'e gelen push `Sürüm` iş akışını başlatır: taslak sürüm açılır, Windows, macOS, Linux ve MSIX derlenip eklenir, hepsi bitince taslak yayımlanır ve `vX.Y.Z` etiketi oluşur. Elle etiket gönderilmez.
+4. Bir derleme düşerse sürüm taslakta kalır; Actions'ta işi yeniden çalıştırmak aynı taslağa devam eder.

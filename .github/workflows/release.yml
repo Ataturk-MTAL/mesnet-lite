@@ -1,18 +1,101 @@
 name: Sürüm
 
-# `v0.2.0` gibi bir etiket gönderildiğinde dört platform için kurulum
-# dosyaları derlenir ve doğrudan yayınlanan bir GitHub sürümüne eklenir.
+# `main`e gelen her push'ta çalışır (sürüm PR'ı birleşince). Sürüm numarası
+# `src-tauri/tauri.conf.json`dan okunur:
+#
+# - `vX.Y.Z` zaten yayımlanmışsa hiçbir şey yapılmaz (sürüm değişmeden gelen
+#   push'lar böylece atlanır).
+# - Değilse `release-notes/X.Y.Z.md` okunur (yoksa iş durur), taslak bir
+#   GitHub sürümü açılır, dört platform + MSIX derlenip ona yüklenir ve en son
+#   taslak yayımlanır — etiket o anda oluşur. Bir derleme düşerse yarım sürüm
+#   yayına çıkmaz; iş yeniden çalıştırılınca aynı taslağa devam edilir.
+#
+# Neden etiketle değil `main`le tetikleniyor: GitHub Actions önbelleği bir
+# etiketten diğerine geçmez, yalnız varsayılan daldan (`main`) okunabilir.
+# Etiketle tetiklenen her sürüm Rust bağımlılıklarını sıfırdan derliyordu.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# Aynı anda iki sürüm işi aynı taslağa yazmasın; çalışan iş iptal edilmez.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  release:
+  prepare:
+    name: Hazırlık
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.plan.outputs.should_release }}
+      tag: ${{ steps.plan.outputs.tag }}
+      release_id: ${{ steps.draft.outputs.release_id }}
+      notes: ${{ steps.plan.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sürümü ve notları belirle
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version src-tauri/tauri.conf.json)
+          tag="v${version}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+          published=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"${tag}\" and .draft == false) | .id")
+          if [ -n "${published}" ]; then
+            echo "${tag} zaten yayımlanmış; yapılacak bir şey yok."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          notes_file="release-notes/${version}.md"
+          if [ ! -s "${notes_file}" ]; then
+            echo "::error::${notes_file} yok ya da boş. Sürüm notlarını bu dosyaya yazıp yeniden çalıştırın."
+            exit 1
+          fi
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            cat "${notes_file}"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+
+      - name: Taslak sürümü aç (ya da yarım kalanı bul)
+        id: draft
+        if: steps.plan.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id" | head -n 1)
+          if [ -z "${id}" ]; then
+            body=$(mktemp)
+            {
+              cat "release-notes/${version}.md"
+              echo
+              cat .github/release-install-note.md
+            } > "${body}"
+            gh release create "${TAG}" --draft --target "${GITHUB_SHA}" \
+              --title "MESNET.Lite ${TAG}" --notes-file "${body}"
+            id=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+              --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id" | head -n 1)
+          fi
+          echo "release_id=${id}" >> "$GITHUB_OUTPUT"
+
+  build:
     name: Sürüm (${{ matrix.name }})
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -21,18 +104,22 @@ jobs:
             os: macos-latest
             args: --target aarch64-apple-darwin
             rust_targets: aarch64-apple-darwin
+            cache_key: macos-arm64
           - name: macOS (Intel)
             os: macos-latest
             args: --target x86_64-apple-darwin
             rust_targets: x86_64-apple-darwin
+            cache_key: macos-x64
           - name: Windows
             os: windows-latest
             args: ""
             rust_targets: ""
+            cache_key: windows
           - name: Linux
             os: ubuntu-22.04
             args: ""
             rust_targets: ""
+            cache_key: linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -51,9 +138,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_targets }}
+      # Her hedefin kendi önbellek anahtarı var: iki macOS işi aynı makine
+      # türünde koştuğu için anahtar ayrılmazsa birbirinin önbelleğini ezer.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.cache_key }}
       - run: pnpm install --frozen-lockfile
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -64,11 +154,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'MESNET.Lite ${{ github.ref_name }}'
-          releaseBody: 'Kurulum dosyaları aşağıda. Windows kurulumu yönetici izni ister. Dosyalar imzasız olduğundan SmartScreen ya da Avast gibi antivirüsler uyarı verebilir; bu bir yanlış alarmdır — ayrıntı ve çözüm için README''deki "Windows: kurulum ve antivirüs uyarısı" bölümüne bakın: https://github.com/Ataturk-MTAL/mesnet-lite#windows-kurulum-ve-antivirüs-uyarısı . macOS paketleri de imzasızdır; ilk açılışta sağ tık → Aç.'
-          releaseDraft: false
-          prerelease: false
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          # `latest.json`daki `notes` buradan gelir: uygulama içi güncelleme
+          # penceresi kullanıcıya bu metni gösterir.
+          releaseBody: ${{ needs.prepare.outputs.notes }}
           # `latest.json` (güncelleyicinin okuduğu dosya) varsayılan olarak
           # yüklenir (`uploadUpdaterJson: true`); açıkça yazıldı ki sessizce
           # kapatılmasın. Windows'ta hem NSIS hem MSI varsa NSIS seçilir:
@@ -76,3 +166,24 @@ jobs:
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+  msix:
+    name: MSIX
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    uses: ./.github/workflows/msix.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+    secrets: inherit
+
+  publish:
+    name: Yayımla
+    needs: [prepare, build, msix]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Taslağı yayımla
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest
