@@ -68,13 +68,9 @@ Yapı: `src/` Vue 3 + TypeScript + OpenVue arayüzü, `src-tauri/` Rust arka ucu
 
 ## Sürüm çıkarma
 
-`src-tauri/tauri.conf.json` ve `package.json` içindeki sürümü artırın, sonra etiket gönderin:
+`package.json`, `src-tauri/Cargo.toml` ve `src-tauri/tauri.conf.json` içindeki sürümü artırın, `release-notes/X.Y.Z.md` dosyasına sürüm notlarını yazın ve değişikliği `dev` üzerinden `main`'e PR ile birleştirin.
 
-```bash
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-GitHub Actions Windows, macOS ve Linux kurulum dosyalarını derleyip sürümü yayınlar.
+`main`'e gelen push GitHub Actions'ta `Sürüm` iş akışını başlatır: Windows, macOS, Linux ve MSIX paketleri derlenir, sürüm yayımlanır ve `vX.Y.Z` etiketi kendiliğinden oluşur. Elle etiket gönderilmez. Ayrıntı: [CONTRIBUTING.md](CONTRIBUTING.md#sürüm-çıkarma).
 
 ## Gizlilik
 
