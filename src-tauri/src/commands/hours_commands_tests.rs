@@ -329,6 +329,7 @@
                 // HAVUZ aşımını sınar; tavan hiç devreye girmemeli.
                 one_way_distance_km: None,
                 district: String::new(),
+                neighborhood: String::new(),
                 notes: String::new(),
             },
         )

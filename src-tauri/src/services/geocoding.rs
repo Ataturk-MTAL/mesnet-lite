@@ -1,5 +1,6 @@
 use crate::db::companies;
-use crate::domain::models::Company;
+use crate::domain::address::parse_district_province;
+use crate::domain::models::{geocode_precision, Company};
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -39,13 +40,27 @@ pub struct GeocodeResult {
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GeocodeSummary {
+    /// Tam adresten VE mahalle düzeyinden çözülenlerin toplamı.
     pub resolved: i64,
+    /// `resolved`ın içinden yalnız mahalle düzeyinde (yaklaşık) çözülenler.
+    pub approximate: i64,
     pub failed: i64,
     pub skipped: i64,
     pub results: Vec<GeocodeResult>,
     /// Kullanıcıya gösterilecek Türkçe uyarılar (ör. ağ hatası nedeniyle
     /// başarısız olan aramalar).
     pub warnings: Vec<String>,
+}
+
+impl GeocodeSummary {
+    /// Çözülen bir işletmeyi sayar; mahalle düzeyindeki sonuç hem `resolved`
+    /// hem `approximate` içinde sayılır.
+    fn record_resolved(&mut self, precision: &str) {
+        self.resolved += 1;
+        if precision == geocode_precision::NEIGHBORHOOD {
+            self.approximate += 1;
+        }
+    }
 }
 
 /// Nominatim `/search` yanıtındaki tek sonuç satırı. Nominatim `lat`/`lon`
@@ -98,76 +113,152 @@ pub async fn geocode_address(
     Ok(parse_response(&body))
 }
 
+/// Tek bir sorguyu çözen arama. Üretimde Nominatim (`NominatimGeocoder`),
+/// testlerde ağa çıkmayan sahte bir uygulama kullanılır; basamak mantığı
+/// (`resolve_location`) böylece ağsız sınanır.
+trait Geocoder {
+    async fn search(&mut self, query: &str) -> AppResult<Option<(f64, f64)>>;
+}
+
+/// Her isteği saniyede-bir sınırına uyarak yollayan Nominatim istemcisi.
+/// Sınır BURADA uygulanır, çünkü bir işletme için tek yerine iki istek
+/// atılabilir (tam adres + mahalle yedeği) ve her istek sayılır.
+struct NominatimGeocoder {
+    client: reqwest::Client,
+    is_first_request: bool,
+}
+
+impl NominatimGeocoder {
+    fn new() -> Self {
+        Self { client: reqwest::Client::new(), is_first_request: true }
+    }
+}
+
+impl Geocoder for NominatimGeocoder {
+    async fn search(&mut self, query: &str) -> AppResult<Option<(f64, f64)>> {
+        // İlk istekten önce beklemeye gerek yok, sonraki her istekten önce bekleriz.
+        if self.is_first_request {
+            self.is_first_request = false;
+        } else {
+            sleep(RATE_LIMIT_DELAY).await;
+        }
+        geocode_address(&self.client, query).await
+    }
+}
+
+/// Çözülen konum ve kesinliği (`geocode_precision::*`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Located {
+    latitude: f64,
+    longitude: f64,
+    precision: &'static str,
+}
+
+/// Mahalle düzeyindeki yedek sorgu: `"{mahalle}, {ilçe}, {il}, Türkiye"`.
+/// Uzun sokak/kapı numaralı adresler Nominatim'de sonuç vermezken bu kısa
+/// biçim mahallelerin büyük çoğunluğunu `suburb` düzeyinde çözer (Issue #42).
+/// Mahalle, ilçe ya da il bilinmiyorsa `None` — yedek basamak atlanır. İl,
+/// ilçeyle aynı eşleşmeden (`parse_district_province`) gelir.
+fn neighborhood_query(company: &Company) -> Option<String> {
+    let neighborhood = company.neighborhood.trim();
+    let district = company.district.trim();
+    let (_, province) = parse_district_province(&company.address_text)?;
+    if neighborhood.is_empty() || district.is_empty() {
+        return None;
+    }
+    Some(format!("{neighborhood}, {district}, {province}, Türkiye"))
+}
+
+/// Basamaklı adres çözümü: (1) tam adres, (2) bulunamazsa mahalle düzeyi.
+/// Yalnız "sonuç yok" (`Ok(None)`) 2. basamağa düşer; ağ hatası (`Err`)
+/// düşmez, çünkü bağlantı yokken ikinci istek anlamsızdır.
+async fn resolve_location(
+    geocoder: &mut impl Geocoder,
+    company: &Company,
+) -> AppResult<Option<Located>> {
+    if let Some((latitude, longitude)) = geocoder.search(&company.address_text).await? {
+        return Ok(Some(Located { latitude, longitude, precision: geocode_precision::ADDRESS }));
+    }
+    let Some(query) = neighborhood_query(company) else {
+        return Ok(None);
+    };
+    let found = geocoder.search(&query).await?;
+    Ok(found.map(|(latitude, longitude)| Located {
+        latitude,
+        longitude,
+        precision: geocode_precision::NEIGHBORHOOD,
+    }))
+}
+
 /// Konumu olmayan (enlem veya boylamı eksik) tüm işletmeleri sırayla çözer.
 /// OSM kullanım politikası saniyede en fazla 1 istek gerektirdiği için art
-/// arda gelen istekler arasına `RATE_LIMIT_DELAY` kadar bekleme konur.
-/// Başarısız bir arama toplu işlemi durdurmaz: kayıt 'failed' olarak
-/// işaretlenip sıradaki işletmeye geçilir.
+/// arda gelen istekler arasına `RATE_LIMIT_DELAY` kadar bekleme konur
+/// (`NominatimGeocoder`). Başarısız bir arama toplu işlemi durdurmaz: kayıt
+/// 'failed' olarak işaretlenip sıradaki işletmeye geçilir.
 pub async fn geocode_pending(pool: &SqlitePool) -> AppResult<GeocodeSummary> {
-    let client = reqwest::Client::new();
+    let mut geocoder = NominatimGeocoder::new();
     // `list` (süzülmüş) BİLEREK kullanılır: pasif bir işletme hiçbir yönetim
     // ekranında (harita, atama havuzu) görünmez, onun için Nominatim'e istek
     // atıp saniyede-bir sınırını harcamanın anlamı yok.
     let all_companies = companies::list(pool).await?;
 
     let mut summary = GeocodeSummary::default();
-    let mut is_first_request = true;
-
     for company in &all_companies {
-        if !needs_geocoding(company) {
-            summary.skipped += 1;
-            summary.results.push(GeocodeResult {
-                company_id: company.id,
-                company_name: company.name.clone(),
-                status: GeocodeOutcome::Skipped,
-            });
-            continue;
-        }
-
-        // Saniyede bir istek: ilk istekten önce beklemeye gerek yok,
-        // sonraki her istekten önce bekleriz.
-        if is_first_request {
-            is_first_request = false;
+        let (status, warning) = if needs_geocoding(company) {
+            geocode_company(pool, &mut geocoder, company, &mut summary).await?
         } else {
-            sleep(RATE_LIMIT_DELAY).await;
+            summary.skipped += 1;
+            (GeocodeOutcome::Skipped, None)
+        };
+        if let Some(warning) = warning {
+            summary.warnings.push(warning);
         }
-
-        match geocode_address(&client, &company.address_text).await {
-            Ok(Some((latitude, longitude))) => {
-                companies::set_location(pool, company.id, latitude, longitude, "resolved")
-                    .await?;
-                summary.resolved += 1;
-                summary.results.push(GeocodeResult {
-                    company_id: company.id,
-                    company_name: company.name.clone(),
-                    status: GeocodeOutcome::Resolved { latitude, longitude },
-                });
-            }
-            Ok(None) => {
-                companies::mark_geocode_failed(pool, company.id).await?;
-                summary.failed += 1;
-                summary.results.push(GeocodeResult {
-                    company_id: company.id,
-                    company_name: company.name.clone(),
-                    status: GeocodeOutcome::Failed,
-                });
-            }
-            Err(err) => {
-                companies::mark_geocode_failed(pool, company.id).await?;
-                summary.failed += 1;
-                summary
-                    .warnings
-                    .push(format!("{}: konum çözümlenemedi ({err})", company.name));
-                summary.results.push(GeocodeResult {
-                    company_id: company.id,
-                    company_name: company.name.clone(),
-                    status: GeocodeOutcome::Failed,
-                });
-            }
-        }
+        summary.results.push(GeocodeResult {
+            company_id: company.id,
+            company_name: company.name.clone(),
+            status,
+        });
     }
 
     Ok(summary)
+}
+
+/// Tek işletmeyi çözer, sonucu veritabanına yazar ve sayaçları günceller.
+/// Ağ hatasında uyarı metnini de döner.
+async fn geocode_company(
+    pool: &SqlitePool,
+    geocoder: &mut impl Geocoder,
+    company: &Company,
+    summary: &mut GeocodeSummary,
+) -> AppResult<(GeocodeOutcome, Option<String>)> {
+    match resolve_location(geocoder, company).await {
+        Ok(Some(located)) => {
+            companies::set_location(
+                pool,
+                company.id,
+                located.latitude,
+                located.longitude,
+                "resolved",
+                located.precision,
+            )
+            .await?;
+            summary.record_resolved(located.precision);
+            let outcome =
+                GeocodeOutcome::Resolved { latitude: located.latitude, longitude: located.longitude };
+            Ok((outcome, None))
+        }
+        Ok(None) => {
+            companies::mark_geocode_failed(pool, company.id).await?;
+            summary.failed += 1;
+            Ok((GeocodeOutcome::Failed, None))
+        }
+        Err(err) => {
+            companies::mark_geocode_failed(pool, company.id).await?;
+            summary.failed += 1;
+            let warning = format!("{}: konum çözümlenemedi ({err})", company.name);
+            Ok((GeocodeOutcome::Failed, Some(warning)))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -216,6 +307,7 @@ mod tests {
             longitude: None,
             one_way_distance_km: Some(6.8),
             district: String::new(),
+            neighborhood: String::new(),
             notes: String::new(),
         }
     }
@@ -231,9 +323,149 @@ mod tests {
             .unwrap();
         assert!(needs_geocoding(&created));
 
-        let located = companies::set_location(&pool, created.id, 36.8, 34.6, "manual")
+        let located = companies::set_location(&pool, created.id, 36.8, 34.6, "manual", geocode_precision::MANUAL)
             .await
             .unwrap();
         assert!(!needs_geocoding(&located));
+    }
+
+    /// Sıralı yanıtları veren, gelen sorguları kaydeden sahte arama; ağa çıkmaz.
+    struct FakeGeocoder {
+        replies: Vec<AppResult<Option<(f64, f64)>>>,
+        queries: Vec<String>,
+    }
+
+    impl FakeGeocoder {
+        fn new(replies: Vec<AppResult<Option<(f64, f64)>>>) -> Self {
+            Self { replies, queries: Vec::new() }
+        }
+    }
+
+    impl Geocoder for FakeGeocoder {
+        async fn search(&mut self, query: &str) -> AppResult<Option<(f64, f64)>> {
+            self.queries.push(query.to_string());
+            self.replies.remove(0)
+        }
+    }
+
+    fn company_with(address: &str, neighborhood: &str, district: &str) -> Company {
+        Company {
+            id: 1,
+            name: "Test İşletme A".into(),
+            contact_first_name: String::new(),
+            contact_last_name: String::new(),
+            phone: String::new(),
+            email: String::new(),
+            address_text: address.into(),
+            latitude: None,
+            longitude: None,
+            geocode_status: "pending".into(),
+            geocode_precision: String::new(),
+            one_way_distance_km: None,
+            district: district.into(),
+            neighborhood: neighborhood.into(),
+            notes: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    const LONG_ADDRESS: &str =
+        "Deneme Mahallesi, Örnek Sokak No:5, 33110 Yenişehir/Mersin, Türkiye";
+
+    #[test]
+    fn neighborhood_query_joins_neighborhood_district_and_province() {
+        let company = company_with(LONG_ADDRESS, "Deneme", "Yenişehir");
+        assert_eq!(
+            neighborhood_query(&company),
+            Some("Deneme, Yenişehir, Mersin, Türkiye".to_string())
+        );
+    }
+
+    #[test]
+    fn neighborhood_query_is_none_when_any_part_is_unknown() {
+        // Mahalle yok.
+        assert_eq!(neighborhood_query(&company_with(LONG_ADDRESS, "", "Yenişehir")), None);
+        // İlçe yok.
+        assert_eq!(neighborhood_query(&company_with(LONG_ADDRESS, "Deneme", "  ")), None);
+        // İl adresten çıkarılamıyor (posta kodu parçası yok).
+        assert_eq!(
+            neighborhood_query(&company_with("Deneme Mah., Mersin", "Deneme", "Yenişehir")),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_location_uses_the_full_address_first_and_stops_when_found() {
+        let company = company_with(LONG_ADDRESS, "Deneme", "Yenişehir");
+        let mut geocoder = FakeGeocoder::new(vec![Ok(Some((36.8, 34.6)))]);
+
+        let located = resolve_location(&mut geocoder, &company).await.unwrap().unwrap();
+
+        assert_eq!(geocoder.queries, vec![LONG_ADDRESS.to_string()]);
+        assert_eq!(located.precision, "address");
+        assert_eq!((located.latitude, located.longitude), (36.8, 34.6));
+    }
+
+    #[tokio::test]
+    async fn resolve_location_falls_back_to_the_neighborhood_when_the_address_has_no_result() {
+        let company = company_with(LONG_ADDRESS, "Deneme", "Yenişehir");
+        let mut geocoder = FakeGeocoder::new(vec![Ok(None), Ok(Some((36.7, 34.5)))]);
+
+        let located = resolve_location(&mut geocoder, &company).await.unwrap().unwrap();
+
+        assert_eq!(
+            geocoder.queries,
+            vec![LONG_ADDRESS.to_string(), "Deneme, Yenişehir, Mersin, Türkiye".to_string()]
+        );
+        assert_eq!(located.precision, "neighborhood");
+        assert_eq!((located.latitude, located.longitude), (36.7, 34.5));
+    }
+
+    #[tokio::test]
+    async fn resolve_location_returns_none_when_both_steps_find_nothing() {
+        let company = company_with(LONG_ADDRESS, "Deneme", "Yenişehir");
+        let mut geocoder = FakeGeocoder::new(vec![Ok(None), Ok(None)]);
+
+        assert!(resolve_location(&mut geocoder, &company).await.unwrap().is_none());
+        assert_eq!(geocoder.queries.len(), 2);
+    }
+
+    /// Ağ hatası (`Err`) ikinci basamağa DÜŞMEZ: bağlantı yokken ikinci bir
+    /// istek atmak anlamsız ve saniyede-bir sınırını boşa harcar.
+    #[tokio::test]
+    async fn resolve_location_does_not_fall_back_after_a_network_error() {
+        let company = company_with(LONG_ADDRESS, "Deneme", "Yenişehir");
+        let mut geocoder =
+            FakeGeocoder::new(vec![Err(AppError::Geocoding("bağlantı yok".into()))]);
+
+        assert!(resolve_location(&mut geocoder, &company).await.is_err());
+        assert_eq!(geocoder.queries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn resolve_location_propagates_an_error_from_the_fallback_step() {
+        let company = company_with(LONG_ADDRESS, "Deneme", "Yenişehir");
+        let mut geocoder =
+            FakeGeocoder::new(vec![Ok(None), Err(AppError::Geocoding("bağlantı yok".into()))]);
+
+        assert!(resolve_location(&mut geocoder, &company).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_location_makes_a_single_request_without_a_neighborhood() {
+        let company = company_with(LONG_ADDRESS, "", "Yenişehir");
+        let mut geocoder = FakeGeocoder::new(vec![Ok(None)]);
+
+        assert!(resolve_location(&mut geocoder, &company).await.unwrap().is_none());
+        assert_eq!(geocoder.queries.len(), 1);
+    }
+
+    #[test]
+    fn summary_tracks_approximate_inside_resolved() {
+        let mut summary = GeocodeSummary::default();
+        summary.record_resolved(geocode_precision::ADDRESS);
+        summary.record_resolved(geocode_precision::NEIGHBORHOOD);
+        assert_eq!((summary.resolved, summary.approximate), (2, 1));
     }
 }

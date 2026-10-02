@@ -166,6 +166,7 @@ pub fn parse_jotform_csv(content: &str) -> AppResult<ParsedCsv> {
             // CSV'de ilçe sütunu yok; boş bırakılır, `companies::create`
             // adresten türetir (bkz. domain/address.rs::parse_district).
             district: String::new(),
+            neighborhood: String::new(),
             notes: String::new(),
         };
 
