@@ -349,7 +349,7 @@ mod tests {
         let hours = hours_timeline(&[(ymd(2026, 9, 1), Some(hours(6, false, false)))]);
         let coordination = coordination_timeline(&[(
             ymd(2026, 9, 1),
-            Some(CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None }),
+            Some(CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None, source: Default::default() }),
         )]);
         let plan = plan_company_policies("İşletme A", Some(10.0), &counts, &hours, &coordination, &[], &rules, ymd(2026, 11, 3));
         assert_eq!(plan.reductions, vec![(ymd(2026, 11, 3), 0, 0)]);

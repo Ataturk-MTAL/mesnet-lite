@@ -96,6 +96,29 @@
       :district-options="districtOptions"
     />
 
+    <Card>
+      <template #title>{{ labels.settings.balanceGap.title }}</template>
+      <template #content>
+        <div class="grid">
+          <div class="field">
+            <label for="balance-gap">{{ labels.settings.balanceGap.label }}</label>
+            <InputNumber
+              input-id="balance-gap"
+              v-model="balanceGap"
+              :min="BALANCE_GAP_MIN"
+              :max="BALANCE_GAP_MAX"
+              :max-fraction-digits="0"
+              fluid
+              :invalid="!isBalanceGapValid(balanceGap)"
+              :aria-label="labels.settings.balanceGap.label"
+              aria-describedby="balance-gap-help"
+            />
+            <small id="balance-gap-help" class="hint">{{ labels.settings.balanceGap.hint }}</small>
+          </div>
+        </div>
+      </template>
+    </Card>
+
     <div class="actions">
       <Button :label="labels.common.save" icon="pi pi-check" :loading="isSaving" @click="save" />
     </div>
@@ -232,6 +255,14 @@ import {
   uniqueValues,
   validateGrouping,
 } from '../utils/groupingSettings'
+import {
+  BALANCE_GAP_DEFAULT,
+  BALANCE_GAP_MAX,
+  BALANCE_GAP_MIN,
+  isBalanceGapValid,
+  parseBalanceGap,
+  serializeBalanceGap,
+} from '../utils/balanceGapSetting'
 import type { BackupStatus, Company, LatLng, User } from '../types/models'
 
 const toast = useToast()
@@ -259,6 +290,8 @@ const form = reactive({
 })
 
 const grouping = ref(defaultGrouping())
+/** Girişte boşaltılmış alan `null`. */
+const balanceGap = ref<number | null>(BALANCE_GAP_DEFAULT)
 const companyPlaces = ref<Pick<Company, 'neighborhood' | 'district'>[]>([])
 const neighborhoodOptions = computed<string[]>(() =>
   uniqueValues(companyPlaces.value.map((c) => c.neighborhood)).sort((a, b) => a.localeCompare(b, 'tr')),
@@ -334,6 +367,7 @@ function applySettings(settings: SettingsMap): void {
   form.maxDailyLessons = resolveMaxDailyLessons(settings)
   schoolLocation.value = parseLocation(settings)
   grouping.value = parseGroupingSettings(settings)
+  balanceGap.value = parseBalanceGap(settings)
 }
 
 async function load(): Promise<void> {
@@ -486,6 +520,17 @@ async function save(): Promise<void> {
     return
   }
 
+  const gap = balanceGap.value
+  if (!isBalanceGapValid(gap)) {
+    toast.add({
+      severity: 'warn',
+      summary: labels.common.error,
+      detail: labels.settings.balanceGap.invalid,
+      life: 5000,
+    })
+    return
+  }
+
   isSaving.value = true
   try {
     const entries: SettingsMap = {
@@ -501,6 +546,7 @@ async function save(): Promise<void> {
       school_latitude: schoolLocation.value ? String(schoolLocation.value.latitude) : '',
       school_longitude: schoolLocation.value ? String(schoolLocation.value.longitude) : '',
       ...serializeGroupingSettings(grouping.value),
+      ...serializeBalanceGap(gap),
     }
     applySettings(await settingsApi.save(entries))
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })

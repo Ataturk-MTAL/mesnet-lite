@@ -618,3 +618,8 @@ async fn moving_a_company_to_another_cell_of_the_same_teacher_is_not_an_overlap(
     let moved = ChangeCommand::AssignCoordinators { rows: vec![cell(b, teacher, 2, 2)] };
     expect_committed(commit(&w.pool, request(None, moved), planning_today()).await);
 }
+
+// `ApplyProposal` testleri (Issue #43) bu dosyanın 800 satır sınırını aşmasın
+// diye ayrı dosyada; yukarıdaki yardımcıları `super::` ile kullanır.
+#[path = "change_service_proposal_tests.rs"]
+mod proposal;

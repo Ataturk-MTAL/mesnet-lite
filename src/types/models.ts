@@ -294,6 +294,7 @@ export type ChangeCommand =
   | { type: 'deleteStudent'; studentId: number }
   | { type: 'setCompanyHours'; rows: CompanyHoursRow[] }
   | { type: 'assignCoordinators'; rows: CoordinatorAssignmentRow[] }
+  | { type: 'applyProposal'; hours: CompanyHoursRow[]; assign: CoordinatorAssignmentRow[]; release: number[] }
   | { type: 'endCoordination'; companyId: number }
   | { type: 'clearCoordination' }
   | { type: 'createTeacher'; teacher: NewTeacherProfile; load: TeacherLoadInput }

@@ -188,3 +188,20 @@ describe('HistoryEntryCard', () => {
     expect(wrapper.emitted('deleted')).toBeUndefined()
   })
 })
+
+describe('HistoryEntryCard küme türü etiketi', () => {
+  it('apply_proposal kümesini "Dağıtım önerisi uygulandı" etiketiyle gösterir', () => {
+    const wrapper = mountCard(baseEntry({ kind: 'apply_proposal' }))
+
+    expect(wrapper.find('[data-testid="change-set-kind-badge"]').text()).toBe(labels.history.changeSetKind.apply_proposal)
+    expect(labels.history.changeSetKind.apply_proposal).toBe('Dağıtım önerisi uygulandı')
+    wrapper.unmount()
+  })
+
+  it('bilinmeyen küme türünde etiket çıkarmaz', () => {
+    const wrapper = mountCard(baseEntry({ kind: 'transfer_student' }))
+
+    expect(wrapper.find('[data-testid="change-set-kind-badge"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})

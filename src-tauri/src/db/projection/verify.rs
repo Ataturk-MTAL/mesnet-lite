@@ -145,13 +145,14 @@ struct CoordinationRow {
     visit_hour: i64,
     is_forced: i64,
     force_reason: Option<String>,
+    source: String,
     source_event_id: i64,
 }
 
 async fn verify_coordination(conn: &mut SqliteConnection, key: &StreamKey, ordered: &[TimedEvent]) -> AppResult<Vec<ProjectionDrift>> {
     let expected = fold_intervals(ordered, apply_coordination);
     let actual: Vec<CoordinationRow> = sqlx::query_as(
-        "SELECT valid_from, valid_to, teacher_id, visit_day, visit_hour, is_forced, force_reason, source_event_id
+        "SELECT valid_from, valid_to, teacher_id, visit_day, visit_hour, is_forced, force_reason, source, source_event_id
          FROM coordination_periods WHERE company_id = ?1 AND term = ?2 ORDER BY valid_from",
     )
     .bind(key.subject_id)
@@ -171,6 +172,7 @@ async fn verify_coordination(conn: &mut SqliteConnection, key: &StreamKey, order
             && exp.state.visit_hour == act.visit_hour
             && exp.state.is_forced == (act.is_forced != 0)
             && exp.state.force_reason == act.force_reason
+            && exp.state.source.as_str() == act.source
             && exp.source_event_id == act.source_event_id;
         if !matches {
             drifts.push(drift("coordination_periods", key.subject_id, format!("beklenen {:?}, tabloda kaynak={}", exp.state, act.source_event_id)));

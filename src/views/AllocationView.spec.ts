@@ -15,7 +15,10 @@ import type {
   BoardCompany,
   BoardTeacher,
   NewAssignment,
+  ProposalMode,
 } from '../api/assignments'
+import type { HoursBoard, HoursRow } from '../api/hours'
+import { proposalFixture, proposedAssignmentFixture } from '../components/allocation/proposalFixture'
 import { labels } from '../i18n/labels'
 import { useSelectionStore } from '../stores/selection'
 import { useTermStore } from '../stores/term'
@@ -23,7 +26,7 @@ import { useAsOfDateStore } from '../stores/asOfDate'
 import type { ChangeOutcome, ChangeRequest, EffectiveChangeInput, TermWithDates } from '../types/models'
 
 const getBoardMock = vi.fn<(asOf: string | null) => Promise<AssignmentBoard>>()
-const proposeMock = vi.fn<() => Promise<AllocationProposal>>()
+const proposeMock = vi.fn<(mode: ProposalMode) => Promise<AllocationProposal>>()
 const assignMock = vi.fn<(input: NewAssignment, change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
 const unassignMock = vi.fn<(companyId: number, change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
 const clearMock = vi.fn<(change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
@@ -33,13 +36,51 @@ vi.mock('../api/assignments', async () => {
     ...actual,
     assignmentsApi: {
       get: (asOf: string | null = null) => getBoardMock(asOf),
-      propose: () => proposeMock(),
+      propose: (mode: ProposalMode) => proposeMock(mode),
       assign: (input: NewAssignment, change?: EffectiveChangeInput) => assignMock(input, change),
       unassign: (companyId: number, change?: EffectiveChangeInput) => unassignMock(companyId, change),
       clear: (change?: EffectiveChangeInput) => clearMock(change),
     },
   }
 })
+
+const hoursGetMock = vi.fn<() => Promise<HoursBoard>>()
+vi.mock('../api/hours', () => ({
+  hoursApi: { get: () => hoursGetMock() },
+}))
+
+/** Mevcut saat kaydı; kilit ve not alanları öneri uygulamasında korunmalıdır. */
+function hoursRowFixture(overrides: Partial<HoursRow> = {}): HoursRow {
+  return {
+    companyId: 1,
+    companyName: 'Firma A',
+    addressText: '',
+    oneWayDistanceKm: null,
+    roundTripDistanceKm: null,
+    studentCount: 1,
+    maxHours: 8,
+    awardedHours: 4,
+    isHonorary: false,
+    isLocked: false,
+    notes: '',
+    isSaved: true,
+    ...overrides,
+  }
+}
+
+function hoursBoardFixture(rows: HoursRow[]): HoursBoard {
+  return {
+    term: '2026-2027/1',
+    rows,
+    poolHours: 100,
+    totalAwarded: 0,
+    totalMax: 0,
+    honoraryCount: 0,
+    lockedCount: 0,
+    withoutRuleCount: 0,
+    warnings: [],
+  }
+}
 
 /** Etki özeti bu testlerde okunmaz; yalnız `changeSetId` anlamlıdır. */
 function committedOutcome(changeSetId: number): ChangeOutcome {
@@ -105,6 +146,7 @@ function companyFixture(overrides: Partial<BoardCompany> = {}): BoardCompany {
     visitEndHour: null,
     isForced: false,
     forceReason: null,
+    assignmentSource: null,
     ...overrides,
   }
 }
@@ -167,6 +209,7 @@ async function mountView(companies: BoardCompany[], boardOverrides: Partial<Assi
 beforeEach(() => {
   getBoardMock.mockReset()
   proposeMock.mockReset()
+  hoursGetMock.mockReset()
   assignMock.mockReset()
   commitChangeMock.mockReset()
   confirmRequireMock.mockClear()
@@ -599,26 +642,66 @@ describe('AllocationView dönem başladıysa yazımlar tarih penceresinden geçe
     wrapper.unmount()
   })
 
-  /** İki kalemli öneriyi kurar, görünümü açar ve öneri diyaloğunu getirir. */
-  async function mountWithProposal() {
+  /** Öneriyi kurar, görünümü açar ve öneri diyaloğunu getirir. Varsayılan: iki yeni atama,
+   *  Firma A'nın saati 4 → 2 (kilitli, notlu), Firma C bırakılıyor, Firma Z yerinde kalıyor. */
+  async function mountWithProposal(proposal?: AllocationProposal) {
     const teacher = startedTeacher()
     const companyA = companyFixture({ companyId: 1, companyName: 'Firma A' })
     const companyB = companyFixture({ companyId: 2, companyName: 'Firma B' })
     const wrapper = await mountView([companyA, companyB], { teachers: [teacher] })
-    const item = (companyId: number, companyName: string, visitDay: number) => ({
-      companyId,
-      companyName,
-      teacherId: 1,
-      teacherName: teacher.teacherName,
-      awardedHours: 1,
-      visitDay,
-      visitHour: 9,
-      exactBranchMatch: true,
-    })
-    proposeMock.mockResolvedValue({
-      assignments: [item(1, 'Firma A', 1), item(2, 'Firma B', 2)],
-      unassigned: [],
-    })
+    hoursGetMock.mockResolvedValue(
+      hoursBoardFixture([
+        hoursRowFixture({ companyId: 1, isLocked: true, notes: 'Sözleşme notu' }),
+        hoursRowFixture({ companyId: 2, companyName: 'Firma B' }),
+        hoursRowFixture({ companyId: 9, companyName: 'Firma Z', isLocked: true, notes: 'Z notu' }),
+      ]),
+    )
+    proposeMock.mockResolvedValue(
+      proposal ??
+        proposalFixture({
+          assignments: [
+            proposedAssignmentFixture({ companyId: 1, companyName: 'Firma A', visitDay: 1 }),
+            proposedAssignmentFixture({ companyId: 2, companyName: 'Firma B', visitDay: 2 }),
+          ],
+          kept: [
+            {
+              companyId: 9,
+              companyName: 'Firma Z',
+              teacherId: 1,
+              visitDay: 4,
+              visitHour: 9,
+              awardedHours: 2,
+              isLocked: true,
+              isForced: false,
+            },
+          ],
+          released: [
+            {
+              companyId: 3,
+              companyName: 'Firma C',
+              previous: { teacherId: 1, visitDay: 5, visitHour: 9, isForced: false, source: 'proposal' },
+            },
+          ],
+          hourChanges: [
+            {
+              companyId: 1,
+              companyName: 'Firma A',
+              oldHours: 4,
+              newHours: 2,
+              reasonCode: { kind: 'teacherCapacity' },
+              reason: 'Öğretmen kapasitesi yetmedi.',
+            },
+            {
+              companyId: 9,
+              companyName: 'Firma Z',
+              oldHours: 2,
+              newHours: 0,
+              reasonCode: { kind: 'poolExhausted' },
+              reason: 'Havuz tükendi.',
+            },
+          ],
+        }),
+    )
     const proposeButton = wrapper.findAll('button').find((b) => b.text().includes(labels.allocation.propose))
     await proposeButton!.trigger('click')
     await flushPromises()
@@ -639,7 +722,7 @@ describe('AllocationView dönem başladıysa yazımlar tarih penceresinden geçe
     return wrapper.findAll('button').find((b) => b.text().includes(labels.allocation.proposalUndo))
   }
 
-  it('öneri uygulama TEK pencere açar ve tüm kalemleri TEK commitChange çağrısıyla yazar', async () => {
+  it('öneri uygulama TEK pencere açar ve saat, atama ve bırakmayı TEK applyProposal komutuyla yazar', async () => {
     // Arrange
     const wrapper = await mountWithProposal()
     commitChangeMock.mockResolvedValue(committedOutcome(77))
@@ -655,7 +738,7 @@ describe('AllocationView dönem başladıysa yazımlar tarih penceresinden geçe
     await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'Öneri uygulaması')
     await flushPromises()
 
-    // Assert — tek çağrı, iki satır, aynı tarih ve gerekçe; tek tek assign yok.
+    // Assert — tek çağrı, aynı tarih ve gerekçe; tek tek assign yok.
     expect(assignMock).not.toHaveBeenCalled()
     expect(commitChangeMock).toHaveBeenCalledTimes(1)
     const [request, highWater] = commitChangeMock.mock.calls[0]
@@ -667,11 +750,18 @@ describe('AllocationView dönem başladıysa yazımlar tarih penceresinden geçe
       reason: 'Öneri uygulaması',
     })
     expect(request.command).toEqual({
-      type: 'assignCoordinators',
-      rows: [
+      type: 'applyProposal',
+      // Saatler: kilit ve not MEVCUT kayıttan; 0'a inen fahri işaretlenir.
+      hours: [
+        { companyId: 1, awardedHours: 2, isHonorary: false, isLocked: true, notes: 'Sözleşme notu' },
+        { companyId: 9, awardedHours: 0, isHonorary: true, isLocked: true, notes: 'Z notu' },
+      ],
+      // Yalnız `assignments`; yerinde kalan Firma Z (kept) atamaya girmez.
+      assign: [
         { companyId: 1, teacherId: 1, visitDay: 1, visitHour: 9, isForced: false, forceReason: null },
         { companyId: 2, teacherId: 1, visitDay: 2, visitHour: 9, isForced: false, forceReason: null },
       ],
+      release: [3],
     })
     wrapper.unmount()
   })
@@ -718,6 +808,34 @@ describe('AllocationView dönem başladıysa yazımlar tarih penceresinden geçe
     expect(document.body.textContent).toContain(labels.allocation.proposalRejectedNote)
     expect(document.body.textContent).toContain(labels.allocation.proposalTitle)
     expect(undoButton(wrapper)).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('önerinin saat satırı mevcut kayıtta yoksa kilit/not tahmin edilmez; hata gösterilir ve hiçbir şey yazılmaz', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    hoursGetMock.mockResolvedValue(hoursBoardFixture([hoursRowFixture({ companyId: 1 })]))
+
+    // Act
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+
+    // Assert — Firma Z'nin (9) saat kaydı yok.
+    expect(commitChangeMock).not.toHaveBeenCalled()
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'error',
+        detail: labels.allocation.proposalHoursRowMissing('Firma Z'),
+      }),
+    )
+    wrapper.unmount()
+  })
+
+  it('öneri varsayılan olarak fillGaps kipiyle istenir', async () => {
+    const wrapper = await mountWithProposal()
+
+    expect(proposeMock).toHaveBeenCalledWith('fillGaps')
     wrapper.unmount()
   })
 
@@ -957,6 +1075,39 @@ describe('AllocationView tarihteki durum (asOf)', () => {
 
     const card = wrapper.find('.company-card')
     expect(card.attributes('draggable')).toBe('false')
+    wrapper.unmount()
+  })
+})
+
+describe('AllocationView öneri işareti', () => {
+  it('yalnız öneriden gelen atamalarda "Öneri" işareti çıkar', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({
+        companyId: 1,
+        companyName: 'Firma A',
+        assignedTeacherId: 1,
+        visitDay: 1,
+        visitHour: 9,
+        visitEndHour: 9,
+        assignmentSource: 'proposal',
+      }),
+      companyFixture({
+        companyId: 2,
+        companyName: 'Firma B',
+        assignedTeacherId: 1,
+        visitDay: 2,
+        visitHour: 9,
+        visitEndHour: 9,
+        assignmentSource: 'manual',
+      }),
+    ])
+
+    // Assert
+    const cards = wrapper.findAll('.assigned-card')
+    expect(cards).toHaveLength(2)
+    expect(cards[0].text()).toContain(labels.allocation.assignmentSourceBadge)
+    expect(cards[1].text()).not.toContain(labels.allocation.assignmentSourceBadge)
     wrapper.unmount()
   })
 })

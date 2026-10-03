@@ -66,7 +66,7 @@ pub(crate) async fn seed_coordinator(
     is_forced: bool,
     force_reason: Option<String>,
 ) {
-    let state = CoordinationState { teacher_id, visit_day, visit_hour, is_forced, force_reason };
+    let state = CoordinationState { teacher_id, visit_day, visit_hour, is_forced, force_reason, source: Default::default() };
     let payload = EventPayload::CoordinatorAssigned { state, from_teacher_id: None, labels: Labels(Default::default()) };
     seed_event(pool, term, Stream::Coordination, company_id, payload).await;
 }

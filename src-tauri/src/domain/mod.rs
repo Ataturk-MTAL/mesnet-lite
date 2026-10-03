@@ -1,11 +1,11 @@
 pub mod address;
-pub mod allocation;
 pub mod group_count;
 pub mod grouping;
 pub mod hour_distribution;
 pub mod hour_rules;
 pub mod history;
 pub mod models;
+pub mod optimizer;
 pub mod scheduling;
 pub mod terms;
 pub mod validation;

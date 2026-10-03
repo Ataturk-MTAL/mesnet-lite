@@ -293,6 +293,26 @@
         assert!(events > 0, "tarihçede bir olay oluşmalı");
     }
 
+    /// Pano her işletme için atamanın kaynağını taşır: elle atama `manual`,
+    /// atanmamış işletme `None` ("Baştan dağıt" yalnız `proposal` olanı
+    /// yeniden düzenleyebilir; bu alan arayüzün de ayrımı görmesini sağlar).
+    #[tokio::test]
+    async fn board_reports_the_assignment_source_per_company() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        let state = AppState { pool: pool.clone() };
+        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
+        let manual = a_company(&pool, "Elle").await;
+        let unassigned = a_company(&pool, "Atanmamış").await;
+        assign_company_for_term(&state, assignment_input(teacher_id, manual, 3, 4), None, None, planning_today()).await.unwrap();
+
+        let board = load_board(&state, &ReadAt::Latest).await.unwrap();
+
+        let source_of = |id: i64| board.companies.iter().find(|c| c.company_id == id).unwrap().assignment_source.clone();
+        assert_eq!(source_of(manual).as_deref(), Some("manual"));
+        assert_eq!(source_of(unassigned), None);
+    }
+
     /// Aynı işletme başka bir öğretmene yeniden atanınca YERİNDE taşınır
     /// (eski `assign`in "reassigning moves it" davranışı korunur).
     #[tokio::test]
@@ -368,6 +388,25 @@
         let company_id = a_company(&state.pool, "İşletme A").await;
 
         unassign_company_for_term(&state, company_id, None, None, planning_today()).await.unwrap();
+    }
+
+    /// Planlamada atama dönem başı tarihlidir; tarihsiz `unassign_company`
+    /// aynı güne denk gelir ve atamayı hiç yürürlüğe girmemiş sayar: pano
+    /// işletmeyi atanmamış gösterir.
+    #[tokio::test]
+    async fn unassign_company_in_planning_removes_a_same_day_assignment() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        let state = AppState { pool: pool.clone() };
+        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
+        let company_id = a_company(&pool, "İşletme A").await;
+        assign_company_for_term(&state, assignment_input(teacher_id, company_id, 1, 1), None, None, planning_today()).await.unwrap();
+
+        unassign_company_for_term(&state, company_id, None, None, planning_today()).await.unwrap();
+
+        let board = load_board(&state, &ReadAt::Latest).await.unwrap();
+        let card = board.companies.iter().find(|c| c.company_id == company_id).unwrap();
+        assert_eq!((card.assigned_teacher_id, card.assignment_source.clone()), (None, None));
     }
 
     /// Var olan bir atama `unassign_company` ile açık projeksiyon satırını kapatır.

@@ -9,6 +9,7 @@
 mod chief;
 mod company;
 mod flags;
+mod proposal;
 mod revoke;
 mod student;
 mod teacher;
@@ -20,7 +21,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::Deserialize;
 
-use super::events::{EventPayload, Labels, Stream, StoredEvent, TeacherLoad, WeeklySchedule};
+use super::events::{AssignmentSource, EventPayload, Labels, Stream, StoredEvent, TeacherLoad, WeeklySchedule};
 use super::rejection::{Rejection, RejectionCode};
 use super::timeline::{fold_intervals, order_events, Interval, Timeline};
 use crate::domain::hour_rules::HourRule;
@@ -87,6 +88,10 @@ pub struct CoordinatorRow {
     pub visit_hour: i64,
     pub is_forced: bool,
     pub force_reason: Option<String>,
+    /// Arayüz bugün göndermez; verilmezse `Manual`. `applyProposal` bu alanı
+    /// yok sayıp `Proposal` yazar (bkz. `proposal.rs`).
+    #[serde(default)]
+    pub source: AssignmentSource,
 }
 
 /// `transferStudent.to` (spec §8): mevcut bir işletmeye ya da yerinde
@@ -98,7 +103,7 @@ pub enum TransferTarget {
     New { company: NewCompany },
 }
 
-/// Arayüzün gönderdiği 16 komut türü (spec §8, birebir alan adlarıyla).
+/// Arayüzün gönderdiği 17 komut türü (spec §8, birebir alan adlarıyla).
 /// `correct.replacement` herhangi bir `ChangeCommand` olabilir; ama içinde
 /// `revoke` ya da `correct` varsa `decide::revoke::correct` bunu
 /// `NotRevocable` ile reddeder.
@@ -118,6 +123,17 @@ pub enum ChangeCommand {
     SetCompanyHours { rows: Vec<CompanyHoursRow> },
     AssignCoordinators { rows: Vec<CoordinatorRow> },
     EndCoordination { company_id: i64 },
+    /// Dağıtım motorunun önerisi: saat değişiklikleri, yeni atamalar ve
+    /// sonlandırılacak atamalar TEK kümede (bkz. `proposal.rs`). Alanlar
+    /// verilmezse boş sayılır; üçü de boşsa komut reddedilir.
+    ApplyProposal {
+        #[serde(default)]
+        hours: Vec<CompanyHoursRow>,
+        #[serde(default)]
+        assign: Vec<CoordinatorRow>,
+        #[serde(default)]
+        release: Vec<i64>,
+    },
     ClearCoordination,
     CreateTeacher { teacher: NewTeacherProfile, load: TeacherLoad },
     SetTeacherLoad { teacher_id: i64, load: TeacherLoad },
@@ -291,6 +307,7 @@ fn dispatch(ctx: &DecisionContext, req: &ChangeRequest) -> Result<Decision, Reje
         ChangeCommand::SetCompanyHours { rows } => company::set_company_hours(ctx, req, rows),
         ChangeCommand::AssignCoordinators { rows } => company::assign_coordinators(ctx, req, rows),
         ChangeCommand::EndCoordination { company_id } => company::end_coordination(ctx, req, *company_id),
+        ChangeCommand::ApplyProposal { hours, assign, release } => proposal::apply_proposal(ctx, req, hours, assign, release),
         ChangeCommand::ClearCoordination => company::clear_coordination(ctx, req),
         ChangeCommand::CreateTeacher { teacher, load } => teacher::create_teacher(ctx, req, teacher, load),
         ChangeCommand::SetTeacherLoad { teacher_id, load } => teacher::set_teacher_load(ctx, req, *teacher_id, load),
@@ -315,6 +332,7 @@ pub(super) fn command_kind(command: &ChangeCommand) -> &'static str {
         ChangeCommand::SetCompanyHours { .. } => "set_company_hours",
         ChangeCommand::AssignCoordinators { .. } => "assign_coordinators",
         ChangeCommand::EndCoordination { .. } => "end_coordination",
+        ChangeCommand::ApplyProposal { .. } => "apply_proposal",
         ChangeCommand::ClearCoordination => "clear_coordination",
         ChangeCommand::CreateTeacher { .. } => "create_teacher",
         ChangeCommand::SetTeacherLoad { .. } => "set_teacher_load",
@@ -574,6 +592,11 @@ mod tests {
             "assignCoordinators" => serde_json::json!({"type": "assignCoordinators", "rows": [
                 {"companyId": 1, "teacherId": 2, "visitDay": 1, "visitHour": 3, "isForced": false, "forceReason": null},
             ]}),
+            "applyProposal" => serde_json::json!({"type": "applyProposal",
+                "hours": [{"companyId": 1, "awardedHours": 2, "isHonorary": false, "isLocked": false, "notes": ""}],
+                "assign": [{"companyId": 2, "teacherId": 3, "visitDay": 2, "visitHour": 3, "isForced": false, "forceReason": null}],
+                "release": [4],
+            }),
             "endCoordination" => serde_json::json!({"type": "endCoordination", "companyId": 1}),
             "clearCoordination" => serde_json::json!({"type": "clearCoordination"}),
             "createTeacher" => serde_json::json!({
@@ -604,7 +627,7 @@ mod tests {
     fn every_change_command_wire_shape_deserializes() {
         let kinds = [
             "createStudent", "placeStudent", "placeStudentNew", "transferStudent", "transferStudentNew", "studentLeaves",
-            "deleteStudent", "setCompanyHours", "assignCoordinators", "endCoordination", "clearCoordination",
+            "deleteStudent", "setCompanyHours", "assignCoordinators", "applyProposal", "endCoordination", "clearCoordination",
             "createTeacher", "setTeacherLoad", "setTeacherSchedule", "copySchedulesFromTerm", "deleteTeacher",
             "revoke", "correct",
         ];
@@ -613,6 +636,22 @@ mod tests {
             let result: Result<ChangeCommand, _> = serde_json::from_value(json.clone());
             assert!(result.is_ok(), "{kind} deserialize edilemedi: {:?} — girdi: {json}", result.err());
         }
+    }
+
+    /// `applyProposal` alanları birebir `hours`/`assign`/`release`; satırda
+    /// `source` verilmezse `Manual` (varsayılan), verilirse okunur.
+    #[test]
+    fn apply_proposal_wire_shape_has_the_three_lists_and_defaults_the_row_source() {
+        let command: ChangeCommand = serde_json::from_value(sample_json("applyProposal")).unwrap();
+        let ChangeCommand::ApplyProposal { hours, assign, release } = command else { panic!("ApplyProposal beklenirdi") };
+        assert_eq!((hours.len(), assign.len(), release), (1, 1, vec![4]));
+        assert_eq!(assign[0].source, AssignmentSource::Manual);
+
+        let with_source: CoordinatorRow = serde_json::from_value(serde_json::json!(
+            {"companyId": 2, "teacherId": 3, "visitDay": 2, "visitHour": 3, "isForced": false, "forceReason": null, "source": "proposal"}
+        ))
+        .unwrap();
+        assert_eq!(with_source.source, AssignmentSource::Proposal);
     }
 
     #[test]
@@ -659,7 +698,7 @@ mod tests {
             .with_event(stored_event(2, 1, Stream::Placement, 101, &term_name, term_start, EventPayload::StudentPlaced { to_company_id: 1, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
             .with_event(stored_event(3, 1, Stream::Placement, 102, &term_name, term_start, EventPayload::StudentPlaced { to_company_id: 1, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
             .with_event(stored_event(4, 1, Stream::CompanyHours, 1, &term_name, term_start, EventPayload::HoursSet { state: crate::domain::history::events::HoursState { awarded_hours: 6, max_hours_snapshot: 6, is_honorary: false, is_locked: false, notes: String::new() }, previous_awarded: None, labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(5, 1, Stream::Coordination, 1, &term_name, term_start, EventPayload::CoordinatorAssigned { state: crate::domain::history::events::CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(5, 1, Stream::Coordination, 1, &term_name, term_start, EventPayload::CoordinatorAssigned { state: crate::domain::history::events::CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(6, 1, Stream::TeacherLoad, 5, &term_name, term_start, EventPayload::LoadSet { load: TeacherLoad { base_hours: 15, max_extra_hours: 24, other_extra_hours: 0, chief_type: ChiefType::None, employment_type: EmploymentType::Tenured }, previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
             .with_change_set(ChangeSetFacts { id: 1, kind: "opening".into(), effective_date: term_start, revokes_change_set_id: None, revoked_by: None })
             .build();

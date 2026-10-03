@@ -43,6 +43,8 @@ pub struct Assignment {
     pub visit_hour: i64,
     pub is_forced: i64,
     pub force_reason: Option<String>,
+    /// `"manual"` | `"proposal"` (migration 0018; bkz. `AssignmentSource`).
+    pub source: String,
 }
 
 /// `assign_company` komutunun Tauri imzası bunu KORUR (sözleşme); artık
@@ -58,7 +60,7 @@ pub struct NewAssignment {
     pub force_reason: Option<String>,
 }
 
-const SELECT_COLUMNS: &str = "id, teacher_id, company_id, term, visit_day, visit_hour, is_forced, force_reason";
+const SELECT_COLUMNS: &str = "id, teacher_id, company_id, term, visit_day, visit_hour, is_forced, force_reason, source";
 
 pub async fn list(pool: &SqlitePool, term: &str, read_at: &ReadAt) -> AppResult<Vec<Assignment>> {
     let sql = format!(

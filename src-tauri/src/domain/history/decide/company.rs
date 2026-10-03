@@ -77,6 +77,19 @@ fn capped_history_for(ctx: &DecisionContext, company_id: i64) -> Vec<NaiveDate> 
 }
 
 pub(super) fn set_company_hours(ctx: &DecisionContext, req: &ChangeRequest, rows: &[CompanyHoursRow]) -> Result<Decision, Rejection> {
+    set_company_hours_excluding(ctx, req, rows, &[])
+}
+
+/// `vacating`: aynı kümede başka hücreye taşınan ya da bırakılan işletmeler
+/// (`ApplyProposal`). Eski blokları yürürlükten kalkacağı için saat/çakışma
+/// denetiminde ne kendileri ne de başkalarına karşı sayılır; yeni blokları
+/// `assign_coordinators` içinde bekleyen saatlerle denetlenir.
+pub(super) fn set_company_hours_excluding(
+    ctx: &DecisionContext,
+    req: &ChangeRequest,
+    rows: &[CompanyHoursRow],
+    vacating: &[i64],
+) -> Result<Decision, Rejection> {
     let d = ctx.term.resolve_effective_date(req.effective_date, ctx.today)?;
     let mut events = Vec::new();
     let mut impact = ImpactSummary::empty(d, ctx.term.is_planning(ctx.today));
@@ -93,7 +106,7 @@ pub(super) fn set_company_hours(ctx: &DecisionContext, req: &ChangeRequest, rows
         }
     }
 
-    reject_if_hours_overlap(ctx, d, rows, &events)?;
+    reject_if_hours_overlap(ctx, d, rows, &events, vacating)?;
     reject_if_pool_overrun(ctx, d, rows, &events)?;
 
     let augmented = with_pending(ctx, &events);
@@ -112,16 +125,22 @@ pub(super) fn set_company_hours(ctx: &DecisionContext, req: &ChangeRequest, rows
 /// azalma, aynı partideki başka bir satırı ESKİ (artık geçersiz) bir saatle
 /// yanlışlıkla çakışmış göstermez (R2b brief madde 2, `find_overlapping_company`
 /// yardımcısı tekrar yazılmadan burada da kullanılır).
-fn reject_if_hours_overlap(ctx: &DecisionContext, d: NaiveDate, rows: &[CompanyHoursRow], events: &[PlannedEvent]) -> Result<(), Rejection> {
+fn reject_if_hours_overlap(
+    ctx: &DecisionContext,
+    d: NaiveDate,
+    rows: &[CompanyHoursRow],
+    events: &[PlannedEvent],
+    vacating: &[i64],
+) -> Result<(), Rejection> {
     let augmented = with_pending(ctx, events);
-    for row in rows {
+    for row in rows.iter().filter(|row| !vacating.contains(&row.company_id)) {
         let coordination = augmented.timeline::<CoordinationState>(Stream::Coordination, row.company_id, apply_coordination);
         let Some(state) = coordination.state_at(d) else { continue };
         let hours = augmented.timeline::<HoursState>(Stream::CompanyHours, row.company_id, apply_hours);
         let awarded = hours.state_at(d).map(|h| h.awarded_hours).unwrap_or(0);
         let candidate_block = Block::from_start(state.visit_day, state.visit_hour, awarded);
 
-        let Some(other) = find_overlapping_company(&augmented, state.teacher_id, row.company_id, candidate_block, d) else { continue };
+        let Some(other) = find_overlapping_company(&augmented, state.teacher_id, &exclude_with(vacating, row.company_id), candidate_block, d) else { continue };
         let label = ctx.company_label(row.company_id);
         return Err(Rejection::new(
             RejectionCode::BlockOverlap,
@@ -235,7 +254,7 @@ pub(super) fn assign_coordinators(ctx: &DecisionContext, req: &ChangeRequest, ro
     let mut impact = ImpactSummary::empty(d, ctx.term.is_planning(ctx.today));
     let mut teachers: Vec<i64> = Vec::new();
 
-    reject_duplicate_companies(rows)?;
+    reject_duplicate_companies(rows.iter().map(|r| r.company_id))?;
     for row in rows {
         // Çakışma denetimi bu kümede ÖNCEKİ satırların bloklarını da görmeli
         // (issue #41); `set_company_hours` ile aynı `with_pending` deseni.
@@ -261,13 +280,15 @@ pub(super) fn assign_coordinators(ctx: &DecisionContext, req: &ChangeRequest, ro
 /// Aynı işletme aynı kümede iki kez gelirse iki ayrı olay üretilir ve "son
 /// yazan kazanır" olurdu; çakışma denetimi de kendi satırını `exclude` ettiği
 /// için bunu yakalayamaz. Kullanıcıya belirsiz sonuç yerine ret döner.
-fn reject_duplicate_companies(rows: &[CoordinatorRow]) -> Result<(), Rejection> {
+///
+/// `ApplyProposal` aynı denetimi `release` listesine de uygular (TEK kural).
+pub(super) fn reject_duplicate_companies(company_ids: impl Iterator<Item = i64>) -> Result<(), Rejection> {
     let mut seen = std::collections::BTreeSet::new();
-    for row in rows {
-        if !seen.insert(row.company_id) {
+    for company_id in company_ids {
+        if !seen.insert(company_id) {
             return Err(Rejection::new(
                 RejectionCode::InvalidRequest,
-                format!("İşletme (kimlik {}) aynı atama kümesinde birden fazla kez geçiyor; her işletme için tek satır gönderin.", row.company_id),
+                format!("İşletme (kimlik {company_id}) aynı atama kümesinde birden fazla kez geçiyor; her işletme için tek satır gönderin."),
             ));
         }
     }
@@ -292,7 +313,7 @@ fn build_coordinator_event(ctx: &DecisionContext, d: NaiveDate, row: &Coordinato
     let awarded = hours.state_at(d).map(|h| h.awarded_hours).unwrap_or(0);
     let candidate_block = Block::from_start(row.visit_day, row.visit_hour, awarded);
 
-    if let Some(other) = find_overlapping_company(ctx, row.teacher_id, row.company_id, candidate_block, d) {
+    if let Some(other) = find_overlapping_company(ctx, row.teacher_id, &[row.company_id], candidate_block, d) {
         return Err(Rejection::new(
             RejectionCode::BlockOverlap,
             format!("{}: aynı öğretmenin {other} işletmesindeki bloğuyla çakışıyor", ctx.teacher_label(row.teacher_id)),
@@ -300,7 +321,7 @@ fn build_coordinator_event(ctx: &DecisionContext, d: NaiveDate, row: &Coordinato
     }
 
     let prior = ctx.state_before::<CoordinationState>(Stream::Coordination, row.company_id, d, apply_coordination);
-    let state = CoordinationState { teacher_id: row.teacher_id, visit_day: row.visit_day, visit_hour: row.visit_hour, is_forced: row.is_forced, force_reason: row.force_reason.clone() };
+    let state = CoordinationState { teacher_id: row.teacher_id, visit_day: row.visit_day, visit_hour: row.visit_hour, is_forced: row.is_forced, force_reason: row.force_reason.clone(), source: row.source };
     let event = PlannedEvent {
         stream: Stream::Coordination,
         subject_id: row.company_id,
@@ -329,12 +350,12 @@ fn build_coordinator_event(ctx: &DecisionContext, d: NaiveDate, row: &Coordinato
 fn find_overlapping_company(
     ctx: &DecisionContext,
     teacher_id: i64,
-    exclude_company_id: i64,
+    exclude_company_ids: &[i64],
     candidate_block: Block,
     from: NaiveDate,
 ) -> Option<String> {
     for (&company_id, facts) in &ctx.companies {
-        if company_id == exclude_company_id {
+        if exclude_company_ids.contains(&company_id) {
             continue;
         }
         let hours = ctx.timeline::<HoursState>(Stream::CompanyHours, company_id, apply_hours);
@@ -353,6 +374,13 @@ fn find_overlapping_company(
     None
 }
 
+/// Kendisi + taşınan/bırakılan işletmeler: çakışma aramasında atlananlar.
+fn exclude_with(vacating: &[i64], company_id: i64) -> Vec<i64> {
+    let mut ids = vacating.to_vec();
+    ids.push(company_id);
+    ids
+}
+
 fn ranges_overlap(a_from: NaiveDate, a_to: Option<NaiveDate>, b_from: NaiveDate, b_to: Option<NaiveDate>) -> bool {
     let a_end = a_to.unwrap_or(NaiveDate::MAX);
     let b_end = b_to.unwrap_or(NaiveDate::MAX);
@@ -363,7 +391,16 @@ pub(super) fn end_coordination(ctx: &DecisionContext, req: &ChangeRequest, compa
     let d = ctx.term.resolve_effective_date(req.effective_date, ctx.today)?;
     ctx.require_company(company_id)?;
     let label = ctx.company_label(company_id);
-    let prior = ctx.state_before::<CoordinationState>(Stream::Coordination, company_id, d, apply_coordination);
+    // Önce d⁻ (d'den ÖNCE başlamış atama). Yoksa TAM d'de başlamış atama da
+    // bitirilebilmeli: planlamada her atama dönem başı tarihlidir. Katlama aynı
+    // günün olaylarında sıfır uzunluklu aralık üretmez (`timeline::fold_intervals`),
+    // yani d'de başlayıp d'de biten atama hiç yürürlüğe girmemiş sayılır.
+    // Yalnız `valid_from == d` aralığına bakılır: d'de başka bir olayla ZATEN
+    // bitmiş bir atama (ör. politika sonlandırması) hâlâ "bitirilebilir" sayılmaz.
+    let prior = ctx.state_before::<CoordinationState>(Stream::Coordination, company_id, d, apply_coordination).or_else(|| {
+        let timeline = ctx.timeline::<CoordinationState>(Stream::Coordination, company_id, apply_coordination);
+        timeline.intervals.iter().find(|iv| iv.valid_from == d && iv.valid_to.is_none_or(|end| d < end)).map(|iv| iv.state.clone())
+    });
     let Some(prior) = prior else {
         return Err(Rejection::new(RejectionCode::FactNotTrueAtDate, format!("{label}: bu tarihte koordinatörü yok.")));
     };
@@ -411,7 +448,7 @@ pub(super) fn clear_coordination(ctx: &DecisionContext, req: &ChangeRequest) -> 
     finish(ctx, req, d, events, impact, Vec::new())
 }
 
-fn finish(
+pub(super) fn finish(
     ctx: &DecisionContext,
     req: &ChangeRequest,
     effective_date: NaiveDate,
@@ -657,18 +694,18 @@ mod tests {
         // Çakışmayan durum: B'nin ataması Ekim'de bitiyor, yeni atama Kasım'da başlıyor.
         let non_overlapping = base
             .clone()
-            .with_event(stored_event(2, 2, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 2, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(3, 3, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 10, 15), EventPayload::CoordinatorEnded { from_teacher_id: 5, labels: Labels(Default::default()) }, false))
             .build();
-        let rows_ok = vec![CoordinatorRow { company_id: 1, teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }];
+        let rows_ok = vec![CoordinatorRow { company_id: 1, teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None, source: Default::default() }];
         let req_ok = request(ymd(2026, 11, 3), ChangeCommand::AssignCoordinators { rows: rows_ok.clone() });
         assert!(assign_coordinators(&non_overlapping, &req_ok, &rows_ok).is_ok(), "tarihler örtüşmüyorsa reddedilmemeli");
 
         // Örtüşen durum: B'nin ataması SÜRÜYOR (bitiş tarihi yok).
         let overlapping = base
-            .with_event(stored_event(2, 2, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 2, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .build();
-        let rows_bad = vec![CoordinatorRow { company_id: 1, teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }];
+        let rows_bad = vec![CoordinatorRow { company_id: 1, teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None, source: Default::default() }];
         let req_bad = request(ymd(2026, 11, 3), ChangeCommand::AssignCoordinators { rows: rows_bad.clone() });
         let result = assign_coordinators(&overlapping, &req_bad, &rows_bad);
         assert_eq!(result.unwrap_err().code, RejectionCode::BlockOverlap);
@@ -686,11 +723,11 @@ mod tests {
             .with_company(2, "İşletme B", Some(10.0))
             .with_teacher(5, "Ali Öğretmen")
             .with_event(stored_event(1, 1, Stream::CompanyHours, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(2, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(2, 2, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 2, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .build();
 
         // B'nin ataması SÜRÜYOR (bitiş tarihi yok) → tarihler örtüşüyor.
-        let rows = vec![CoordinatorRow { company_id: 1, teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: true, force_reason: Some("gerekçe".into()) }];
+        let rows = vec![CoordinatorRow { company_id: 1, teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: true, force_reason: Some("gerekçe".into()), source: Default::default() }];
         let req = request(ymd(2026, 11, 3), ChangeCommand::AssignCoordinators { rows: rows.clone() });
         let result = assign_coordinators(&ctx, &req, &rows);
         assert_eq!(result.unwrap_err().code, RejectionCode::BlockOverlap, "zorlama çakışmayı atlamamalı");
@@ -706,11 +743,11 @@ mod tests {
             .with_company(2, "İşletme B", Some(10.0))
             .with_teacher(5, "Ali Öğretmen")
             .with_event(stored_event(1, 1, Stream::CompanyHours, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(2, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(2, 2, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 2, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .build();
 
         // Farklı gün (2 = Salı): B'nin (Pazartesi) bloğuyla ÖRTÜŞMEZ.
-        let rows = vec![CoordinatorRow { company_id: 1, teacher_id: 5, visit_day: 2, visit_hour: 9, is_forced: true, force_reason: Some("gerekçe".into()) }];
+        let rows = vec![CoordinatorRow { company_id: 1, teacher_id: 5, visit_day: 2, visit_hour: 9, is_forced: true, force_reason: Some("gerekçe".into()), source: Default::default() }];
         let req = request(ymd(2026, 11, 3), ChangeCommand::AssignCoordinators { rows: rows.clone() });
         assert!(assign_coordinators(&ctx, &req, &rows).is_ok(), "çakışmayan zorlanmış atama kabul edilmeli");
     }
@@ -723,7 +760,7 @@ mod tests {
 
         let planning = ContextBuilder::new(ymd(2026, 8, 1), term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
             .with_company(1, "İşletme A", Some(10.0))
-            .with_event(stored_event(1, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(1, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .build();
         let req = ChangeRequest { term: "2026-2027/1".into(), effective_date: None, document_date: None, reason: "temizle".into(), command: ChangeCommand::ClearCoordination };
         let decision = clear_coordination(&planning, &req).unwrap();
@@ -747,13 +784,13 @@ mod tests {
             .with_company(1, "İşletme A", Some(10.0))
             .with_company(2, "İşletme B", Some(10.0))
             .with_event(stored_event(1, 1, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 1), EventPayload::LoadSet { load: department_load(4, 24, ChiefType::Department), previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(2, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(3, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(8, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(4, 1, Stream::CompanyHours, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(5, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
             .build();
 
         // Farklı gün (2 = Salı): A'nın (Pazartesi) bloğuyla ÖRTÜŞMEZ.
-        let rows = vec![CoordinatorRow { company_id: 2, teacher_id: 5, visit_day: 2, visit_hour: 9, is_forced: false, force_reason: None }];
+        let rows = vec![CoordinatorRow { company_id: 2, teacher_id: 5, visit_day: 2, visit_hour: 9, is_forced: false, force_reason: None, source: Default::default() }];
         let req = request(ymd(2026, 11, 5), ChangeCommand::AssignCoordinators { rows: rows.clone() });
         let decision = assign_coordinators(&ctx, &req, &rows).unwrap();
 
@@ -774,7 +811,7 @@ mod tests {
             .with_company(1, "İşletme A", Some(10.0))
             .with_event(stored_event(1, 1, Stream::Placement, 100, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: 1, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
             .with_event(stored_event(2, 1, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 1), EventPayload::LoadSet { load: department_load(0, 10, ChiefType::None), previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(3, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(3, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(4, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(2, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
             .build();
 
@@ -801,9 +838,9 @@ mod tests {
             .with_company(2, "İşletme B", Some(10.0))
             .with_event(stored_event(1, 1, Stream::Placement, 200, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: 1, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
             .with_event(stored_event(2, 1, Stream::Placement, 201, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: 2, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(3, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 1, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(3, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 1, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(4, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(a_hours, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(5, 1, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 5, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(5, 1, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 5, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(6, 1, Stream::CompanyHours, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(2, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
             .build()
     }
@@ -843,9 +880,9 @@ mod tests {
             .with_company(2, "İşletme B", Some(10.0))
             .with_event(stored_event(1, 1, Stream::Placement, 200, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: 1, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
             .with_event(stored_event(2, 1, Stream::Placement, 201, "2026-2027/1", ymd(2026, 9, 1), EventPayload::StudentPlaced { to_company_id: 2, from_company_id: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(3, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 1, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(3, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 1, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(4, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(10, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(5, 1, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 8, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(5, 1, Stream::Coordination, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 8, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(6, 1, Stream::CompanyHours, 2, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state(2, false), previous_awarded: None, labels: Labels(Default::default()) }, true))
             .build();
 

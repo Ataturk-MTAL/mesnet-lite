@@ -175,7 +175,7 @@ async fn seed_opening_coordinator(pool: &SqlitePool, company_id: i64, teacher_id
     let term_start = terms::get_in(&mut tx, TERM).await.unwrap().start;
     let cs = NewChangeSet { term: TERM.to_string(), kind: "opening".to_string(), effective_date: term_start, document_date: None, reason: "test açılışı".to_string(), revokes_change_set_id: None };
     let cs_id = change_log::append_change_set(&mut tx, &cs, "test", "{}").await.unwrap();
-    let state = CoordinationState { teacher_id, visit_day, visit_hour, is_forced: false, force_reason: None };
+    let state = CoordinationState { teacher_id, visit_day, visit_hour, is_forced: false, force_reason: None, source: Default::default() };
     let event = PlannedEvent { stream: Stream::Coordination, subject_id: company_id, effective_date: term_start, payload: EventPayload::CoordinatorAssigned { state, from_teacher_id: None, labels: Labels(Default::default()) }, caused_by: None, revokes: None };
     change_log::append_events(&mut tx, cs_id, TERM, &[event]).await.unwrap();
     projection::rebuild_streams(&mut tx, &[StreamKey { stream: Stream::Coordination, subject_id: company_id, term: TERM.to_string() }], term_start).await.unwrap();
@@ -236,6 +236,7 @@ async fn reconcile_ends_a_coordination_with_no_legacy_counterpart() {
                 visit_hour: 3,
                 is_forced: false,
                 force_reason: None,
+                source: Default::default(),
             }],
         },
     };

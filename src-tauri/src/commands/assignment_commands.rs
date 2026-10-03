@@ -2,23 +2,25 @@ use crate::db::assignments::NewAssignment;
 use crate::db::read_at::ReadAt;
 use crate::db::{
     assignments, availability, class_days, companies, company_hours, settings, students, teachers,
-    teaching_load, AppState,
+    teaching_load, terms, AppState,
 };
-use crate::domain::allocation::{
-    propose, AllocationProposal, CompanyInput, TeacherInput,
-};
+use crate::domain::optimizer::{optimize, AllocationProposal, ProposalMode};
 use crate::domain::grouping::{assign_groups, GroupingInput, GroupingSettings};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, CoordinatorRow};
+use crate::domain::history::events::AssignmentSource;
 use crate::domain::scheduling::{visit_span, Slot, MAX_HOURS_PER_DAY};
 use crate::domain::terms::{parse_date, today_local};
 use crate::domain::validation::{check_pool, check_teacher_totals, Violation};
 use crate::domain::workload::{statutory_cap, teacher_capacity, InstitutionType};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::services::change_service::commit_legacy_change;
 use chrono::NaiveDate;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use tauri::State;
+
+mod proposal_input;
+use proposal_input::ProposalInput;
 
 /// Atama ekranındaki bir işletme kartı.
 #[derive(Debug, Clone, Serialize)]
@@ -58,6 +60,9 @@ pub struct BoardCompany {
     pub visit_end_hour: Option<i64>,
     pub is_forced: bool,
     pub force_reason: Option<String>,
+    /// `"manual"` | `"proposal"`; `None` = atanmamış. Arayüze `assignmentSource`
+    /// olarak gider (Issue #43).
+    pub assignment_source: Option<String>,
 }
 
 /// Atama ekranındaki bir öğretmen ve haftalık ızgarası.
@@ -245,6 +250,7 @@ async fn load_board(state: &AppState, read_at: &ReadAt) -> AppResult<AssignmentB
             visit_end_hour: assignment.map(|a| a.visit_hour + visit_span(awarded_hours) - 1),
             is_forced: assignment.map(|a| a.is_forced == 1).unwrap_or(false),
             force_reason: assignment.and_then(|a| a.force_reason.clone()),
+            assignment_source: assignment.map(|a| a.source.clone()),
         });
     }
 
@@ -412,59 +418,60 @@ pub async fn get_assignment_board(
     load_board(&state, &read_at).await
 }
 
-/// Atanmamış işletmeler için yerleşim önerisi üretir. Hiçbir şey kaydedilmez;
-/// kullanıcı öneriyi görüp uygulamaya karar verir. Öneri her zaman BUGÜNKÜ
-/// duruma göre çalışır (tarihe göre öneri anlamsızdır).
+/// Yerleşim önerisi üretir; hiçbir şey kaydedilmez, kullanıcı öneriyi görüp
+/// uygulamaya karar verir. Öneri her zaman BUGÜNKÜ duruma göre çalışır (tarihe
+/// göre öneri anlamsızdır). `mode`: `"fillGaps"` (yalnız atanmamışlar) ya da
+/// `"redistribute"` (yalnız planlama evresinde; öneri kaynaklı atamaları da
+/// yeniden düzenler, elle atamalara dokunmaz).
 #[tauri::command]
-pub async fn propose_assignments(state: State<'_, AppState>) -> AppResult<AllocationProposal> {
-    let board = load_board(&state, &ReadAt::Latest).await?;
+pub async fn propose_assignments(
+    state: State<'_, AppState>,
+    mode: String,
+) -> AppResult<AllocationProposal> {
+    // `today` komut sınırında BİR kez hesaplanır (bkz. `assign_company`);
+    // iç fonksiyon parametre alır ki testler sabit bir "bugün" kullanabilsin.
+    propose_assignments_for(&state, &mode, today_local()).await
+}
 
-    let companies: Vec<CompanyInput> = board
-        .companies
-        .iter()
-        // Zaten atanmış işletmeler öneriye girmez; mevcut karar korunur.
-        .filter(|c| c.assigned_teacher_id.is_none())
-        .map(|c| CompanyInput {
-            id: c.company_id,
-            name: c.company_name.clone(),
-            branches: c.branches.clone(),
-            student_count: c.student_count,
-            awarded_hours: c.awarded_hours,
-            is_honorary: c.is_honorary,
-            latitude: None,
-            longitude: None,
-            workplace_days: c.workplace_days.iter().copied().collect(),
-            one_way_distance_km: c.one_way_distance_km,
-        })
-        .collect();
+pub(crate) async fn propose_assignments_for(
+    state: &AppState,
+    mode: &str,
+    today: NaiveDate,
+) -> AppResult<AllocationProposal> {
+    let mode = parse_mode(mode)?;
+    let board = load_board(state, &ReadAt::Latest).await?;
+    if mode == ProposalMode::Redistribute {
+        require_planning_phase(state, &board.term, today).await?;
+    }
+    let input = ProposalInput::load(state, &board).await?;
+    Ok(optimize(&input.engine_input(mode)))
+}
 
-    let teachers: Vec<TeacherInput> = board
-        .teachers
-        .iter()
-        .map(|t| TeacherInput {
-            id: t.teacher_id,
-            name: t.teacher_name.clone(),
-            branches: t.branches.clone(),
-            capacity: t.capacity,
-            free_slots: t.free_slots.iter().filter_map(|key| parse_slot_key(key)).collect(),
-            already_assigned_hours: t.assigned_hours,
-            // Dolu hücreler artık BLOK genişliğinde: yalnızca başlangıç
-            // hücresi değil, `visit_hour..=visit_end_hour` arasının tamamı.
-            used_slots: board
-                .companies
-                .iter()
-                .filter(|c| c.assigned_teacher_id == Some(t.teacher_id))
-                .filter_map(|c| match (c.visit_day, c.visit_hour, c.visit_end_hour) {
-                    (Some(day), Some(start), Some(end)) => Some((day, start, end)),
-                    _ => None,
-                })
-                .flat_map(|(day, start, end)| (start..=end).map(move |hour| Slot::new(day, hour)))
-                .collect(),
-            hours_by_day: t.hours_per_day.clone(),
-        })
-        .collect();
+fn parse_mode(raw: &str) -> AppResult<ProposalMode> {
+    match raw {
+        "fillGaps" => Ok(ProposalMode::FillGaps),
+        "redistribute" => Ok(ProposalMode::Redistribute),
+        other => Err(AppError::Validation(format!(
+            "Bilinmeyen öneri kipi: \"{other}\". \"fillGaps\" (boşları doldur) ya da \
+             \"redistribute\" (baştan dağıt) olmalı."
+        ))),
+    }
+}
 
-    Ok(propose(&companies, &teachers, board.day_end_hour))
+/// Dönem başladıktan sonra yürürlükteki dağılım ek ders puantajına
+/// işlemiştir; "baştan dağıt" yalnız planlama evresinde (`TermDates::is_planning`,
+/// spec §5) anlamlıdır. Başladıysa kullanıcıya çıkış yolu da söylenir.
+async fn require_planning_phase(state: &AppState, term: &str, today: NaiveDate) -> AppResult<()> {
+    let mut conn = state.pool.acquire().await?;
+    let dates = terms::get_in(&mut conn, term).await?;
+    if dates.is_planning(today) {
+        return Ok(());
+    }
+    Err(AppError::Validation(
+        "Dönem başladığı için dağılım baştan kurulamaz. Yalnızca atanmamış işletmeler için \
+         \"Boşları doldur\" önerisi alabilirsiniz."
+            .into(),
+    ))
 }
 
 /// `{gün}-{saat}` anahtarını dilime çevirir. Bozuk anahtar sessizce atlanır.
@@ -520,6 +527,8 @@ fn coordinator_request(
         visit_hour: input.visit_hour,
         is_forced: input.is_forced,
         force_reason: input.force_reason.clone(),
+        // Panodaki elle atama: "Baştan dağıt" bu atamaya dokunmaz (Issue #43).
+        source: AssignmentSource::Manual,
     };
     Ok(ChangeRequest {
         term: term.to_string(),
@@ -602,3 +611,7 @@ async fn clear_assignments_for_term(
 #[cfg(test)]
 #[path = "assignment_commands_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "assignment_commands_proposal_tests.rs"]
+mod proposal_tests;
