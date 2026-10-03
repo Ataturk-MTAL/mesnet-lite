@@ -72,6 +72,13 @@ pub struct Company {
     /// tutulur (bkz. `domain::address::parse_district`, migration 0010).
     /// Adresten türetilemezse boş kalır; bu bir hata değildir.
     pub district: String,
+    /// Mahalle (bkz. `domain::address::parse_neighborhood`, migration 0016).
+    /// Adres çözümünün mahalle düzeyindeki yedek basamağı bunu kullanır.
+    pub neighborhood: String,
+    /// Konumun kesinliği: `geocode_precision::*` sabitlerinden biri ya da
+    /// konum yoksa boş. Arayüz yaklaşık konumu ayırt edebilsin diye
+    /// `geocode_status`tan ayrıdır.
+    pub geocode_precision: String,
     pub notes: String,
     pub created_at: String,
     pub updated_at: String,
@@ -105,7 +112,18 @@ pub struct NewCompany {
     /// edilir.
     #[serde(default)]
     pub district: String,
+    /// Mahalle için de aynı kural: boşsa adresten türetilir. `#[serde(default)]`:
+    /// arayüz bu alanı henüz göndermiyor, eksikse boş sayılır.
+    #[serde(default)]
+    pub neighborhood: String,
     pub notes: String,
+}
+
+/// `companies.geocode_precision` değerleri (migration 0016 CHECK kısıtıyla aynı).
+pub mod geocode_precision {
+    pub const ADDRESS: &str = "address";
+    pub const NEIGHBORHOOD: &str = "neighborhood";
+    pub const MANUAL: &str = "manual";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -195,6 +213,8 @@ mod tests {
             geocode_status: "pending".into(),
             one_way_distance_km,
             district: String::new(),
+            neighborhood: String::new(),
+            geocode_precision: String::new(),
             notes: String::new(),
             created_at: "2026-09-18T00:00:00Z".into(),
             updated_at: "2026-09-18T00:00:00Z".into(),

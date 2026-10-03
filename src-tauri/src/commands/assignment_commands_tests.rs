@@ -65,6 +65,7 @@
                 longitude: None,
                 one_way_distance_km: Some(5.0),
                 district: String::new(),
+                neighborhood: String::new(),
                 notes: String::new(),
             },
         )
@@ -189,6 +190,7 @@
                 longitude: None,
                 one_way_distance_km: Some(5.0),
                 district: String::new(),
+                neighborhood: String::new(),
                 notes: String::new(),
             },
         )

@@ -60,6 +60,7 @@ pub async fn seed_company(pool: &SqlitePool, name: &str, distance_km: Option<f64
             longitude: None,
             one_way_distance_km: distance_km,
             district: String::new(),
+            neighborhood: String::new(),
             notes: String::new(),
         },
     )

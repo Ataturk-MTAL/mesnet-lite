@@ -62,6 +62,7 @@ async fn a_company(pool: &SqlitePool, name: &str) -> i64 {
             longitude: None,
             one_way_distance_km: Some(5.0),
             district: String::new(),
+            neighborhood: String::new(),
             notes: String::new(),
         },
     )
