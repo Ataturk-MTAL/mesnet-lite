@@ -235,8 +235,12 @@ pub(super) fn assign_coordinators(ctx: &DecisionContext, req: &ChangeRequest, ro
     let mut impact = ImpactSummary::empty(d, ctx.term.is_planning(ctx.today));
     let mut teachers: Vec<i64> = Vec::new();
 
+    reject_duplicate_companies(rows)?;
     for row in rows {
-        let event = build_coordinator_event(ctx, d, row, &mut impact)?;
+        // Çakışma denetimi bu kümede ÖNCEKİ satırların bloklarını da görmeli
+        // (issue #41); `set_company_hours` ile aynı `with_pending` deseni.
+        let pending_ctx = with_pending(ctx, &events);
+        let event = build_coordinator_event(&pending_ctx, d, row, &mut impact)?;
         if !teachers.contains(&row.teacher_id) {
             teachers.push(row.teacher_id);
         }
@@ -252,6 +256,22 @@ pub(super) fn assign_coordinators(ctx: &DecisionContext, req: &ChangeRequest, ro
     }
 
     finish(ctx, req, d, events, impact, Vec::new())
+}
+
+/// Aynı işletme aynı kümede iki kez gelirse iki ayrı olay üretilir ve "son
+/// yazan kazanır" olurdu; çakışma denetimi de kendi satırını `exclude` ettiği
+/// için bunu yakalayamaz. Kullanıcıya belirsiz sonuç yerine ret döner.
+fn reject_duplicate_companies(rows: &[CoordinatorRow]) -> Result<(), Rejection> {
+    let mut seen = std::collections::BTreeSet::new();
+    for row in rows {
+        if !seen.insert(row.company_id) {
+            return Err(Rejection::new(
+                RejectionCode::InvalidRequest,
+                format!("İşletme (kimlik {}) aynı atama kümesinde birden fazla kez geçiyor; her işletme için tek satır gönderin.", row.company_id),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Tek bir `CoordinatorRow` için olayı ve etki satırını üretir. Çakışma
