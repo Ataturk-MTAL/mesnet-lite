@@ -6,6 +6,12 @@
         <span class="history-entry-meta">{{ entry.effectiveDate }}</span>
         <span v-if="entry.documentDate" class="history-entry-meta">{{ entry.documentDate }}</span>
         <span class="history-entry-meta">{{ labels.changeHistory.actor }}: {{ entry.actor }}</span>
+        <Tag
+          v-if="kindLabel !== null"
+          :value="kindLabel"
+          severity="info"
+          data-testid="change-set-kind-badge"
+        />
         <Tag v-if="isRevoked" :value="labels.changeHistory.revokedBadge" severity="secondary" data-testid="revoked-badge" />
         <Tag
           v-if="entry.warnings.length > 0"
@@ -117,6 +123,8 @@ const props = defineProps<{
 const emit = defineEmits<{ revoked: []; deleted: [] }>()
 
 const isRevoked = computed(() => props.entry.revokedByChangeSetId !== null)
+/** Yalnız bilinen küme türleri (ör. `apply_proposal`) etiket taşır; diğerleri olay satırlarından okunur. */
+const kindLabel = computed<string | null>(() => labels.history.changeSetKind[props.entry.kind] ?? null)
 
 /** Tek bir tarihçe satırı; girinti derinliği `causedByEventId` zincirinden türetilir. */
 interface EventRow {

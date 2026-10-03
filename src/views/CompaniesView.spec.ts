@@ -13,6 +13,7 @@ import type { SettingsMap } from '../api/settings'
 import type { GeocodeSummary } from '../api/files'
 import type { CompanyMergeSummary } from '../api/companies'
 import { useTermStore } from '../stores/term'
+import { filesApi } from '../api/files'
 
 const listMock = vi.fn<() => Promise<Company[]>>()
 const removeMock = vi.fn<(id: number) => Promise<CompanyRemoval>>()
@@ -71,16 +72,18 @@ const LocationPickerMapStub = { template: '<div />' }
 function companyFixture(overrides: Partial<Company> = {}): Company {
   return {
     id: 1,
-    name: 'KALEKİM AŞ.',
+    name: 'ÖRNEK ELEKTRONİK A.Ş.',
     contactFirstName: 'Ali',
     contactLastName: 'Veli',
     phone: '0532 000 00 00',
     email: 'ali@example.com',
-    addressText: 'Karaduvar Mah. Serbest Bölge 14. Cadde No:13 Akdeniz/Mersin',
+    addressText: 'Örnek Mah. Deneme 7. Cadde No:21 Akdeniz/Mersin',
     district: 'Akdeniz',
+    neighborhood: '',
     latitude: null,
     longitude: null,
     geocodeStatus: 'pending',
+    geocodePrecision: '',
     oneWayDistanceKm: 12.4,
     notes: '',
     createdAt: '2026-01-01',
@@ -168,13 +171,13 @@ describe('CompaniesView tablo sütunları', () => {
     const wrapper = await mountView([
       companyFixture({
         addressText:
-          'KALEKİM AŞ. KARADUVAR MAH. SERBEST BÖLGE 14.CADDE NO:13 AKDENİZ/MERSİN çok uzun bir adres metni burada devam ediyor',
+          'ÖRNEK ELEKTRONİK A.Ş. KURGU MAH. DENEME 5.CADDE NO:21 AKDENİZ/MERSİN çok uzun bir adres metni burada devam ediyor',
       }),
     ])
 
     // Assert
     expect(wrapper.find('td').exists()).toBe(true)
-    expect(wrapper.text()).not.toContain('SERBEST BÖLGE 14.CADDE')
+    expect(wrapper.text()).not.toContain('DENEME 5.CADDE')
     wrapper.unmount()
   })
 })
@@ -183,7 +186,7 @@ describe('CompaniesView arama', () => {
   it('adres metnine göre arama yapılabilir', async () => {
     // Arrange
     const wrapper = await mountView([
-      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Serbest Bölge' }),
+      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Deneme Bölgesi' }),
       companyFixture({ id: 2, name: 'Firma B', addressText: 'Adana Sanayi Sitesi' }),
     ])
 
@@ -228,7 +231,7 @@ describe('CompaniesView arama', () => {
   it('arama metni yeniden mount edilince korunur ve tabloya uygulanır (Pinia store)', async () => {
     // Arrange
     const wrapper = await mountView([
-      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Serbest Bölge' }),
+      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Deneme Bölgesi' }),
       companyFixture({ id: 2, name: 'Firma B', addressText: 'Adana Sanayi Sitesi' }),
     ])
     await wrapper.get('input[type="text"]').setValue('Mersin')
@@ -237,7 +240,7 @@ describe('CompaniesView arama', () => {
 
     // Act: sayfa değişip geri dönülmüş gibi ikinci bir mount.
     const wrapper2 = await mountView([
-      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Serbest Bölge' }),
+      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Deneme Bölgesi' }),
       companyFixture({ id: 2, name: 'Firma B', addressText: 'Adana Sanayi Sitesi' }),
     ])
 
@@ -425,6 +428,66 @@ describe('CompaniesView — işletme silme', () => {
       expect.objectContaining({ severity: 'error', detail: 'delete_company: açık yerleştirmesi var' }),
     )
     expect(listMock).toHaveBeenCalledTimes(1) // yalnız ilk yükleme; hata sonrası yenilenmedi
+    wrapper.unmount()
+  })
+})
+
+describe('CompaniesView yaklaşık konum', () => {
+  it('mahalle düzeyinde çözülen işletmeyi "Yaklaşık (mahalle)" olarak ayırt eder', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ id: 1, geocodeStatus: 'resolved', geocodePrecision: 'neighborhood' }),
+      companyFixture({ id: 2, geocodeStatus: 'resolved', geocodePrecision: 'address' }),
+    ])
+
+    // Assert
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows[0].text()).toContain(labels.geocodePrecision.neighborhood)
+    expect(rows[1].text()).not.toContain(labels.geocodePrecision.neighborhood)
+    expect(rows[1].text()).toContain(labels.geocodeStatus.resolved)
+    wrapper.unmount()
+  })
+
+  it('konum çözme toast\'ında yaklaşık sayısını yalnız sıfırdan büyükse gösterir', async () => {
+    // Arrange
+    vi.mocked(filesApi.geocodePending).mockResolvedValue({
+      resolved: 5,
+      approximate: 2,
+      failed: 0,
+      skipped: 1,
+      warnings: [],
+    })
+    const wrapper = await mountView([companyFixture()])
+    const button = wrapper.findAll('button').find((b) => b.text() === labels.geocoding.button)!
+
+    // Act
+    await button.trigger('click')
+    await flushPromises()
+
+    // Assert
+    const detail = toastAddMock.mock.calls[0][0].detail
+    expect(detail).toContain(`2 ${labels.geocoding.approximate}`)
+    wrapper.unmount()
+  })
+
+  it('yaklaşık çözülen yoksa toast\'ta yaklaşık ifadesi geçmez', async () => {
+    // Arrange
+    vi.mocked(filesApi.geocodePending).mockResolvedValue({
+      resolved: 3,
+      approximate: 0,
+      failed: 0,
+      skipped: 0,
+      warnings: [],
+    })
+    const wrapper = await mountView([companyFixture()])
+    const button = wrapper.findAll('button').find((b) => b.text() === labels.geocoding.button)!
+
+    // Act
+    await button.trigger('click')
+    await flushPromises()
+
+    // Assert
+    expect(toastAddMock.mock.calls[0][0].detail).not.toContain(labels.geocoding.approximate)
     wrapper.unmount()
   })
 })

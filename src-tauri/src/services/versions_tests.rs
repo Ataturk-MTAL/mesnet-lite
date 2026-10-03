@@ -74,6 +74,7 @@ async fn create_test_company(pool: &SqlitePool, name: &str) -> i64 {
             // test tavanı değil otomatik sürümü sınıyor, tavana takılmamalı.
             one_way_distance_km: None,
             district: String::new(),
+            neighborhood: String::new(),
             notes: String::new(),
         },
     )

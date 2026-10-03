@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use sqlx::{Sqlite, SqlitePool};
 
-use crate::domain::history::events::{CoordinationState, HoursState};
+use crate::domain::history::events::{AssignmentSource, CoordinationState, HoursState};
 use crate::error::AppResult;
 
 /// (işletme, dönem) çifti — eski tablo satırlarını gruplamak için.
@@ -99,7 +99,7 @@ async fn diff_coordinators(pool: &SqlitePool, plan: &mut ReconcilePlan) -> AppRe
     let mut keys = BTreeSet::new();
     for (company_id, teacher_id, term, visit_day, visit_hour, is_forced, force_reason) in rows {
         keys.insert((company_id, term.clone()));
-        let legacy = CoordinationState { teacher_id, visit_day, visit_hour, is_forced: is_forced != 0, force_reason };
+        let legacy = CoordinationState { teacher_id, visit_day, visit_hour, is_forced: is_forced != 0, force_reason, source: AssignmentSource::Manual };
         let current = fetch_open_coordination(pool, company_id, &term).await?;
         let from_teacher_id = current.as_ref().map(|s| s.teacher_id);
         if current.as_ref() != Some(&legacy) {
@@ -179,5 +179,9 @@ where
         visit_hour,
         is_forced: is_forced != 0,
         force_reason,
+        // Eski `assignments` tablosunda kaynak sütunu yoktur; karşılaştırma
+        // yalnız fiziksel alanlara bakar, bu yüzden öneri kaynaklı bir
+        // projeksiyon satırı sahte "fark" üretmez.
+        source: AssignmentSource::Manual,
     }))
 }

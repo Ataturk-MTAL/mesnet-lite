@@ -19,16 +19,7 @@ use crate::domain::models::Company;
 use crate::domain::workload::{statutory_cap, InstitutionType};
 use crate::error::AppResult;
 
-use super::{change_log, settings, teaching_load, terms};
-
-// `db::companies::SELECT_COLUMNS`in bir kopyası (private const olduğu için
-// paylaşılamıyor): `Company`nin FromRow eşlemesi ada göre çalıştığından, bu
-// listenin `companies` tablosundaki TÜM sütunları içermesi gerekir — 0010
-// göçüyle eklenen `district` de burada olmazsa "no column found" hatası
-// verir.
-const COMPANY_COLUMNS: &str = "id, name, contact_first_name, contact_last_name, phone, email, \
-     address_text, latitude, longitude, geocode_status, one_way_distance_km, district, notes, \
-     created_at, updated_at";
+use super::{change_log, companies, settings, teaching_load, terms};
 
 /// `source_term` yalnız `copySchedulesFromTerm` içindir: `Some(t)` ise `t`
 /// dönemindeki her öğretmenin SON geçerli programı `source_schedules`'e
@@ -112,7 +103,7 @@ async fn load_capacity_settings(conn: &mut SqliteConnection) -> AppResult<(i64, 
 /// TÜM işletmeler (aktif ve pasif) — `decide`, varlık ve aktiflik
 /// denetimlerini ayrı ayrı yapar (`require_company` / `require_active_company`).
 async fn load_companies(conn: &mut SqliteConnection) -> AppResult<BTreeMap<i64, CompanyFacts>> {
-    let sql = format!("SELECT {COMPANY_COLUMNS} FROM companies");
+    let sql = format!("SELECT {} FROM companies", companies::SELECT_COLUMNS);
     let rows: Vec<Company> = sqlx::query_as(&sql).fetch_all(&mut *conn).await?;
 
     let active_flags: Vec<(i64, i64)> = sqlx::query_as("SELECT id, is_active FROM companies").fetch_all(&mut *conn).await?;

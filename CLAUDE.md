@@ -48,7 +48,7 @@ Ayrıntı: `CONTRIBUTING.md`.
 - Her özellik/hata düzeltmesi `dev`'den ayrılan bir dalda yapılır:
   `git switch dev && git pull && git switch -c <tür>/<kısa-ad>` (`feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `test/`).
 - İşe başlamadan önce bulunulan dalı kontrol et; `main` ya da `dev` üzerindeysen önce dal aç.
-- İş dalı → `dev` PR'ı; CI yeşil olmadan birleştirme. Sürüm: `dev` → `main` PR'ı, sonra `main`'de `vX.Y.Z` etiketi.
+- İş dalı → `dev` PR'ı; CI yeşil olmadan birleştirme. Sürüm: `dev` → `main` PR'ı; birleşince `Sürüm` iş akışı derler, yayımlar ve `vX.Y.Z` etiketini kendisi oluşturur. **Elle etiket gönderme.**
 - Ajan brief'lerinde de çalışılacak dalı belirt; ajan `main`/`dev` üzerinde commit atmaz.
 
 ## Kişisel veri (zorunlu)

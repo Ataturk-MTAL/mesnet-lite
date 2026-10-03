@@ -154,9 +154,9 @@ mod tests {
     /// `CoordinatorAssigned`, önceki koordinatörden bağımsız yeni durumu verir.
     #[test]
     fn coordination_assigned_ignores_prior_state() {
-        let new_state = CoordinationState { teacher_id: 7, visit_day: 2, visit_hour: 4, is_forced: false, force_reason: None };
+        let new_state = CoordinationState { teacher_id: 7, visit_day: 2, visit_hour: 4, is_forced: false, force_reason: None, source: Default::default() };
         let e = EventPayload::CoordinatorAssigned { state: new_state.clone(), from_teacher_id: Some(3), labels: labels() };
-        let stale_prev = CoordinationState { teacher_id: 1, visit_day: 1, visit_hour: 1, is_forced: true, force_reason: None };
+        let stale_prev = CoordinationState { teacher_id: 1, visit_day: 1, visit_hour: 1, is_forced: true, force_reason: None, source: Default::default() };
         assert_eq!(apply_coordination(Some(&stale_prev), &e), apply_coordination(None, &e));
         assert_eq!(apply_coordination(None, &e), Some(new_state));
     }

@@ -10,10 +10,20 @@
           :label="labels.allocation.propose"
           icon="pi pi-bolt"
           outlined
-          :loading="isProposing"
           :disabled="isReadOnly"
           v-tooltip.top="labels.allocation.proposeTooltip"
-          @click="openProposalDialog"
+          @click="isProposalDialogOpen = true"
+        />
+        <Button
+          v-if="appliedProposalChangeSetId !== null && !isReadOnly"
+          :label="labels.allocation.proposalUndo"
+          :aria-label="labels.allocation.proposalUndo"
+          icon="pi pi-undo"
+          severity="secondary"
+          outlined
+          :loading="isUndoingProposal"
+          v-tooltip.top="labels.allocation.proposalUndoTooltip"
+          @click="confirmUndoProposal"
         />
         <Button
           :label="labels.allocation.clearAll"
@@ -99,7 +109,7 @@
 
               <Panel
                 v-for="group in unassignedGroups"
-                :key="group.district"
+                :key="group.key"
                 :header="group.label"
                 toggleable
                 class="district-group"
@@ -123,6 +133,9 @@
                   @keydown.space.prevent="toggleKeyboardSelection(company.companyId)"
                 >
                   <div class="company-name">{{ company.companyName }}</div>
+                  <div v-if="company.district.trim().length > 0 || company.neighborhood.trim().length > 0" class="company-place">
+                    {{ [company.district, company.neighborhood].filter((v) => v.trim().length > 0).join(' · ') }}
+                  </div>
                   <div
                     v-if="company.addressText.trim().length > 0"
                     class="company-address"
@@ -180,6 +193,12 @@
                     </div>
                     <div class="company-meta">
                       <Tag :value="assignedTeacherName(company)" severity="secondary" />
+                      <Tag
+                        v-if="company.assignmentSource === 'proposal'"
+                        :value="labels.allocation.assignmentSourceBadge"
+                        severity="info"
+                        v-tooltip.top="labels.allocation.assignmentSourceTooltip"
+                      />
                       <span class="muted">{{ assignedSlotLabel(company) }}</span>
                     </div>
                   </div>
@@ -349,85 +368,15 @@
       </template>
     </Dialog>
 
-    <!-- Öneri diyaloğu -->
-    <Dialog
+    <!-- Öneri diyaloğu: öneriyi kendisi ister; uygulama burada yapılır. -->
+    <ProposalDialog
       v-model:visible="isProposalDialogOpen"
-      modal
-      :header="labels.allocation.proposalTitle"
-      :style="{ width: '36rem' }"
-      @hide="closeProposalDialog"
-    >
-      <div v-if="!proposal || proposal.assignments.length === 0" class="empty">
-        {{ labels.allocation.proposalEmpty }}
-      </div>
-
-      <template v-else>
-        <div
-          v-for="item in proposal.assignments"
-          :key="item.companyId"
-          class="proposal-row"
-          :class="{
-            'proposal-row--success': proposalResultFor(item.companyId)?.success === true,
-            'proposal-row--failed': proposalResultFor(item.companyId)?.success === false,
-          }"
-        >
-          <div class="proposal-row-info">
-            <div class="company-name">{{ item.companyName }}</div>
-            <div class="company-meta">
-              <Tag :value="item.teacherName" severity="secondary" />
-              <span class="muted">{{ proposalSlotLabel(item) }}</span>
-              <Tag
-                v-if="!item.exactBranchMatch"
-                :value="labels.allocation.nearField"
-                severity="warn"
-              />
-            </div>
-            <div v-if="proposalResultFor(item.companyId)?.success === false" class="proposal-error">
-              {{ proposalResultFor(item.companyId)?.errorMessage }}
-            </div>
-          </div>
-          <i
-            v-if="proposalResultFor(item.companyId)?.success === true"
-            class="pi pi-check proposal-icon proposal-icon--success"
-          />
-          <i
-            v-else-if="proposalResultFor(item.companyId)?.success === false"
-            class="pi pi-times proposal-icon proposal-icon--failed"
-          />
-        </div>
-      </template>
-
-      <Panel
-        v-if="proposal && proposal.unassigned.length > 0"
-        :header="`${labels.allocation.proposalUnassigned} (${proposal.unassigned.length})`"
-        toggleable
-        class="proposal-unassigned-panel"
-      >
-        <div
-          v-for="item in proposal.unassigned"
-          :key="item.companyId"
-          class="proposal-unassigned-row"
-        >
-          <span class="company-name">{{ item.companyName }}</span>
-          <span class="muted">{{ item.reason }}</span>
-        </div>
-      </Panel>
-
-      <template #footer>
-        <Button
-          :label="labels.common.cancel"
-          severity="secondary"
-          outlined
-          @click="closeProposalDialog"
-        />
-        <Button
-          :label="labels.allocation.proposalApply"
-          :loading="isApplyingProposal"
-          :disabled="!proposal || proposal.assignments.length === 0 || isApplyingProposal || isReadOnly"
-          @click="applyProposal"
-        />
-      </template>
-    </Dialog>
+      :is-planning="isPlanning"
+      :is-applying="isApplyingProposal"
+      :rejection="proposalRejection"
+      @apply="applyProposal"
+      @proposal-change="proposalRejection = null"
+    />
 
     <ChangeDetailsDialog
       v-if="activeTermDates"
@@ -448,20 +397,20 @@ import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import { assignmentsApi } from '../api/assignments'
-import type {
-  AllocationProposal,
-  AssignmentBoard,
-  BoardCompany,
-  NewAssignment,
-  ProposedAssignment,
-} from '../api/assignments'
+import { commitChange } from '../api/history'
+import { hoursApi } from '../api/hours'
+import type { AllocationProposal, AssignmentBoard, BoardCompany, NewAssignment } from '../api/assignments'
+import { buildApplyProposalCommand } from '../utils/proposalApply'
+import type { ChangeOutcome } from '../types/models'
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
+import { groupCompanies } from '../utils/companyGrouping'
 import { useSelectionStore } from '../stores/selection'
 import { useAsOfDateStore } from '../stores/asOfDate'
 import { useChangeDetailsDialog } from '../composables/useChangeDetailsDialog'
 import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
 import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
+import ProposalDialog from '../components/allocation/ProposalDialog.vue'
 
 /** İşletme adresi ipucu. Varsayılan `--p-tooltip-max-width` (12.5rem) uzun bir
  *  adres için çok dar kalır; sınır `.p-tooltip` KÖKÜNDE tanımlı olduğundan
@@ -497,15 +446,6 @@ interface HoverCell {
 interface BlockHighlight {
   day: number
   hours: number[]
-}
-
-/** Öneri uygulanırken her bir kalemin sonucu; kaçının başarılı/başarısız olduğunu
- *  ve başarısızlık gerekçesini kullanıcıya tam olarak göstermek için tutulur. */
-interface ProposalApplyResult {
-  companyId: number
-  companyName: string
-  success: boolean
-  errorMessage: string | null
 }
 
 const toast = useToast()
@@ -549,10 +489,12 @@ const pendingViolations = ref<string[]>([])
 
 // Öneri diyaloğu durumu
 const isProposalDialogOpen = ref(false)
-const isProposing = ref(false)
 const isApplyingProposal = ref(false)
-const proposal = ref<AllocationProposal | null>(null)
-const proposalApplyResults = ref<ProposalApplyResult[] | null>(null)
+/** Arka uç öneriyi reddettiğinde diyalogda gösterilen gerekçe; hiçbir şey yazılmamıştır. */
+const proposalRejection = ref<string | null>(null)
+/** Bu oturumda uygulanan önerinin değişiklik kümesi; yalnız bellekte, geri almak için. */
+const appliedProposalChangeSetId = ref<number | null>(null)
+const isUndoingProposal = ref(false)
 
 const selectedTeacher = computed(
   () => board.value?.teachers.find((t) => t.teacherId === selectedTeacherId.value) ?? null,
@@ -610,42 +552,11 @@ const assignedCompanies = computed(
   () => board.value?.companies.filter((c) => c.assignedTeacherId !== null) ?? [],
 )
 
-interface CompanyDistrictGroup {
-  /** Boş dize: ilçesi ayrıştırılamamış işletmeler grubu. */
-  district: string
-  /** "Akdeniz (13)" gibi; sayaç arama filtresinden ETKİLENMEZ, o ilçedeki TÜM atanmamış
-   *  işletmeleri sayar. Arama yalnızca hangi kartların gösterileceğini daraltır. */
-  label: string
-  companies: BoardCompany[]
-}
-
-/** Atanmamış işletmeleri ilçeye göre gruplar; Türkçe alfabetik sıralanır, ilçesi boş
- *  olanlar sonda ayrı bir grupta toplanır. Aramayla eşleşen kartı kalmayan grup hiç
- *  gösterilmez. */
-const unassignedGroups = computed<CompanyDistrictGroup[]>(() => {
-  const namedDistricts = [
-    ...new Set(
-      unassignedCompanies.value
-        .map((c) => c.district)
-        .filter((district) => district.trim().length > 0),
-    ),
-  ].sort((a, b) => a.localeCompare(b, 'tr'))
-
-  const orderedDistricts = [...namedDistricts, '']
-
-  return orderedDistricts
-    .map((district) => {
-      const totalCount = unassignedCompanies.value.filter((c) => c.district === district).length
-      const visibleCompanies = filteredUnassigned.value.filter((c) => c.district === district)
-      const districtName = district.trim().length > 0 ? district : labels.allocation.districtUnknown
-      return {
-        district,
-        label: `${districtName} (${totalCount})`,
-        companies: visibleCompanies,
-      }
-    })
-    .filter((group) => group.companies.length > 0)
-})
+/** Atanmamış işletmeleri sunucunun verdiği `groupKey`'e göre gruplar (bkz. utils/companyGrouping).
+ *  Sayaçlar arama filtresinden etkilenmez; arama yalnızca hangi kartların gösterileceğini daraltır. */
+const unassignedGroups = computed(() =>
+  groupCompanies(unassignedCompanies.value, filteredUnassigned.value),
+)
 
 function showError(error: unknown): void {
   const detail = error instanceof Error ? error.message : labels.common.error
@@ -1024,112 +935,118 @@ function confirmClear(): void {
   })
 }
 
-/** Önerilen atamanın gün/saat aralığı etiketi. `ProposedAssignment` yalnızca bloğun
- *  BAŞLANGICINI taşıdığından bitiş saati burada `awardedHours`'tan hesaplanır. */
-function proposalSlotLabel(item: ProposedAssignment): string {
-  const span = companySpan(item)
-  const endHour = item.visitHour + span - 1
-  const dayName = labels.allocation.days[item.visitDay]
-  return endHour > item.visitHour
-    ? `${dayName} ${item.visitHour}–${endHour}`
-    : `${dayName} ${item.visitHour}`
-}
-
-/** İlgili önerinin uygulama sonucu; henüz uygulanmadıysa `null`. */
-function proposalResultFor(companyId: number): ProposalApplyResult | null {
-  return proposalApplyResults.value?.find((r) => r.companyId === companyId) ?? null
-}
-
-/** Öneriyi arka uçtan ister; hiçbir şey kaydetmez, yalnızca diyaloğu doldurur. */
-async function openProposalDialog(): Promise<void> {
-  if (isReadOnly.value) return
-  isProposing.value = true
-  try {
-    proposal.value = await assignmentsApi.propose()
-    proposalApplyResults.value = null
-    isProposalDialogOpen.value = true
-  } catch (error: unknown) {
-    showError(error)
-  } finally {
-    isProposing.value = false
-  }
-}
-
 function closeProposalDialog(): void {
   isProposalDialogOpen.value = false
-  proposal.value = null
-  proposalApplyResults.value = null
+  proposalRejection.value = null
+}
+
+/** Panonun dönemi; pano henüz gelmediyse etkin dönem. */
+function boardTerm(): string {
+  return board.value?.term ?? activeTerm.value
 }
 
 /**
- * Öneriyi sırayla uygular. Bir kalem hata verirse diğerleri de denenmeye devam eder
- * (hata sessizce yutulmaz, kalan kalemler de iptal edilmez); bittiğinde kaçının
- * başarılı/başarısız olduğu ve gerekçesi hem diyalogda satır satır hem de tek bir
- * toast özetinde kullanıcıya bildirilir. Sonunda pano tazelenir.
+ * Öneriyi TEK değişiklik kümesi (`applyProposal`) olarak, tek işlemde yazar:
+ * saat → atama → bırakma; biri reddedilirse hiçbiri yazılmaz. Saat satırlarının
+ * kilit/not alanları güncel saat kaydından okunur. Reddedilirse gerekçe
+ * diyalogda kalır; kümenin kimliği geri almak için bellekte saklanır.
  */
-async function applyProposal(): Promise<void> {
+async function applyProposal(proposal: AllocationProposal): Promise<void> {
   if (isReadOnly.value) return
-  const items = proposal.value?.assignments ?? []
-  if (items.length === 0) return
 
-  // Dönem başladıysa TÜM atamalar için TEK pencere açılır; aynı tarih ve gerekçe
-  // her kaleme gönderilir. Vazgeç'te hiçbir atama uygulanmaz.
+  // Dönem başladıysa tek pencere açılır; Vazgeç'te hiçbir şey yazılmaz.
   const change = await requestChangeDetails()
   if (change === null) return
 
   isApplyingProposal.value = true
-  const results: ProposalApplyResult[] = []
-
-  for (const item of items) {
-    try {
-      await assignmentsApi.assign(
-        {
-          teacherId: item.teacherId,
-          companyId: item.companyId,
-          visitDay: item.visitDay,
-          visitHour: item.visitHour,
-          isForced: false,
-          forceReason: null,
-        },
-        change,
-      )
-      results.push({
-        companyId: item.companyId,
-        companyName: item.companyName,
-        success: true,
-        errorMessage: null,
-      })
-    } catch (error: unknown) {
-      results.push({
-        companyId: item.companyId,
-        companyName: item.companyName,
-        success: false,
-        errorMessage: error instanceof Error ? error.message : labels.common.error,
-      })
+  proposalRejection.value = null
+  try {
+    const hoursBoard = await hoursApi.get()
+    const built = buildApplyProposalCommand(proposal, hoursBoard.rows)
+    if (!built.ok) {
+      showError(new Error(labels.allocation.proposalHoursRowMissing(built.missingHoursFor.join(', '))))
+      return
     }
+    const outcome = await commitChange(
+      {
+        term: boardTerm(),
+        effectiveDate: change.effectiveDate,
+        documentDate: null,
+        reason: change.reason ?? '',
+        command: built.command,
+      },
+      null,
+    )
+    await handleApplyOutcome(outcome)
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isApplyingProposal.value = false
   }
+}
 
-  proposalApplyResults.value = results
-  await load()
-
-  const successCount = results.filter((r) => r.success).length
-  const failureCount = results.length - successCount
-  if (failureCount === 0) {
+async function handleApplyOutcome(outcome: ChangeOutcome): Promise<void> {
+  if (outcome.status === 'committed') {
+    appliedProposalChangeSetId.value = outcome.changeSetId
+    await load()
     toast.add({ severity: 'success', summary: labels.allocation.proposalApplied, life: 3000 })
+    closeProposalDialog()
+  } else if (outcome.status === 'rejected') {
+    proposalRejection.value = outcome.reason
+  } else if (outcome.status === 'stale') {
+    showError(new Error(outcome.message))
   } else {
-    const failedNames = results
-      .filter((r) => !r.success)
-      .map((r) => r.companyName)
-      .join(', ')
-    toast.add({
-      severity: 'warn',
-      summary: labels.allocation.proposalApplied,
-      detail: `${successCount}/${results.length} ${labels.allocation.proposalSuccessSuffix}. ${labels.allocation.proposalFailedPrefix}: ${failedNames}`,
-      life: 10000,
-    })
+    showError(new Error(labels.allocation.proposalUnexpectedOutcome))
   }
+}
 
-  isApplyingProposal.value = false
+function confirmUndoProposal(): void {
+  if (isReadOnly.value || appliedProposalChangeSetId.value === null) return
+  confirm.require({
+    message: labels.allocation.proposalUndoConfirm,
+    header: labels.allocation.proposalUndo,
+    acceptLabel: labels.common.yes,
+    rejectLabel: labels.common.no,
+    acceptProps: { severity: 'danger' },
+    accept: () => void undoProposal(),
+  })
+}
+
+async function undoProposal(): Promise<void> {
+  const changeSetId = appliedProposalChangeSetId.value
+  if (changeSetId === null) return
+  isUndoingProposal.value = true
+  try {
+    const outcome = await commitChange(
+      {
+        term: boardTerm(),
+        effectiveDate: null,
+        documentDate: null,
+        reason: labels.allocation.proposalUndoReason,
+        command: { type: 'revoke', changeSetId },
+      },
+      null,
+    )
+    await handleUndoOutcome(outcome)
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isUndoingProposal.value = false
+  }
+}
+
+async function handleUndoOutcome(outcome: ChangeOutcome): Promise<void> {
+  if (outcome.status === 'committed') {
+    appliedProposalChangeSetId.value = null
+    await load()
+    toast.add({ severity: 'success', summary: labels.allocation.proposalUndone, life: 3000 })
+  } else if (outcome.status === 'rejected') {
+    showError(new Error(outcome.reason))
+  } else if (outcome.status === 'stale') {
+    showError(new Error(outcome.message))
+  } else {
+    showError(new Error(labels.common.error))
+  }
 }
 
 async function load(): Promise<void> {
@@ -1225,6 +1142,7 @@ onUnmounted(() => {
 .company-card--readonly { cursor: not-allowed; opacity: 0.7; }
 .company-card--readonly:hover { background: var(--p-content-background); }
 .company-name { font-weight: 600; font-size: 0.9375rem; }
+.company-place { font-size: 0.75rem; color: var(--p-text-muted-color); margin-top: 0.125rem; }
 .company-address {
   font-size: 0.75rem; color: var(--p-text-muted-color); margin-top: 0.125rem;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1350,36 +1268,6 @@ onUnmounted(() => {
 .muted { color: var(--p-text-muted-color); font-size: 0.8125rem; }
 .force-reasons { margin: 0.5rem 0 1rem; padding-left: 1.25rem; color: var(--p-orange-500); }
 .field { display: flex; flex-direction: column; gap: 0.375rem; }
-
-/* Öneri diyaloğu satırları */
-.proposal-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  border: 1px solid var(--p-content-border-color);
-  border-radius: var(--p-content-border-radius);
-  padding: 0.5rem 0.75rem;
-  margin-bottom: 0.5rem;
-  background: var(--p-content-background);
-}
-.proposal-row--success { border-color: var(--p-green-500); }
-.proposal-row--failed { border-color: var(--p-red-500); }
-.proposal-row-info { min-width: 0; }
-.proposal-error { font-size: 0.75rem; color: var(--p-red-500); margin-top: 0.25rem; }
-.proposal-icon { font-size: 1.125rem; flex-shrink: 0; }
-.proposal-icon--success { color: var(--p-green-500); }
-.proposal-icon--failed { color: var(--p-red-500); }
-.proposal-unassigned-panel { margin-top: 1rem; }
-.proposal-unassigned-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.375rem 0;
-  border-bottom: 1px solid var(--p-content-border-color);
-}
-.proposal-unassigned-row:last-child { border-bottom: none; }
 
 /* Hareket duyarlılığı azaltılmış kullanıcılar için tüm geçiş/animasyonları kapat. */
 @media (prefers-reduced-motion: reduce) {

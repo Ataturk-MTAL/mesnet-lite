@@ -1,0 +1,108 @@
+{
+  "has_any_user": true,
+  "list_users": [
+    {
+      "id": 1,
+      "name": "Deniz ARSLAN",
+      "isActive": true
+    }
+  ],
+  "get_settings": {
+    "school_name": "Atatürk Mesleki ve Teknik Anadolu Lisesi",
+    "principal_name": "Ali Veli",
+    "field_name": "Elektrik-Elektronik Teknolojisi",
+    "active_term": "2026-2027/1",
+    "institution_type": "other",
+    "is_metropolitan_district": "true",
+    "max_daily_lessons": "9",
+    "school_latitude": "",
+    "school_longitude": "",
+    "grouping_mode": "manual",
+    "grouping_max_diameter_km": "3",
+    "grouping_manual_groups": "[{\"name\": \"Kurgu Sanayi\", \"neighborhoods\": [\"Kurgu\", \"Numune\"], \"districts\": [\"Toroslar\"]}, {\"name\": \"\", \"neighborhoods\": [], \"districts\": []}, {\"name\": \"kurgu sanayi\", \"neighborhoods\": [\"Örnek\"], \"districts\": []}]"
+  },
+  "backup_status": {
+    "backupDir": "/Users/ogretmen/Library/Application Support/MESNET.Lite/backups",
+    "lastBackupAt": "2026-09-20",
+    "backupCount": 5
+  },
+  "plugin:dialog|open": "/Users/ogretmen/Downloads/mesnet-yedek-2026-09-15.db",
+  "list_companies": [
+    {
+      "id": 1,
+      "name": "Akdeniz Elektronik San. Tic. Ltd. Şti.",
+      "contactFirstName": "Ali",
+      "contactLastName": "Veli",
+      "phone": "0532 000 00 00",
+      "email": "ali@example.com",
+      "addressText": "Örnek Mah. Deneme 7. Cadde No:21 Akdeniz/Mersin",
+      "district": "Akdeniz",
+      "latitude": null,
+      "longitude": null,
+      "geocodeStatus": "pending",
+      "oneWayDistanceKm": 12.4,
+      "notes": "",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01",
+      "neighborhood": "Kurgu",
+      "geocodePrecision": ""
+    },
+    {
+      "id": 2,
+      "name": "Örnek Enerji Sistemleri A.Ş.",
+      "contactFirstName": "Ali",
+      "contactLastName": "Veli",
+      "phone": "0532 000 00 00",
+      "email": "ali@example.com",
+      "addressText": "Numune Mah. Deneme Cad. No:2 Toroslar/Mersin",
+      "district": "Toroslar",
+      "latitude": null,
+      "longitude": null,
+      "geocodeStatus": "resolved",
+      "oneWayDistanceKm": 12.4,
+      "notes": "",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01",
+      "neighborhood": "Numune",
+      "geocodePrecision": "neighborhood"
+    },
+    {
+      "id": 3,
+      "name": "Deneme Pano Ltd. Şti.",
+      "contactFirstName": "Ali",
+      "contactLastName": "Veli",
+      "phone": "0532 000 00 00",
+      "email": "ali@example.com",
+      "addressText": "Örnek Mah. Deneme Cad. No:3 Mezitli/Mersin",
+      "district": "Mezitli",
+      "latitude": null,
+      "longitude": null,
+      "geocodeStatus": "resolved",
+      "oneWayDistanceKm": 12.4,
+      "notes": "",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01",
+      "neighborhood": "Örnek",
+      "geocodePrecision": "address"
+    },
+    {
+      "id": 4,
+      "name": "Kurgu Otomasyon",
+      "contactFirstName": "Ali",
+      "contactLastName": "Veli",
+      "phone": "0532 000 00 00",
+      "email": "ali@example.com",
+      "addressText": " Mah. Deneme Cad. No:4 Akdeniz/Mersin",
+      "district": "Akdeniz",
+      "latitude": null,
+      "longitude": null,
+      "geocodeStatus": "failed",
+      "oneWayDistanceKm": 12.4,
+      "notes": "",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01",
+      "neighborhood": "",
+      "geocodePrecision": ""
+    }
+  ]
+}

@@ -52,6 +52,7 @@ pub(super) fn new_company(name: &str, one_way_km: Option<f64>) -> NewCompany {
         longitude: None,
         one_way_distance_km: one_way_km,
         district: String::new(),
+        neighborhood: String::new(),
         notes: String::new(),
     }
 }
@@ -126,7 +127,7 @@ pub(super) fn hours_row(company_id: i64, awarded_hours: i64) -> CompanyHoursRow 
 }
 
 pub(super) fn coordinator_row(company_id: i64, teacher_id: i64) -> CoordinatorRow {
-    CoordinatorRow { company_id, teacher_id, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None }
+    CoordinatorRow { company_id, teacher_id, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None, source: Default::default() }
 }
 
 /// Şema tablolarının hepsindeki satır sayısı (`_sqlx_migrations` ve SQLite'ın

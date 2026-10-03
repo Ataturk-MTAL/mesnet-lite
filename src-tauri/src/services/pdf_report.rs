@@ -473,6 +473,7 @@ mod tests {
                 longitude: None,
                 one_way_distance_km: Some(6.8),
                 district: String::new(),
+                neighborhood: String::new(),
                 notes: String::new(),
             },
         )

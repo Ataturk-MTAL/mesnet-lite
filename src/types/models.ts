@@ -6,6 +6,8 @@ export interface LatLng {
   longitude: number
 }
 
+/** Konumun ne kadar kesin çözüldüğü. Boş dize: konum yok. */
+export type GeocodePrecision = '' | 'address' | 'neighborhood' | 'manual'
 export type GeocodeStatus = 'pending' | 'resolved' | 'failed' | 'manual'
 export type ChiefType =
   | 'none'
@@ -25,9 +27,12 @@ export interface Company {
   addressText: string
   /** Adresten türetilen veya elle girilen ilçe. Ayrıştırılamamışsa boş dize. */
   district: string
+  /** Adresten türetilen veya elle girilen mahalle. Boş dize: bilinmiyor. */
+  neighborhood: string
   latitude: number | null
   longitude: number | null
   geocodeStatus: GeocodeStatus
+  geocodePrecision: GeocodePrecision
   /** TEK YÖN yol mesafesi. Saat tavanı kuralları bunun iki katını kullanır. */
   oneWayDistanceKm: number | null
   notes: string
@@ -44,6 +49,8 @@ export interface NewCompany {
   addressText: string
   /** Boş gönderilirse arka uç adresten türetir; doluysa aynen korunur. */
   district: string
+  /** Boş gönderilirse arka uç adresten türetir; doluysa aynen korunur. */
+  neighborhood: string
   latitude: number | null
   longitude: number | null
   oneWayDistanceKm: number | null
@@ -287,6 +294,7 @@ export type ChangeCommand =
   | { type: 'deleteStudent'; studentId: number }
   | { type: 'setCompanyHours'; rows: CompanyHoursRow[] }
   | { type: 'assignCoordinators'; rows: CoordinatorAssignmentRow[] }
+  | { type: 'applyProposal'; hours: CompanyHoursRow[]; assign: CoordinatorAssignmentRow[]; release: number[] }
   | { type: 'endCoordination'; companyId: number }
   | { type: 'clearCoordination' }
   | { type: 'createTeacher'; teacher: NewTeacherProfile; load: TeacherLoadInput }

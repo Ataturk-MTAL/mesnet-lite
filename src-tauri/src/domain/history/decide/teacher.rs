@@ -281,7 +281,7 @@ mod tests {
             .with_teacher(5, "Ali Öğretmen")
             .with_company(1, "İşletme A", Some(10.0))
             .with_event(stored_event(1, 1, Stream::TeacherLoad, 5, "2026-2027/1", ymd(2026, 9, 1), EventPayload::LoadSet { load: sample_load(), previous: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(2, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(3, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state_for(12), previous_awarded: None, labels: Labels(Default::default()) }, true))
             .build();
 
@@ -302,7 +302,7 @@ mod tests {
             .with_teacher(5, "Ali Öğretmen")
             .with_company(1, "İşletme A", Some(10.0))
             .with_event(stored_event(1, 1, Stream::TeacherSchedule, 5, "2026-2027/1", ymd(2026, 9, 1), EventPayload::ScheduleSet { schedule: WeeklySchedule(BTreeSet::from([Slot::new(1, 9), Slot::new(1, 10)])), previous_slot_count: None, source: "opening".into(), labels: Labels(Default::default()) }, true))
-            .with_event(stored_event(2, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(2, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(3, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state_for(2), previous_awarded: None, labels: Labels(Default::default()) }, true))
             .build();
 
@@ -336,7 +336,7 @@ mod tests {
         let ctx = ContextBuilder::new(today, term(ymd(2026, 9, 1), ymd(2027, 1, 31)))
             .with_teacher(5, "Ali Öğretmen")
             .with_company(1, "İşletme A", Some(10.0))
-            .with_event(stored_event(1, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
+            .with_event(stored_event(1, 1, Stream::Coordination, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::CoordinatorAssigned { state: CoordinationState { teacher_id: 5, visit_day: 1, visit_hour: 9, is_forced: false, force_reason: None, source: Default::default() }, from_teacher_id: None, labels: Labels(Default::default()) }, true))
             .with_event(stored_event(2, 1, Stream::CompanyHours, 1, "2026-2027/1", ymd(2026, 9, 1), EventPayload::HoursSet { state: hours_state_for(2), previous_awarded: None, labels: Labels(Default::default()) }, true))
             .with_source_schedule(5, source_schedule.clone())
             .build();

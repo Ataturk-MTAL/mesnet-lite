@@ -1,6 +1,6 @@
 use crate::db::companies::CompanyRemoval;
 use crate::db::{companies, AppState};
-use crate::domain::models::{Company, NewCompany};
+use crate::domain::models::{geocode_precision, Company, NewCompany};
 use crate::error::{AppError, AppResult};
 use tauri::State;
 
@@ -47,7 +47,8 @@ pub async fn set_company_location(
 ) -> AppResult<Company> {
     validate_coordinates(Some(latitude), Some(longitude))?;
     // Haritadan elle işaretleme her zaman 'manual' durumunu yazar.
-    companies::set_location(&state.pool, id, latitude, longitude, "manual").await
+    companies::set_location(&state.pool, id, latitude, longitude, "manual", geocode_precision::MANUAL)
+        .await
 }
 
 /// Sınır doğrulaması: dış veri güvenilmez kabul edilir.
@@ -100,6 +101,7 @@ mod tests {
             longitude: None,
             one_way_distance_km: Some(5.0),
             district: String::new(),
+            neighborhood: String::new(),
             notes: String::new(),
         }
     }

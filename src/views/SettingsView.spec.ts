@@ -10,7 +10,7 @@ import { labels } from '../i18n/labels'
 import { useAuthStore } from '../stores/auth'
 import { usersApi } from '../api/users'
 import type { SettingsMap } from '../api/settings'
-import type { BackupStatus, User } from '../types/models'
+import type { BackupStatus, Company, User } from '../types/models'
 
 const getMock = vi.fn<() => Promise<SettingsMap>>()
 const saveMock = vi.fn<(entries: SettingsMap) => Promise<SettingsMap>>()
@@ -19,6 +19,12 @@ vi.mock('../api/settings', () => ({
     get: () => getMock(),
     save: (entries: SettingsMap) => saveMock(entries),
   },
+}))
+
+// Elle grup tanımındaki öneri listesi işletmelerden gelir.
+const listCompaniesMock = vi.fn<() => Promise<Company[]>>()
+vi.mock('../api/companies', () => ({
+  companiesApi: { list: () => listCompaniesMock() },
 }))
 
 // Yedekleme kartı — Tauri komutları ve dosya diyalogları ayrı ayrı casuslanır.
@@ -118,6 +124,8 @@ beforeEach(() => {
   getMock.mockReset()
   saveMock.mockReset()
   listUsersMock.mockReset()
+  listCompaniesMock.mockReset()
+  listCompaniesMock.mockResolvedValue([])
   createUserMock.mockReset()
   renameUserMock.mockReset()
   setUserPinMock.mockReset()
@@ -303,6 +311,78 @@ describe('SettingsView max daily lessons', () => {
 
     expect(saveMock.mock.calls[0][0].max_daily_lessons).toBe('23')
     wrapper.unmount()
+  })
+})
+
+describe('SettingsView eşitlik eşiği', () => {
+  function gapField(wrapper: ReturnType<typeof mountView>) {
+    return wrapper.findAllComponents(InputNumber).find((c) => c.props('inputId') === 'balance-gap')!
+  }
+
+  it('kayıtlı eşiği yükler, yoksa varsayılan 4 gösterir', async () => {
+    getMock.mockResolvedValue({ ...baseSettings, allocation_balance_gap_hours: '7' })
+    const withValue = mountView()
+    await flushPromises()
+    expect(gapField(withValue).props('modelValue')).toBe(7)
+    withValue.unmount()
+
+    getMock.mockResolvedValue(baseSettings)
+    const withoutValue = mountView()
+    await flushPromises()
+    expect(gapField(withoutValue).props('modelValue')).toBe(4)
+    withoutValue.unmount()
+  })
+
+  it('düzenlenen eşiği tamsayı dizgisi olarak allocation_balance_gap_hours altında kaydeder', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    saveMock.mockResolvedValue(baseSettings)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await gapField(wrapper).vm.$emit('update:modelValue', 12)
+    await clickSave(wrapper)
+    await vi.waitFor(() => expect(saveMock).toHaveBeenCalledTimes(1))
+
+    expect(saveMock.mock.calls[0][0].allocation_balance_gap_hours).toBe('12')
+    wrapper.unmount()
+  })
+
+  it('sınırları (0 ve 40) kabul eder', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    saveMock.mockResolvedValue(baseSettings)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await gapField(wrapper).vm.$emit('update:modelValue', 0)
+    await clickSave(wrapper)
+    await gapField(wrapper).vm.$emit('update:modelValue', 40)
+    await clickSave(wrapper)
+    await vi.waitFor(() => expect(saveMock).toHaveBeenCalledTimes(2))
+
+    expect(saveMock.mock.calls[0][0].allocation_balance_gap_hours).toBe('0')
+    expect(saveMock.mock.calls[1][0].allocation_balance_gap_hours).toBe('40')
+    wrapper.unmount()
+  })
+
+  it('aralık dışı, kesirli ya da boş değerde kaydetmez ve uyarı gösterir', async () => {
+    getMock.mockResolvedValue(baseSettings)
+
+    const wrapper = mountView()
+    await flushPromises()
+    for (const invalid of [41, -1, 2.5, null]) {
+      await gapField(wrapper).vm.$emit('update:modelValue', invalid)
+      await clickSave(wrapper)
+    }
+
+    expect(saveMock).not.toHaveBeenCalled()
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'warn', detail: labels.settings.balanceGap.invalid }),
+    )
+    wrapper.unmount()
+  })
+
+  it('okul konumu notu artık kümeleme referansı demez', () => {
+    expect(labels.settings.schoolLocationNote).not.toContain('kümeleme referansı')
   })
 })
 
@@ -716,6 +796,72 @@ describe('SettingsView — yedekleme kartı', () => {
 
     expect(toastAddMock).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'error', detail: 'restore_backup: dosya bozuk' }),
+    )
+    wrapper.unmount()
+  })
+})
+
+describe('SettingsView işletme gruplama', () => {
+  it('kayıtlı gruplama ayarlarını bölüme yükler', async () => {
+    getMock.mockResolvedValue({ ...baseSettings, grouping_mode: 'manual' })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(labels.settings.grouping.title)
+    expect(wrapper.text()).toContain(labels.settings.grouping.addGroup)
+    wrapper.unmount()
+  })
+
+  it('çapı noktalı, grupları JSON olarak kaydeder', async () => {
+    getMock.mockResolvedValue({
+      ...baseSettings,
+      grouping_mode: 'distance',
+      grouping_max_diameter_km: '3.5',
+      grouping_manual_groups: JSON.stringify([{ name: 'Örnek', neighborhoods: ['Kurgu'], districts: [] }]),
+    })
+    saveMock.mockResolvedValue(baseSettings)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await clickSave(wrapper)
+
+    const entries = saveMock.mock.calls[0][0]
+    expect(entries.grouping_mode).toBe('distance')
+    expect(entries.grouping_max_diameter_km).toBe('3.5')
+    expect(JSON.parse(entries.grouping_manual_groups)).toEqual([
+      { name: 'Örnek', neighborhoods: ['Kurgu'], districts: [] },
+    ])
+    wrapper.unmount()
+  })
+
+  it('boş adlı grup varken kaydetmez ve uyarı verir', async () => {
+    getMock.mockResolvedValue({
+      ...baseSettings,
+      grouping_mode: 'manual',
+      grouping_manual_groups: JSON.stringify([{ name: '', neighborhoods: [], districts: [] }]),
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await clickSave(wrapper)
+
+    expect(saveMock).not.toHaveBeenCalled()
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'warn', detail: labels.settings.grouping.invalid }),
+    )
+    wrapper.unmount()
+  })
+
+  it('işletme listesi alınamazsa gerçek hata mesajını gösterir', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listCompaniesMock.mockRejectedValue(new Error('list_companies: veritabanı kilitli'))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'list_companies: veritabanı kilitli' }),
     )
     wrapper.unmount()
   })

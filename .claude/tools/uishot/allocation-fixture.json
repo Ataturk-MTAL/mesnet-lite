@@ -30,7 +30,7 @@
       {
         "companyId": 1,
         "companyName": "Akdeniz Elektronik San. Tic. Ltd. Şti.",
-        "addressText": "KALEKİM AŞ. KARADUVAR MAH. SERBEST BÖLGE 14.CADDE NO:13 AKDENİZ/MERSİN KALEKİM AŞ. KARADUVAR MAH. SERBEST BÖLGE 14.CADDE NO:13, Karaduvar, 33020 Akdeniz/Mersin, Türkiye",
+        "addressText": "ÖRNEK ELEKTRONİK A.Ş. KURGU MAH. DENEME 5. CADDE NO:21 AKDENİZ/MERSİN ÖRNEK ELEKTRONİK A.Ş. KURGU MAH. DENEME 5. CADDE NO:21, Kurgu, 33999 Akdeniz/Mersin, Türkiye",
         "district": "Akdeniz",
         "oneWayDistanceKm": 8.5,
         "studentCount": 2,
@@ -59,7 +59,7 @@
       {
         "companyId": 2,
         "companyName": "Örnek Enerji Sistemleri A.Ş.",
-        "addressText": "Korukent Mahallesi 96070 Sokak Toroslar, Korukent, Küçük Sanayi Sitesi 4A D:C, 33000 Akdeniz/Mersin, Türkiye",
+        "addressText": "Numune Mahallesi 98001 Sokak Deneme, Numune, Örnek Sanayi Sitesi 9Z D:Q, 33999 Akdeniz/Mersin, Türkiye",
         "district": "Akdeniz",
         "oneWayDistanceKm": 8.5,
         "studentCount": 2,
@@ -146,7 +146,7 @@
       {
         "companyId": 5,
         "companyName": "Deniz Pano Montaj Ltd. Şti.",
-        "addressText": "Çilek, 63147 Sk MEGA CENTER D:2.BLOK NO:2 İÇ KAPI NO:11, 33040 Akdeniz/Mersin, Türkiye",
+        "addressText": "Kurgu, 98002 Sk ÖRNEK PLAZA D:3.BLOK NO:8 İÇ KAPI NO:17, 33999 Akdeniz/Mersin, Türkiye",
         "district": "Akdeniz",
         "oneWayDistanceKm": 8.5,
         "studentCount": 2,
@@ -291,7 +291,7 @@
       {
         "companyId": 10,
         "companyName": "Yenişehir Pano Sanayi",
-        "addressText": "H, Hürriyet, Hüseyin Okan Merzeci Blv no:489\\b, 33120 Yenişehir/Mersin, Türkiye",
+        "addressText": "H, Numune, Deneme Blv no:731\\b, 33999 Yenişehir/Mersin, Türkiye",
         "district": "Yenişehir",
         "oneWayDistanceKm": 8.5,
         "studentCount": 2,

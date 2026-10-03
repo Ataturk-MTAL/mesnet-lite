@@ -102,8 +102,8 @@ async fn sync_coordination(conn: &mut SqliteConnection, key: &StreamKey, ordered
         sqlx::query(
             "INSERT INTO coordination_periods
                 (company_id, term, valid_from, valid_to, teacher_id, visit_day, visit_hour,
-                 is_forced, force_reason, source_event_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 is_forced, force_reason, source, source_event_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .bind(key.subject_id)
         .bind(&key.term)
@@ -114,6 +114,7 @@ async fn sync_coordination(conn: &mut SqliteConnection, key: &StreamKey, ordered
         .bind(iv.state.visit_hour)
         .bind(i64::from(iv.state.is_forced))
         .bind(&iv.state.force_reason)
+        .bind(iv.state.source.as_str())
         .bind(iv.source_event_id)
         .execute(&mut *conn)
         .await?;

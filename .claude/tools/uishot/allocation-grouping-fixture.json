@@ -1,0 +1,176 @@
+{
+  "get_settings": {
+    "active_term": "2026-2027/1",
+    "school_name": "Atatürk MTAL"
+  },
+  "get_assignment_board": {
+    "term": "2026-2027/1",
+    "teachers": [
+      {
+        "teacherId": 1,
+        "teacherName": "Ahmet Yılmaz",
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "capacity": 40,
+        "assignedHours": 0,
+        "companyCount": 0,
+        "freeSlots": [
+          "1-8",
+          "1-9",
+          "2-8"
+        ],
+        "occupiedBy": {},
+        "hoursPerDay": {},
+        "daysOverCap": [],
+        "isOverCapacity": false
+      }
+    ],
+    "companies": [
+      {
+        "companyId": 1,
+        "companyName": "Akdeniz Elektronik San. Tic. Ltd. Şti.",
+        "addressText": "ÖRNEK ELEKTRONİK A.Ş. KURGU MAH. DENEME 5. CADDE NO:21 AKDENİZ/MERSİN ÖRNEK ELEKTRONİK A.Ş. KURGU MAH. DENEME 5. CADDE NO:21, Kurgu, 33999 Akdeniz/Mersin, Türkiye",
+        "district": "Akdeniz",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null,
+        "neighborhood": "Kurgu",
+        "groupKey": "cluster:1",
+        "groupLabel": "Örnek bölge 1"
+      },
+      {
+        "companyId": 7,
+        "companyName": "Toroslar Elektrik Ltd. Şti.",
+        "addressText": "Toroslar adres metni",
+        "district": "Toroslar",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null,
+        "neighborhood": "Numune",
+        "groupKey": "cluster:2",
+        "groupLabel": "Örnek bölge 2"
+      },
+      {
+        "companyId": 14,
+        "companyName": "Adres Belirsiz İşletme",
+        "addressText": " adres metni",
+        "district": "",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null,
+        "neighborhood": "",
+        "groupKey": null,
+        "groupLabel": ""
+      },
+      {
+        "companyId": 11,
+        "companyName": "Modern Elektronik Ltd.",
+        "addressText": "Yenişehir adres metni",
+        "district": "Yenişehir",
+        "oneWayDistanceKm": 8.5,
+        "studentCount": 2,
+        "studentNames": [
+          "Öğrenci A",
+          "Öğrenci B"
+        ],
+        "branches": [
+          "Elektronik Haberleşme"
+        ],
+        "awardedHours": 6,
+        "isHonorary": false,
+        "hoursMissing": false,
+        "workplaceDays": [
+          1,
+          2,
+          3
+        ],
+        "assignedTeacherId": null,
+        "visitDay": null,
+        "visitHour": null,
+        "visitEndHour": null,
+        "isForced": false,
+        "forceReason": null,
+        "neighborhood": "Deneme",
+        "groupKey": null,
+        "groupLabel": ""
+      }
+    ],
+    "dayStartHour": 8,
+    "dayEndHour": 16,
+    "poolHours": 160,
+    "assignedHours": 0,
+    "remainingHours": 160,
+    "assignedCompanyCount": 0,
+    "totalCompanyCount": 14,
+    "honoraryCount": 0,
+    "warnings": []
+  },
+  "list_terms_with_dates": [],
+  "known_terms": [
+    "2026-2027/1"
+  ],
+  "get_known_terms": [
+    "2026-2027/1"
+  ]
+}

@@ -65,6 +65,7 @@
                 longitude: None,
                 one_way_distance_km: Some(5.0),
                 district: String::new(),
+                neighborhood: String::new(),
                 notes: String::new(),
             },
         )
@@ -79,6 +80,62 @@
 
     /// Atama tahtasının saat aralığı da AYNI türetmeden gelir
     /// (`settings::lesson_hour_bounds`); "Gün Başlangıç Saati" ayarı kalktı.
+    fn grouping_company(name: &str, neighborhood: &str, position: Option<(f64, f64)>) -> crate::domain::models::NewCompany {
+        crate::domain::models::NewCompany {
+            name: name.into(),
+            contact_first_name: String::new(),
+            contact_last_name: String::new(),
+            phone: String::new(),
+            email: String::new(),
+            address_text: String::new(),
+            latitude: position.map(|p| p.0),
+            longitude: position.map(|p| p.1),
+            one_way_distance_km: None,
+            district: "Örnek".into(),
+            neighborhood: neighborhood.into(),
+            notes: String::new(),
+        }
+    }
+
+    /// Pano, ayarlardaki moda göre `groupKey`/`groupLabel` doldurur: yakın iki
+    /// işletme tek kümede, konumsuz olan ilçe grubunda; elle modda ayar yeniden okunur.
+    #[tokio::test]
+    async fn board_fills_group_fields_from_settings_and_positions() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        for company in [
+            grouping_company("A İşletme", "Deneme", Some((0.0, 0.0))),
+            grouping_company("B İşletme", "Deneme", Some((0.0, 0.005))),
+            grouping_company("C İşletme", "Başka", None),
+        ] {
+            companies::create(&pool, &company).await.unwrap();
+        }
+        let state = AppState { pool };
+
+        let board = load_board(&state, &ReadAt::Latest).await.unwrap();
+        let by_name = |name: &str| board.companies.iter().find(|c| c.company_name == name).unwrap().clone();
+        let (a, b, c) = (by_name("A İşletme"), by_name("B İşletme"), by_name("C İşletme"));
+        assert_eq!(a.neighborhood, "Deneme");
+        assert_eq!(a.group_key.as_deref(), Some("cluster:1"));
+        assert_eq!(a.group_key, b.group_key);
+        assert_eq!(a.group_label, "Deneme");
+        assert_eq!(c.group_key.as_deref(), Some("district:Örnek"));
+        assert_eq!(c.group_label, "Örnek");
+
+        settings::set(&state.pool, "grouping_mode", "manual").await.unwrap();
+        settings::set(
+            &state.pool,
+            "grouping_manual_groups",
+            r#"[{"name":"Özel","neighborhoods":["Başka"],"districts":[]}]"#,
+        )
+        .await
+        .unwrap();
+        let manual = load_board(&state, &ReadAt::Latest).await.unwrap();
+        let c = manual.companies.iter().find(|c| c.company_name == "C İşletme").unwrap();
+        assert_eq!(c.group_key.as_deref(), Some("manual:0"));
+        assert_eq!(c.group_label, "Özel");
+    }
+
     #[tokio::test]
     async fn board_hours_default_to_one_through_ten_when_max_daily_lessons_is_unset() {
         let dir = tempfile::tempdir().unwrap();
@@ -189,6 +246,7 @@
                 longitude: None,
                 one_way_distance_km: Some(5.0),
                 district: String::new(),
+                neighborhood: String::new(),
                 notes: String::new(),
             },
         )
@@ -233,6 +291,26 @@
                 .await
                 .unwrap();
         assert!(events > 0, "tarihçede bir olay oluşmalı");
+    }
+
+    /// Pano her işletme için atamanın kaynağını taşır: elle atama `manual`,
+    /// atanmamış işletme `None` ("Baştan dağıt" yalnız `proposal` olanı
+    /// yeniden düzenleyebilir; bu alan arayüzün de ayrımı görmesini sağlar).
+    #[tokio::test]
+    async fn board_reports_the_assignment_source_per_company() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        let state = AppState { pool: pool.clone() };
+        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
+        let manual = a_company(&pool, "Elle").await;
+        let unassigned = a_company(&pool, "Atanmamış").await;
+        assign_company_for_term(&state, assignment_input(teacher_id, manual, 3, 4), None, None, planning_today()).await.unwrap();
+
+        let board = load_board(&state, &ReadAt::Latest).await.unwrap();
+
+        let source_of = |id: i64| board.companies.iter().find(|c| c.company_id == id).unwrap().assignment_source.clone();
+        assert_eq!(source_of(manual).as_deref(), Some("manual"));
+        assert_eq!(source_of(unassigned), None);
     }
 
     /// Aynı işletme başka bir öğretmene yeniden atanınca YERİNDE taşınır
@@ -310,6 +388,25 @@
         let company_id = a_company(&state.pool, "İşletme A").await;
 
         unassign_company_for_term(&state, company_id, None, None, planning_today()).await.unwrap();
+    }
+
+    /// Planlamada atama dönem başı tarihlidir; tarihsiz `unassign_company`
+    /// aynı güne denk gelir ve atamayı hiç yürürlüğe girmemiş sayar: pano
+    /// işletmeyi atanmamış gösterir.
+    #[tokio::test]
+    async fn unassign_company_in_planning_removes_a_same_day_assignment() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        let state = AppState { pool: pool.clone() };
+        let teacher_id = seed_teacher(&pool, "Ada", ChiefType::None).await;
+        let company_id = a_company(&pool, "İşletme A").await;
+        assign_company_for_term(&state, assignment_input(teacher_id, company_id, 1, 1), None, None, planning_today()).await.unwrap();
+
+        unassign_company_for_term(&state, company_id, None, None, planning_today()).await.unwrap();
+
+        let board = load_board(&state, &ReadAt::Latest).await.unwrap();
+        let card = board.companies.iter().find(|c| c.company_id == company_id).unwrap();
+        assert_eq!((card.assigned_teacher_id, card.assignment_source.clone()), (None, None));
     }
 
     /// Var olan bir atama `unassign_company` ile açık projeksiyon satırını kapatır.

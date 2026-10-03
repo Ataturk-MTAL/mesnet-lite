@@ -18,11 +18,13 @@ function companyFixture(overrides: Partial<Company> = {}): Company {
     contactLastName: 'Veli',
     phone: '',
     email: '',
-    addressText: 'Karaduvar Mah. Serbest Bölge 14. Cadde No:13 Akdeniz/Mersin',
+    addressText: 'Örnek Mah. Deneme 7. Cadde No:21 Akdeniz/Mersin',
     district: 'Akdeniz',
+    neighborhood: '',
     latitude: null,
     longitude: null,
     geocodeStatus: 'pending',
+    geocodePrecision: '',
     oneWayDistanceKm: 12.4,
     notes: '',
     createdAt: '2026-01-01',
@@ -119,5 +121,60 @@ describe('CompanyFormDialog ilçe alanı', () => {
     const emitted = wrapper.emitted('save')
     const savedInput = emitted?.[0]?.[0] as NewCompany
     expect(savedInput.district).toBe('')
+  })
+})
+
+describe('CompanyFormDialog mahalle alanı', () => {
+  it('Mahalle etiketini ve adresten türetileceğini söyleyen ipucunu gösterir', async () => {
+    // Arrange & Act
+    mountDialog(null)
+    await nextTick()
+
+    // Assert
+    expect(document.body.textContent).toContain(labels.company.neighborhood)
+    expect(document.body.textContent).toContain(labels.company.neighborhoodHint)
+  })
+
+  it('mevcut kayıttaki mahalleyi alanda gösterir', async () => {
+    // Arrange & Act
+    mountDialog(companyFixture({ neighborhood: 'Örnek' }))
+    await nextTick()
+
+    // Assert
+    const input = document.body.querySelector<HTMLInputElement>('#company-neighborhood')
+    expect(input?.value).toBe('Örnek')
+  })
+
+  it('mahalle düzenlendiğinde kaydet ile birlikte gönderilir', async () => {
+    // Arrange
+    const wrapper = mountDialog(companyFixture({ neighborhood: '' }))
+    await nextTick()
+
+    // Act
+    setInput('company-neighborhood', 'Kurgu')
+    await nextTick()
+    saveButton().click()
+    await nextTick()
+
+    // Assert
+    const savedInput = wrapper.emitted('save')?.[0]?.[0] as NewCompany
+    expect(savedInput.neighborhood).toBe('Kurgu')
+  })
+
+  it('yeni kayıtta mahalle boş bırakılırsa boş dize gönderilir', async () => {
+    // Arrange
+    const wrapper = mountDialog(null)
+    await nextTick()
+    setInput('company-name', 'Yeni İşletme')
+    setInput('company-address', 'Adres')
+    await nextTick()
+
+    // Act
+    saveButton().click()
+    await nextTick()
+
+    // Assert
+    const savedInput = wrapper.emitted('save')?.[0]?.[0] as NewCompany
+    expect(savedInput.neighborhood).toBe('')
   })
 })

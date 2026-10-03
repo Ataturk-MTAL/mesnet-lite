@@ -10,8 +10,9 @@ use sqlx::SqlitePool;
 
 use super::change_service::{execute_change, ChangeMode, ChangeOutcome};
 use super::change_service_test_support::*;
-use crate::db::{change_log, projection, terms};
-use crate::domain::history::decide::{ChangeCommand, ImpactSummary, TransferTarget};
+use crate::db::read_at::ReadAt;
+use crate::db::{assignments, change_log, projection, terms};
+use crate::domain::history::decide::{ChangeCommand, CoordinatorRow, ImpactSummary, TransferTarget};
 use crate::domain::history::rejection::RejectionCode;
 use crate::domain::terms::TermDates;
 use crate::error::AppError;
@@ -466,3 +467,159 @@ async fn unknown_term_propagates_as_an_app_error() {
 
     assert!(matches!(result, Err(AppError::NotFound(_))), "NotFound beklenirdi: {result:?}");
 }
+
+// ---------------------------------------------------------------- toplu atama (issue #41)
+//
+// Arayüz öneriyi TEK `AssignCoordinators { rows }` kümesiyle yazar ve
+// `Revoke { change_set_id }` ile geri alır. Aşağıdaki testler bu iki
+// davranışın (tek küme, hep-ya-da-hiç) arka uçtaki kanıtıdır.
+
+/// Üç öğrencisi ve 3 saat takdiri olan işletme (saat > 0 olmadan blok oluşmaz,
+/// dolayısıyla çakışma da sınanamaz).
+async fn company_with_hours(w: &World, name: &str) -> i64 {
+    let today = planning_today();
+    let company = add_company(&w.pool, name, 3.0).await;
+    for i in 0..3 {
+        add_student(&w.pool, &format!("{name}-{i}"), Some(company), today).await;
+    }
+    let hours = ChangeCommand::SetCompanyHours { rows: vec![hours_row(company, 3)] };
+    expect_committed(commit(&w.pool, request(None, hours), today).await);
+    company
+}
+
+fn cell(company_id: i64, teacher_id: i64, day: i64, hour: i64) -> CoordinatorRow {
+    let mut row = coordinator_row(company_id, teacher_id);
+    row.visit_day = day;
+    row.visit_hour = hour;
+    row
+}
+
+async fn assigned_companies(pool: &SqlitePool) -> Vec<i64> {
+    let mut ids: Vec<i64> = assignments::list(pool, TERM, &ReadAt::Latest).await.unwrap().iter().map(|a| a.company_id).collect();
+    ids.sort_unstable();
+    ids
+}
+
+/// Çakışmayan iki hücre tek kümede yazılır: iki atama da görünür, tek küme kimliği döner.
+#[tokio::test]
+async fn batch_assign_writes_every_row_in_one_change_set() {
+    let w = world().await;
+    let teacher = add_teacher(&w.pool, "Ece", planning_today()).await;
+    let b = company_with_hours(&w, "Batch-B").await;
+    let c = company_with_hours(&w, "Batch-C").await;
+    let before = assigned_companies(&w.pool).await;
+
+    let command = ChangeCommand::AssignCoordinators { rows: vec![cell(b, teacher, 2, 1), cell(c, teacher, 3, 1)] };
+    let (set_id, _) = expect_committed(commit(&w.pool, request(None, command), planning_today()).await);
+
+    let mut expected = before;
+    expected.extend([b, c]);
+    expected.sort_unstable();
+    assert_eq!(assigned_companies(&w.pool).await, expected);
+    let events_in_set: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM change_events WHERE change_set_id = ?1").bind(set_id).fetch_one(&w.pool).await.unwrap();
+    assert_eq!(events_in_set, 2, "iki satır da AYNI kümede, satır başına bir olay");
+}
+
+/// Kümeyi geri almak kümedeki HER atamayı kaldırır; kümeden önceki bağımsız
+/// atama (ve dünyanın A ataması) yerinde kalır.
+#[tokio::test]
+async fn revoking_a_batch_removes_all_its_assignments_and_keeps_others() {
+    let w = world().await;
+    let teacher = add_teacher(&w.pool, "Ece", planning_today()).await;
+    let independent = company_with_hours(&w, "Bagimsiz").await;
+    let b = company_with_hours(&w, "Batch-B").await;
+    let c = company_with_hours(&w, "Batch-C").await;
+    let solo = ChangeCommand::AssignCoordinators { rows: vec![cell(independent, teacher, 5, 1)] };
+    expect_committed(commit(&w.pool, request(None, solo), planning_today()).await);
+    let before = assigned_companies(&w.pool).await;
+
+    let batch = ChangeCommand::AssignCoordinators { rows: vec![cell(b, teacher, 2, 1), cell(c, teacher, 3, 1)] };
+    let (set_id, _) = expect_committed(commit(&w.pool, request(None, batch), planning_today()).await);
+    assert_eq!(assigned_companies(&w.pool).await.len(), before.len() + 2, "ön koşul: küme yazıldı");
+
+    expect_committed(commit(&w.pool, request(None, ChangeCommand::Revoke { change_set_id: set_id }), planning_today()).await);
+
+    let after = assigned_companies(&w.pool).await;
+    assert_eq!(after, before, "yalnız kümedeki iki atama kalkmalı");
+    assert!(after.contains(&independent) && after.contains(&w.company_a));
+}
+
+/// Hep ya da hiç: bir satır reddedilirse geçerli satır da yazılmaz.
+#[tokio::test]
+async fn batch_with_a_rejected_row_writes_nothing() {
+    let w = world().await;
+    let teacher = add_teacher(&w.pool, "Ece", planning_today()).await;
+    let valid = company_with_hours(&w, "Batch-B").await;
+    let before_ids = assigned_companies(&w.pool).await;
+    let before_counts = table_counts(&w.pool).await;
+
+    const MISSING_COMPANY: i64 = 987_654;
+    let command = ChangeCommand::AssignCoordinators { rows: vec![cell(valid, teacher, 2, 1), cell(MISSING_COMPANY, teacher, 3, 1)] };
+    let result = execute_change(&w.pool, request(None, command), ChangeMode::Commit { expected_high_water: None }, planning_today()).await;
+
+    match result {
+        Ok(ChangeOutcome::Rejected { .. }) | Err(_) => {}
+        other => panic!("Rejected ya da hata beklenirdi, gelen: {other:?}"),
+    }
+    assert_eq!(assigned_companies(&w.pool).await, before_ids);
+    assert_eq!(table_counts(&w.pool).await, before_counts, "hiçbir tabloya yazılmamalı");
+}
+
+/// Küme içi çakışma: aynı öğretmen, aynı gün/saat, saati > 0 iki işletme.
+/// Beklenen doğru davranış `BlockOverlap` reddidir; `find_overlapping_company`
+/// yalnız var olan olaylara baktığından küme içi satırları görmeyebilir.
+/// Eskiden `find_overlapping_company` yalnız `ctx`'e baktığı için küme içi
+/// bekleyen satırlar görülmez ve iki satır da kabul edilirdi (issue #41).
+#[tokio::test]
+async fn batch_rows_overlapping_each_other_are_rejected() {
+    let w = world().await;
+    let teacher = add_teacher(&w.pool, "Ece", planning_today()).await;
+    let b = company_with_hours(&w, "Batch-B").await;
+    let c = company_with_hours(&w, "Batch-C").await;
+    let before = assigned_companies(&w.pool).await;
+
+    let command = ChangeCommand::AssignCoordinators { rows: vec![cell(b, teacher, 2, 1), cell(c, teacher, 2, 1)] };
+    let outcome = commit(&w.pool, request(None, command), planning_today()).await;
+
+    let (code, _) = expect_rejected(outcome);
+    assert_eq!(code, RejectionCode::BlockOverlap);
+    assert_eq!(assigned_companies(&w.pool).await, before);
+}
+
+/// Aynı işletme aynı kümede iki kez gelirse "son yazan kazanır" anlamsızdır;
+/// istek bütünüyle reddedilir ve hiçbir şey yazılmaz (issue #41).
+#[tokio::test]
+async fn batch_with_the_same_company_twice_is_rejected() {
+    let w = world().await;
+    let teacher = add_teacher(&w.pool, "Ece", planning_today()).await;
+    let b = company_with_hours(&w, "Batch-B").await;
+    let before = assigned_companies(&w.pool).await;
+    let before_counts = table_counts(&w.pool).await;
+
+    let command = ChangeCommand::AssignCoordinators { rows: vec![cell(b, teacher, 2, 1), cell(b, teacher, 4, 1)] };
+    let outcome = commit(&w.pool, request(None, command), planning_today()).await;
+
+    let (code, _) = expect_rejected(outcome);
+    assert_eq!(code, RejectionCode::InvalidRequest);
+    assert_eq!(assigned_companies(&w.pool).await, before);
+    assert_eq!(table_counts(&w.pool).await, before_counts);
+}
+
+/// Bir işletmeyi aynı öğretmende başka hücreye taşımak kendi eski bloğuyla
+/// çakışma sayılmaz (tek satırlık atama davranışı korunur).
+#[tokio::test]
+async fn moving_a_company_to_another_cell_of_the_same_teacher_is_not_an_overlap() {
+    let w = world().await;
+    let teacher = add_teacher(&w.pool, "Ece", planning_today()).await;
+    let b = company_with_hours(&w, "Batch-B").await;
+    let first = ChangeCommand::AssignCoordinators { rows: vec![cell(b, teacher, 2, 1)] };
+    expect_committed(commit(&w.pool, request(None, first), planning_today()).await);
+
+    let moved = ChangeCommand::AssignCoordinators { rows: vec![cell(b, teacher, 2, 2)] };
+    expect_committed(commit(&w.pool, request(None, moved), planning_today()).await);
+}
+
+// `ApplyProposal` testleri (Issue #43) bu dosyanın 800 satır sınırını aşmasın
+// diye ayrı dosyada; yukarıdaki yardımcıları `super::` ile kullanır.
+#[path = "change_service_proposal_tests.rs"]
+mod proposal;

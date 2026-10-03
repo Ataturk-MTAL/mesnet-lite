@@ -30,6 +30,31 @@ pub fn max_daily_lessons(all: &BTreeMap<String, String>) -> i64 {
     parse_max_daily_lessons(all.get("max_daily_lessons").map(String::as_str))
 }
 
+/// Dağıtım motorunun eşitlik eşiği ayarının anahtarı (migration 0019).
+pub const BALANCE_GAP_KEY: &str = "allocation_balance_gap_hours";
+
+/// Ayar yoksa ya da bozuksa kullanılan eşik; migration 0019'un tohumuyla aynı.
+pub const DEFAULT_BALANCE_GAP_HOURS: i64 = 4;
+
+/// Geçerli eşik aralığı (saat, uçlar dahil): Issue #43 ürün kararı. 0 =
+/// eşitlik her zaman bölge bütünlüğünün önünde; 40 = pratikte hiçbir zaman
+/// önünde değil (mevzuattan gelen bir sınır DEĞİLDİR).
+const BALANCE_GAP_RANGE: std::ops::RangeInclusive<i64> = 0..=40;
+
+/// Eşik değerini ayrıştırır; yalnız `BALANCE_GAP_RANGE` içindeki TAMSAYI
+/// geçerlidir. Yazmadaki doğrulama (`settings_commands`) ile okumadaki
+/// varsayılana düşme AYNI kuralı kullansın diye tek yerde durur.
+pub fn parse_balance_gap(raw: &str) -> Option<i64> {
+    raw.trim().parse::<i64>().ok().filter(|v| BALANCE_GAP_RANGE.contains(v))
+}
+
+/// Ayarlar haritasından eşitlik eşiğini okur; yoksa/bozuksa varsayılan.
+pub fn balance_gap_hours(all: &BTreeMap<String, String>) -> i64 {
+    all.get(BALANCE_GAP_KEY)
+        .and_then(|raw| parse_balance_gap(raw))
+        .unwrap_or(DEFAULT_BALANCE_GAP_HOURS)
+}
+
 /// Ders saati ızgarasının `[başlangıç, bitiş)` aralığı — bitiş HARİÇTİR.
 /// TEK doğruluk kaynağı burasıdır: `AvailabilityBoard`, `AssignmentBoard`
 /// (bkz. `commands/availability_commands.rs`, `commands/assignment_commands.rs`)
@@ -290,6 +315,7 @@ mod tests {
                 longitude: None,
                 one_way_distance_km: Some(5.0),
                 district: String::new(),
+                neighborhood: String::new(),
                 notes: String::new(),
             },
         )

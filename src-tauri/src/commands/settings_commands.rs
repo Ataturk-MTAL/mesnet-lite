@@ -1,4 +1,5 @@
 use crate::db::{settings, teaching_load, terms, AppState};
+use crate::domain::grouping;
 use crate::error::{AppError, AppResult};
 use crate::services::commission_minutes;
 use serde::Serialize;
@@ -33,11 +34,24 @@ async fn save_settings_in_pool(
     entries: &BTreeMap<String, String>,
 ) -> AppResult<BTreeMap<String, String>> {
     commission_minutes::validate_minutes_settings(entries)?;
+    grouping::validate_settings(entries)?;
+    validate_balance_gap(entries)?;
     settings::set_many(pool, entries).await?;
     if let Some(active_term) = entries.get("active_term") {
         terms::ensure(pool, active_term).await?;
     }
     settings::get_all(pool).await
+}
+
+/// Eşitlik eşiği gönderildiyse 0–40 arası tamsayı olmalı; yalnız gönderilen
+/// anahtar denetlenir (`grouping::validate_settings` ile aynı desen).
+fn validate_balance_gap(entries: &BTreeMap<String, String>) -> AppResult<()> {
+    match entries.get(settings::BALANCE_GAP_KEY) {
+        Some(raw) if settings::parse_balance_gap(raw).is_none() => Err(AppError::Validation(
+            "Saat eşitleme eşiği 0 ile 40 arasında bir tam sayı olmalı.".into(),
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Okul konumunu haritadan gelen değerle yazar.
@@ -197,6 +211,83 @@ mod tests {
     use super::*;
     use crate::db::init_pool;
     use sqlx::SqlitePool;
+
+    /// Migration 0017: gruplama ayarlarının varsayılanları yazılmış olmalı
+    /// (çap 3 km: bkz. `domain::grouping::DEFAULT_MAX_DIAMETER_KM`).
+    #[tokio::test]
+    async fn migration_0017_seeds_grouping_defaults() {
+        let (_dir, pool) = test_pool().await;
+        let all = settings::get_all(&pool).await.unwrap();
+        assert_eq!(all.get("grouping_mode").map(String::as_str), Some("distance"));
+        assert_eq!(all.get("grouping_max_diameter_km").map(String::as_str), Some("3"));
+        assert_eq!(all.get("grouping_manual_groups").map(String::as_str), Some("[]"));
+        assert_eq!(
+            grouping::GroupingSettings::from_settings(&all),
+            grouping::GroupingSettings::from_settings(&BTreeMap::new()),
+        );
+    }
+
+    /// Tek geçersiz gruplama değeri bütün kaydı reddeder; geçerli komşusu da yazılmaz.
+    #[tokio::test]
+    async fn save_settings_rejects_invalid_grouping_values_atomically() {
+        let (_dir, pool) = test_pool().await;
+        let entries: BTreeMap<String, String> = [
+            ("grouping_mode".to_string(), "manual".to_string()),
+            ("grouping_max_diameter_km".to_string(), "99".to_string()),
+        ]
+        .into();
+        let result = save_settings_in_pool(&pool, &entries).await;
+        assert!(matches!(result, Err(AppError::Validation(_))));
+        let stored = settings::get(&pool, "grouping_mode").await.unwrap();
+        assert_eq!(stored.as_deref(), Some("distance"));
+    }
+
+    /// Migration 0019: göçten sonra "bölge bütünlüğü / eşitlik" eşiği 4 saattir.
+    #[tokio::test]
+    async fn migration_0019_seeds_the_balance_gap_default() {
+        let (_dir, pool) = test_pool().await;
+        let all = settings::get_all(&pool).await.unwrap();
+        assert_eq!(all.get("allocation_balance_gap_hours").map(String::as_str), Some("4"));
+        assert_eq!(settings::balance_gap_hours(&all), 4);
+    }
+
+    /// Geçersiz eşik (tamsayı değil ya da 0–40 dışı) kaydı reddeder; değer yazılmaz.
+    #[tokio::test]
+    async fn save_settings_rejects_an_invalid_balance_gap_atomically() {
+        for bad in ["", "abc", "-1", "41", "4.5", "1e1"] {
+            let (_dir, pool) = test_pool().await;
+            let entries: BTreeMap<String, String> =
+                [("allocation_balance_gap_hours".to_string(), bad.to_string())].into();
+            let result = save_settings_in_pool(&pool, &entries).await;
+            assert!(matches!(result, Err(AppError::Validation(_))), "{bad:?} reddedilmeliydi");
+            let stored = settings::get(&pool, "allocation_balance_gap_hours").await.unwrap();
+            assert_eq!(stored.as_deref(), Some("4"), "{bad:?} yazılmamalıydı");
+        }
+    }
+
+    /// Sınır değerleri (0 ve 40) geçerlidir; 0 "eşitlik hep önde" demektir.
+    #[tokio::test]
+    async fn save_settings_accepts_the_balance_gap_bounds() {
+        let (_dir, pool) = test_pool().await;
+        for good in ["0", "40", "7"] {
+            let entries: BTreeMap<String, String> =
+                [("allocation_balance_gap_hours".to_string(), good.to_string())].into();
+            let saved = save_settings_in_pool(&pool, &entries).await.unwrap();
+            assert_eq!(settings::balance_gap_hours(&saved).to_string(), good);
+        }
+    }
+
+    /// Veritabanında bozuk değer kalmışsa okuma sessizce 4'e düşer (komut
+    /// bozuk ayar yüzünden önerisiz kalmasın); yazma yolu zaten reddeder.
+    #[test]
+    fn balance_gap_falls_back_to_the_default_on_a_corrupt_value() {
+        for corrupt in ["", "abc", "-3", "99"] {
+            let all: BTreeMap<String, String> =
+                [("allocation_balance_gap_hours".to_string(), corrupt.to_string())].into();
+            assert_eq!(settings::balance_gap_hours(&all), 4, "{corrupt:?}");
+        }
+        assert_eq!(settings::balance_gap_hours(&BTreeMap::new()), 4);
+    }
 
     async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();

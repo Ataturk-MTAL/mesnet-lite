@@ -2,6 +2,8 @@ import { call } from './client'
 
 export interface GeocodeSummary {
   resolved: number
+  /** `resolved` içinden yalnız mahalle düzeyinde (yaklaşık) çözülenler. */
+  approximate: number
   failed: number
   skipped: number
   warnings: string[]

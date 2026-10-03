@@ -15,15 +15,18 @@ import type {
   BoardCompany,
   BoardTeacher,
   NewAssignment,
+  ProposalMode,
 } from '../api/assignments'
+import type { HoursBoard, HoursRow } from '../api/hours'
+import { proposalFixture, proposedAssignmentFixture } from '../components/allocation/proposalFixture'
 import { labels } from '../i18n/labels'
 import { useSelectionStore } from '../stores/selection'
 import { useTermStore } from '../stores/term'
 import { useAsOfDateStore } from '../stores/asOfDate'
-import type { EffectiveChangeInput, TermWithDates } from '../types/models'
+import type { ChangeOutcome, ChangeRequest, EffectiveChangeInput, TermWithDates } from '../types/models'
 
 const getBoardMock = vi.fn<(asOf: string | null) => Promise<AssignmentBoard>>()
-const proposeMock = vi.fn<() => Promise<AllocationProposal>>()
+const proposeMock = vi.fn<(mode: ProposalMode) => Promise<AllocationProposal>>()
 const assignMock = vi.fn<(input: NewAssignment, change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
 const unassignMock = vi.fn<(companyId: number, change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
 const clearMock = vi.fn<(change?: EffectiveChangeInput) => Promise<AssignmentBoard>>()
@@ -33,13 +36,69 @@ vi.mock('../api/assignments', async () => {
     ...actual,
     assignmentsApi: {
       get: (asOf: string | null = null) => getBoardMock(asOf),
-      propose: () => proposeMock(),
+      propose: (mode: ProposalMode) => proposeMock(mode),
       assign: (input: NewAssignment, change?: EffectiveChangeInput) => assignMock(input, change),
       unassign: (companyId: number, change?: EffectiveChangeInput) => unassignMock(companyId, change),
       clear: (change?: EffectiveChangeInput) => clearMock(change),
     },
   }
 })
+
+const hoursGetMock = vi.fn<() => Promise<HoursBoard>>()
+vi.mock('../api/hours', () => ({
+  hoursApi: { get: () => hoursGetMock() },
+}))
+
+/** Mevcut saat kaydı; kilit ve not alanları öneri uygulamasında korunmalıdır. */
+function hoursRowFixture(overrides: Partial<HoursRow> = {}): HoursRow {
+  return {
+    companyId: 1,
+    companyName: 'Firma A',
+    addressText: '',
+    oneWayDistanceKm: null,
+    roundTripDistanceKm: null,
+    studentCount: 1,
+    maxHours: 8,
+    awardedHours: 4,
+    isHonorary: false,
+    isLocked: false,
+    notes: '',
+    isSaved: true,
+    ...overrides,
+  }
+}
+
+function hoursBoardFixture(rows: HoursRow[]): HoursBoard {
+  return {
+    term: '2026-2027/1',
+    rows,
+    poolHours: 100,
+    totalAwarded: 0,
+    totalMax: 0,
+    honoraryCount: 0,
+    lockedCount: 0,
+    withoutRuleCount: 0,
+    warnings: [],
+  }
+}
+
+/** Etki özeti bu testlerde okunmaz; yalnız `changeSetId` anlamlıdır. */
+function committedOutcome(changeSetId: number): ChangeOutcome {
+  const impact = {} as Extract<ChangeOutcome, { status: 'committed' }>['impact']
+  return { status: 'committed', changeSetId, impact }
+}
+
+const commitChangeMock = vi.fn<(request: ChangeRequest, expectedHighWater: number | null) => Promise<ChangeOutcome>>()
+vi.mock('../api/history', () => ({
+  commitChange: (request: ChangeRequest, expectedHighWater: number | null) =>
+    commitChangeMock(request, expectedHighWater),
+}))
+
+// `<ConfirmDialog />` App.vue'da yaşar; onay penceresini hemen kabul eden bir casusla geçeriz.
+const confirmRequireMock = vi.fn<(options: { accept?: () => void }) => void>((options) => options.accept?.())
+vi.mock('openvue/useconfirm', () => ({
+  useConfirm: () => ({ require: confirmRequireMock }),
+}))
 
 // AllocationView `<Toast />`'u kendi içinde barındırmaz (App.vue'da yaşar); çakışma
 // engelinde gösterilen hata mesajını DOM yerine bu casusla doğrularız.
@@ -62,12 +121,17 @@ function planningTermDates(overrides: Partial<TermWithDates> = {}): TermWithDate
   }
 }
 
+/** Anahtar verilmediyse grup, ilçeden türetilir (arka ucun ilçe geri dönüşüyle aynı biçim). */
 function companyFixture(overrides: Partial<BoardCompany> = {}): BoardCompany {
+  const district = overrides.district ?? 'Akdeniz'
   return {
     companyId: 1,
     companyName: 'Firma A',
     addressText: 'Adres',
-    district: 'Akdeniz',
+    district,
+    neighborhood: '',
+    groupKey: district === '' ? null : `district:${district}`,
+    groupLabel: district,
     oneWayDistanceKm: null,
     studentCount: 1,
     studentNames: [],
@@ -82,6 +146,7 @@ function companyFixture(overrides: Partial<BoardCompany> = {}): BoardCompany {
     visitEndHour: null,
     isForced: false,
     forceReason: null,
+    assignmentSource: null,
     ...overrides,
   }
 }
@@ -144,7 +209,10 @@ async function mountView(companies: BoardCompany[], boardOverrides: Partial<Assi
 beforeEach(() => {
   getBoardMock.mockReset()
   proposeMock.mockReset()
+  hoursGetMock.mockReset()
   assignMock.mockReset()
+  commitChangeMock.mockReset()
+  confirmRequireMock.mockClear()
   unassignMock.mockReset()
   clearMock.mockReset()
   toastAddMock.mockReset()
@@ -185,7 +253,7 @@ describe('AllocationView atanmamış işletme gruplaması', () => {
     wrapper.unmount()
   })
 
-  it('ilçesi boş olan işletmeler için sonda "İlçe belirsiz" grubu oluşturur', async () => {
+  it('grubu olmayan işletmeler için sonda "Grupsuz" grubu oluşturur', async () => {
     // Arrange & Act
     const wrapper = await mountView([
       companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz' }),
@@ -194,18 +262,18 @@ describe('AllocationView atanmamış işletme gruplaması', () => {
 
     // Assert
     const headers = wrapper.findAll('.p-panel-title').map((el) => el.text())
-    expect(headers).toEqual(['Akdeniz (1)', `${labels.allocation.districtUnknown} (1)`])
+    expect(headers).toEqual(['Akdeniz (1)', `${labels.allocation.ungrouped} (1)`])
     wrapper.unmount()
   })
 
-  it('tüm işletmelerin ilçesi doluysa "İlçe belirsiz" grubu hiç gösterilmez', async () => {
+  it('tüm işletmelerin grubu varsa "Grupsuz" grubu hiç gösterilmez', async () => {
     // Arrange & Act
     const wrapper = await mountView([
       companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz' }),
     ])
 
     // Assert
-    expect(wrapper.text()).not.toContain(labels.allocation.districtUnknown)
+    expect(wrapper.text()).not.toContain(labels.allocation.ungrouped)
     wrapper.unmount()
   })
 
@@ -317,6 +385,47 @@ describe('AllocationView sağ panelin kendi içinde kayması', () => {
   })
 })
 
+describe('AllocationView groupKey ile gruplama', () => {
+  it('küme anahtarına göre gruplar ve başlıkta groupLabel kullanır', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, groupKey: 'cluster:1', groupLabel: 'Kurgu Bölgesi' }),
+      companyFixture({ companyId: 2, groupKey: 'cluster:1', groupLabel: 'Kurgu Bölgesi' }),
+      companyFixture({ companyId: 3, groupKey: 'manual:0', groupLabel: 'Deneme Grubu' }),
+    ])
+
+    // Assert
+    const headers = wrapper.findAll('.p-panel-title').map((el) => el.text())
+    expect(headers).toEqual(['Deneme Grubu (1)', 'Kurgu Bölgesi (2)'])
+    wrapper.unmount()
+  })
+
+  it('ilçesi dolu olsa bile groupKey null ise Grupsuz başlığına koyar', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, district: 'Akdeniz', groupKey: null, groupLabel: '' }),
+    ])
+
+    // Assert
+    const headers = wrapper.findAll('.p-panel-title').map((el) => el.text())
+    expect(headers).toEqual([`${labels.allocation.ungrouped} (1)`])
+    wrapper.unmount()
+  })
+
+  it('kartta mahalleyi ilçenin yanında gösterir; mahalle boşsa yalnız ilçe görünür', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz', neighborhood: 'Örnek' }),
+      companyFixture({ companyId: 2, companyName: 'Firma B', district: 'Akdeniz', neighborhood: '' }),
+    ])
+
+    // Assert
+    const places = wrapper.findAll('.company-place').map((el) => el.text())
+    expect(places).toEqual(['Akdeniz · Örnek', 'Akdeniz'])
+    wrapper.unmount()
+  })
+})
+
 describe('AllocationView işletme adresi', () => {
   it('adresi olan bir atanmamış işletmenin kartında adres metni çizilir', async () => {
     // Arrange & Act
@@ -325,14 +434,14 @@ describe('AllocationView işletme adresi', () => {
         companyId: 1,
         companyName: 'Firma A',
         district: 'Akdeniz',
-        addressText: 'Karaduvar Mah. Serbest Bölge 14.Cadde No:13, Akdeniz/Mersin',
+        addressText: 'Kurgu Mah. Deneme 5.Cadde No:21, Akdeniz/Mersin',
       }),
     ])
 
     // Assert
     const address = wrapper.find('.company-address')
     expect(address.exists()).toBe(true)
-    expect(address.text()).toBe('Karaduvar Mah. Serbest Bölge 14.Cadde No:13, Akdeniz/Mersin')
+    expect(address.text()).toBe('Kurgu Mah. Deneme 5.Cadde No:21, Akdeniz/Mersin')
     wrapper.unmount()
   })
 
@@ -354,7 +463,7 @@ describe('AllocationView işletme adresi', () => {
         companyId: 1,
         companyName: 'Firma A',
         district: 'Akdeniz',
-        addressText: 'Hürriyet Mah. Hüseyin Okan Merzeci Blv No:489, Yenişehir/Mersin',
+        addressText: 'Numune Mah. Deneme Blv No:731, Yenişehir/Mersin',
         assignedTeacherId: 7,
       }),
     ])
@@ -362,7 +471,7 @@ describe('AllocationView işletme adresi', () => {
     // Assert
     const addresses = wrapper.findAll('.company-address')
     expect(addresses).toHaveLength(1)
-    expect(addresses[0]?.text()).toBe('Hürriyet Mah. Hüseyin Okan Merzeci Blv No:489, Yenişehir/Mersin')
+    expect(addresses[0]?.text()).toBe('Numune Mah. Deneme Blv No:731, Yenişehir/Mersin')
     wrapper.unmount()
   })
 })
@@ -533,63 +642,285 @@ describe('AllocationView dönem başladıysa yazımlar tarih penceresinden geçe
     wrapper.unmount()
   })
 
-  it('öneri uygulama TÜM atamalar için TEK pencere açar, aynı tarihi her kaleme yollar', async () => {
-    // Arrange
+  /** Öneriyi kurar, görünümü açar ve öneri diyaloğunu getirir. Varsayılan: iki yeni atama,
+   *  Firma A'nın saati 4 → 2 (kilitli, notlu), Firma C bırakılıyor, Firma Z yerinde kalıyor. */
+  async function mountWithProposal(proposal?: AllocationProposal) {
     const teacher = startedTeacher()
     const companyA = companyFixture({ companyId: 1, companyName: 'Firma A' })
     const companyB = companyFixture({ companyId: 2, companyName: 'Firma B' })
     const wrapper = await mountView([companyA, companyB], { teachers: [teacher] })
-    proposeMock.mockResolvedValue({
-      assignments: [
-        {
-          companyId: 1,
-          companyName: 'Firma A',
-          teacherId: 1,
-          teacherName: teacher.teacherName,
-          awardedHours: 1,
-          visitDay: 1,
-          visitHour: 9,
-          exactBranchMatch: true,
-        },
-        {
-          companyId: 2,
-          companyName: 'Firma B',
-          teacherId: 1,
-          teacherName: teacher.teacherName,
-          awardedHours: 1,
-          visitDay: 2,
-          visitHour: 9,
-          exactBranchMatch: true,
-        },
-      ],
-      unassigned: [],
-    })
-    assignMock.mockResolvedValue(boardFixture([companyA, companyB], { teachers: [teacher] }))
-
-    // Act — öneriyi üret, uygula. Öneri diyaloğu `body`e teleport edildiğinden
-    // "Uygula" düğmesi `wrapper` yerine `document.body` üzerinden aranır.
+    hoursGetMock.mockResolvedValue(
+      hoursBoardFixture([
+        hoursRowFixture({ companyId: 1, isLocked: true, notes: 'Sözleşme notu' }),
+        hoursRowFixture({ companyId: 2, companyName: 'Firma B' }),
+        hoursRowFixture({ companyId: 9, companyName: 'Firma Z', isLocked: true, notes: 'Z notu' }),
+      ]),
+    )
+    proposeMock.mockResolvedValue(
+      proposal ??
+        proposalFixture({
+          assignments: [
+            proposedAssignmentFixture({ companyId: 1, companyName: 'Firma A', visitDay: 1 }),
+            proposedAssignmentFixture({ companyId: 2, companyName: 'Firma B', visitDay: 2 }),
+          ],
+          kept: [
+            {
+              companyId: 9,
+              companyName: 'Firma Z',
+              teacherId: 1,
+              visitDay: 4,
+              visitHour: 9,
+              awardedHours: 2,
+              isLocked: true,
+              isForced: false,
+            },
+          ],
+          released: [
+            {
+              companyId: 3,
+              companyName: 'Firma C',
+              previous: { teacherId: 1, visitDay: 5, visitHour: 9, isForced: false, source: 'proposal' },
+            },
+          ],
+          hourChanges: [
+            {
+              companyId: 1,
+              companyName: 'Firma A',
+              oldHours: 4,
+              newHours: 2,
+              reasonCode: { kind: 'teacherCapacity' },
+              reason: 'Öğretmen kapasitesi yetmedi.',
+            },
+            {
+              companyId: 9,
+              companyName: 'Firma Z',
+              oldHours: 2,
+              newHours: 0,
+              reasonCode: { kind: 'poolExhausted' },
+              reason: 'Havuz tükendi.',
+            },
+          ],
+        }),
+    )
     const proposeButton = wrapper.findAll('button').find((b) => b.text().includes(labels.allocation.propose))
     await proposeButton!.trigger('click')
     await flushPromises()
+    return wrapper
+  }
+
+  /** Öneri diyaloğu `body`e teleport edildiğinden düğme `document.body` üzerinden aranır. */
+  async function clickApplyProposal(): Promise<void> {
     const applyButton = Array.from(document.body.querySelectorAll('button')).find((b) =>
       b.textContent?.includes(labels.allocation.proposalApply),
     )
     expect(applyButton).toBeDefined()
     applyButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
+  }
 
-    // Assert — TEK pencere açıldı, henüz hiçbir atama yazılmadı.
+  function undoButton(wrapper: VueWrapper): DOMWrapper<HTMLButtonElement> | undefined {
+    return wrapper.findAll('button').find((b) => b.text().includes(labels.allocation.proposalUndo))
+  }
+
+  it('öneri uygulama TEK pencere açar ve saat, atama ve bırakmayı TEK applyProposal komutuyla yazar', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValue(committedOutcome(77))
+
+    // Act
+    await clickApplyProposal()
+
+    // Assert — TEK pencere açıldı, henüz hiçbir şey yazılmadı.
     expect(document.body.querySelectorAll('[data-testid="change-details-dialog"]')).toHaveLength(1)
-    expect(assignMock).not.toHaveBeenCalled()
+    expect(commitChangeMock).not.toHaveBeenCalled()
 
     // Act
     await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'Öneri uygulaması')
     await flushPromises()
 
-    // Assert — her iki atama da AYNI tarih ve gerekçeyle gitti.
-    expect(assignMock).toHaveBeenCalledTimes(2)
-    expect(assignMock.mock.calls[0][1]).toEqual({ effectiveDate: '2026-10-12', reason: 'Öneri uygulaması' })
-    expect(assignMock.mock.calls[1][1]).toEqual({ effectiveDate: '2026-10-12', reason: 'Öneri uygulaması' })
+    // Assert — tek çağrı, aynı tarih ve gerekçe; tek tek assign yok.
+    expect(assignMock).not.toHaveBeenCalled()
+    expect(commitChangeMock).toHaveBeenCalledTimes(1)
+    const [request, highWater] = commitChangeMock.mock.calls[0]
+    expect(highWater).toBeNull()
+    expect(request).toMatchObject({
+      term: '2026-2027/1',
+      effectiveDate: '2026-10-12',
+      documentDate: null,
+      reason: 'Öneri uygulaması',
+    })
+    expect(request.command).toEqual({
+      type: 'applyProposal',
+      // Saatler: kilit ve not MEVCUT kayıttan; 0'a inen fahri işaretlenir.
+      hours: [
+        { companyId: 1, awardedHours: 2, isHonorary: false, isLocked: true, notes: 'Sözleşme notu' },
+        { companyId: 9, awardedHours: 0, isHonorary: true, isLocked: true, notes: 'Z notu' },
+      ],
+      // Yalnız `assignments`; yerinde kalan Firma Z (kept) atamaya girmez.
+      assign: [
+        { companyId: 1, teacherId: 1, visitDay: 1, visitHour: 9, isForced: false, forceReason: null },
+        { companyId: 2, teacherId: 1, visitDay: 2, visitHour: 9, isForced: false, forceReason: null },
+      ],
+      release: [3],
+    })
+    wrapper.unmount()
+  })
+
+  it('başarılı uygulamada panoyu yeniler, başarı toast\'ı gösterir ve geri al düğmesi çıkar', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValue(committedOutcome(77))
+    const loadsBefore = getBoardMock.mock.calls.length
+    expect(undoButton(wrapper)).toBeUndefined()
+
+    // Act
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+
+    // Assert
+    expect(getBoardMock.mock.calls.length).toBeGreaterThan(loadsBefore)
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', summary: labels.allocation.proposalApplied }),
+    )
+    expect(undoButton(wrapper)).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('reddedilen öneri diyalogda gerekçeyi gösterir, diyalog açık kalır, geri al düğmesi çıkmaz', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValue({
+      status: 'rejected',
+      code: 'blockOverlap',
+      reason: 'Firma B için çakışma var',
+      conflictingChangeSetIds: [],
+      suggestedDate: null,
+    })
+
+    // Act
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+
+    // Assert
+    expect(document.body.textContent).toContain('Firma B için çakışma var')
+    expect(document.body.textContent).toContain(labels.allocation.proposalRejectedNote)
+    expect(document.body.textContent).toContain(labels.allocation.proposalTitle)
+    expect(undoButton(wrapper)).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('önerinin saat satırı mevcut kayıtta yoksa kilit/not tahmin edilmez; hata gösterilir ve hiçbir şey yazılmaz', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    hoursGetMock.mockResolvedValue(hoursBoardFixture([hoursRowFixture({ companyId: 1 })]))
+
+    // Act
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+
+    // Assert — Firma Z'nin (9) saat kaydı yok.
+    expect(commitChangeMock).not.toHaveBeenCalled()
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'error',
+        detail: labels.allocation.proposalHoursRowMissing('Firma Z'),
+      }),
+    )
+    wrapper.unmount()
+  })
+
+  it('öneri varsayılan olarak fillGaps kipiyle istenir', async () => {
+    const wrapper = await mountWithProposal()
+
+    expect(proposeMock).toHaveBeenCalledWith('fillGaps')
+    wrapper.unmount()
+  })
+
+  it('bayat sonuç ve fırlatılan hata sessiz yutulmaz, hata toast\'ı gösterilir', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValueOnce({ status: 'stale', message: 'Veri değişmiş' })
+
+    // Act — bayat sonuç
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+
+    // Assert
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'Veri değişmiş' }),
+    )
+
+    // Act — fırlatılan hata
+    commitChangeMock.mockRejectedValueOnce(new Error('Rust hatası'))
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+
+    // Assert
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'Rust hatası' }),
+    )
+    wrapper.unmount()
+  })
+
+  it('geri al onay ister, kaydedilen changeSetId ile revoke gönderir ve düğmeyi kaldırır', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValueOnce(committedOutcome(77))
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+    commitChangeMock.mockResolvedValueOnce(committedOutcome(78))
+
+    // Act
+    await undoButton(wrapper)!.trigger('click')
+    await flushPromises()
+
+    // Assert
+    expect(confirmRequireMock).toHaveBeenCalledTimes(1)
+    const [request] = commitChangeMock.mock.calls[1]
+    expect(request).toMatchObject({
+      term: '2026-2027/1',
+      effectiveDate: null,
+      documentDate: null,
+      reason: labels.allocation.proposalUndoReason,
+      command: { type: 'revoke', changeSetId: 77 },
+    })
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', summary: labels.allocation.proposalUndone }),
+    )
+    expect(undoButton(wrapper)).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('geri al reddedilirse gerekçe hata toast\'ında görünür ve düğme kalır', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValueOnce(committedOutcome(77))
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+    commitChangeMock.mockResolvedValueOnce({
+      status: 'rejected',
+      code: 'blockOverlap',
+      reason: 'Sonradan değişiklik yapılmış',
+      conflictingChangeSetIds: [],
+      suggestedDate: null,
+    })
+
+    // Act
+    await undoButton(wrapper)!.trigger('click')
+    await flushPromises()
+
+    // Assert
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'Sonradan değişiklik yapılmış' }),
+    )
+    expect(undoButton(wrapper)).toBeDefined()
     wrapper.unmount()
   })
 
@@ -744,6 +1075,39 @@ describe('AllocationView tarihteki durum (asOf)', () => {
 
     const card = wrapper.find('.company-card')
     expect(card.attributes('draggable')).toBe('false')
+    wrapper.unmount()
+  })
+})
+
+describe('AllocationView öneri işareti', () => {
+  it('yalnız öneriden gelen atamalarda "Öneri" işareti çıkar', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({
+        companyId: 1,
+        companyName: 'Firma A',
+        assignedTeacherId: 1,
+        visitDay: 1,
+        visitHour: 9,
+        visitEndHour: 9,
+        assignmentSource: 'proposal',
+      }),
+      companyFixture({
+        companyId: 2,
+        companyName: 'Firma B',
+        assignedTeacherId: 1,
+        visitDay: 2,
+        visitHour: 9,
+        visitEndHour: 9,
+        assignmentSource: 'manual',
+      }),
+    ])
+
+    // Assert
+    const cards = wrapper.findAll('.assigned-card')
+    expect(cards).toHaveLength(2)
+    expect(cards[0].text()).toContain(labels.allocation.assignmentSourceBadge)
+    expect(cards[1].text()).not.toContain(labels.allocation.assignmentSourceBadge)
     wrapper.unmount()
   })
 })
