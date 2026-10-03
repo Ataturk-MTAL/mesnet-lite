@@ -6,8 +6,13 @@ export interface BoardCompany {
   companyId: number
   companyName: string
   addressText: string
-  /** Gruplama anahtarı: atanmamış işletme listesi bu alana göre gruplanır. Ayrıştırılamayan adreste boş dize. */
+  /** Adresten ayrıştırılan ilçe; kartta gösterilir. Gruplama `groupKey` ile yapılır. Ayrıştırılamayan adreste boş dize. */
   district: string
+  neighborhood: string
+  /** `cluster:{n}` / `district:{ilçe}` / `manual:{dizin}`; `null` = grup yok. */
+  groupKey: string | null
+  /** Grup yoksa boş dize. */
+  groupLabel: string
   oneWayDistanceKm: number | null
   studentCount: number
   studentNames: string[]

@@ -90,6 +90,12 @@
       </template>
     </Card>
 
+    <GroupingSettings
+      v-model="grouping"
+      :neighborhood-options="neighborhoodOptions"
+      :district-options="districtOptions"
+    />
+
     <div class="actions">
       <Button :label="labels.common.save" icon="pi pi-check" :loading="isSaving" @click="save" />
     </div>
@@ -207,17 +213,26 @@ import { useConfirm } from 'openvue/useconfirm'
 import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog'
 import { openPath } from '@tauri-apps/plugin-opener'
 import LocationPickerMap from '../components/map/LocationPickerMap.vue'
+import GroupingSettings from '../components/settings/GroupingSettings.vue'
 import UserCreateDialog from '../components/user/UserCreateDialog.vue'
 import UserRenameDialog from '../components/user/UserRenameDialog.vue'
 import UserPinDialog from '../components/user/UserPinDialog.vue'
 import { settingsApi } from '../api/settings'
 import type { SettingsMap } from '../api/settings'
 import { usersApi } from '../api/users'
+import { companiesApi } from '../api/companies'
 import { backupApi } from '../api/backup'
 import { useAuthStore } from '../stores/auth'
 import { labels } from '../i18n/labels'
 import { dateToIso, isoToDate } from '../utils/isoDate'
-import type { BackupStatus, LatLng, User } from '../types/models'
+import {
+  defaultGrouping,
+  parseGroupingSettings,
+  serializeGroupingSettings,
+  uniqueValues,
+  validateGrouping,
+} from '../utils/groupingSettings'
+import type { BackupStatus, Company, LatLng, User } from '../types/models'
 
 const toast = useToast()
 const confirm = useConfirm()
@@ -242,6 +257,15 @@ const form = reactive({
   isMetropolitanDistrict: true,
   maxDailyLessons: DEFAULT_DAILY_LESSONS as number | null,
 })
+
+const grouping = ref(defaultGrouping())
+const companyPlaces = ref<Pick<Company, 'neighborhood' | 'district'>[]>([])
+const neighborhoodOptions = computed<string[]>(() =>
+  uniqueValues(companyPlaces.value.map((c) => c.neighborhood)).sort((a, b) => a.localeCompare(b, 'tr')),
+)
+const districtOptions = computed<string[]>(() =>
+  uniqueValues(companyPlaces.value.map((c) => c.district)).sort((a, b) => a.localeCompare(b, 'tr')),
+)
 
 const schoolLocation = ref<LatLng | null>(null)
 const isSaving = ref(false)
@@ -309,11 +333,21 @@ function applySettings(settings: SettingsMap): void {
   form.isMetropolitanDistrict = settings.is_metropolitan_district === 'true'
   form.maxDailyLessons = resolveMaxDailyLessons(settings)
   schoolLocation.value = parseLocation(settings)
+  grouping.value = parseGroupingSettings(settings)
 }
 
 async function load(): Promise<void> {
   try {
     applySettings(await settingsApi.get())
+  } catch (error: unknown) {
+    showError(error)
+  }
+}
+
+/** Elle grup tanımında öneri listesi olarak kullanılacak mahalle/ilçe değerleri. */
+async function loadCompanyPlaces(): Promise<void> {
+  try {
+    companyPlaces.value = await companiesApi.list()
   } catch (error: unknown) {
     showError(error)
   }
@@ -442,6 +476,16 @@ async function save(): Promise<void> {
     return
   }
 
+  if (!validateGrouping(grouping.value).isValid) {
+    toast.add({
+      severity: 'warn',
+      summary: labels.common.error,
+      detail: labels.settings.grouping.invalid,
+      life: 5000,
+    })
+    return
+  }
+
   isSaving.value = true
   try {
     const entries: SettingsMap = {
@@ -456,6 +500,7 @@ async function save(): Promise<void> {
       max_daily_lessons: String(lessons),
       school_latitude: schoolLocation.value ? String(schoolLocation.value.latitude) : '',
       school_longitude: schoolLocation.value ? String(schoolLocation.value.longitude) : '',
+      ...serializeGroupingSettings(grouping.value),
     }
     applySettings(await settingsApi.save(entries))
     toast.add({ severity: 'success', summary: labels.common.saved, life: 2500 })
@@ -565,6 +610,7 @@ async function restoreBackup(): Promise<void> {
 
 onMounted(async () => {
   await load()
+  await loadCompanyPlaces()
   await loadUsers()
   await loadBackupStatus()
 })

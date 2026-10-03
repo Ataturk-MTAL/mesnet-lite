@@ -62,6 +62,13 @@
       <Column :header="labels.company.geocodeStatus">
         <template #body="{ data }">
           <Tag
+            v-if="isApproximate(data)"
+            :value="labels.geocodePrecision.neighborhood"
+            severity="warn"
+            v-tooltip.top="labels.geocodePrecision.neighborhoodTooltip"
+          />
+          <Tag
+            v-else
             :value="labels.geocodeStatus[data.geocodeStatus as GeocodeStatus]"
             :severity="statusSeverity(data.geocodeStatus)"
           />
@@ -180,6 +187,7 @@ async function runGeocoding(): Promise<void> {
     const summary = await filesApi.geocodePending()
     const detail = [
       `${summary.resolved} ${labels.geocoding.resolved}`,
+      ...(summary.approximate > 0 ? [`${summary.approximate} ${labels.geocoding.approximate}`] : []),
       `${summary.failed} ${labels.geocoding.failed}`,
       `${summary.skipped} ${labels.geocoding.skipped}`,
     ].join(' · ')
@@ -230,6 +238,11 @@ function formatKm(value: number | null): string {
 function contactName(company: Company): string {
   const fullName = `${company.contactFirstName} ${company.contactLastName}`.trim()
   return fullName === '' ? '—' : fullName
+}
+
+/** Konum yalnız mahalle düzeyinde bulunduysa durum etiketi bunu ayırt eder. */
+function isApproximate(company: Company): boolean {
+  return company.geocodeStatus === 'resolved' && company.geocodePrecision === 'neighborhood'
 }
 
 function statusSeverity(status: GeocodeStatus): string {

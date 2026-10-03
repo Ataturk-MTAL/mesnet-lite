@@ -10,7 +10,7 @@ import { labels } from '../i18n/labels'
 import { useAuthStore } from '../stores/auth'
 import { usersApi } from '../api/users'
 import type { SettingsMap } from '../api/settings'
-import type { BackupStatus, User } from '../types/models'
+import type { BackupStatus, Company, User } from '../types/models'
 
 const getMock = vi.fn<() => Promise<SettingsMap>>()
 const saveMock = vi.fn<(entries: SettingsMap) => Promise<SettingsMap>>()
@@ -19,6 +19,12 @@ vi.mock('../api/settings', () => ({
     get: () => getMock(),
     save: (entries: SettingsMap) => saveMock(entries),
   },
+}))
+
+// Elle grup tanımındaki öneri listesi işletmelerden gelir.
+const listCompaniesMock = vi.fn<() => Promise<Company[]>>()
+vi.mock('../api/companies', () => ({
+  companiesApi: { list: () => listCompaniesMock() },
 }))
 
 // Yedekleme kartı — Tauri komutları ve dosya diyalogları ayrı ayrı casuslanır.
@@ -118,6 +124,8 @@ beforeEach(() => {
   getMock.mockReset()
   saveMock.mockReset()
   listUsersMock.mockReset()
+  listCompaniesMock.mockReset()
+  listCompaniesMock.mockResolvedValue([])
   createUserMock.mockReset()
   renameUserMock.mockReset()
   setUserPinMock.mockReset()
@@ -716,6 +724,72 @@ describe('SettingsView — yedekleme kartı', () => {
 
     expect(toastAddMock).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'error', detail: 'restore_backup: dosya bozuk' }),
+    )
+    wrapper.unmount()
+  })
+})
+
+describe('SettingsView işletme gruplama', () => {
+  it('kayıtlı gruplama ayarlarını bölüme yükler', async () => {
+    getMock.mockResolvedValue({ ...baseSettings, grouping_mode: 'manual' })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(labels.settings.grouping.title)
+    expect(wrapper.text()).toContain(labels.settings.grouping.addGroup)
+    wrapper.unmount()
+  })
+
+  it('çapı noktalı, grupları JSON olarak kaydeder', async () => {
+    getMock.mockResolvedValue({
+      ...baseSettings,
+      grouping_mode: 'distance',
+      grouping_max_diameter_km: '3.5',
+      grouping_manual_groups: JSON.stringify([{ name: 'Örnek', neighborhoods: ['Kurgu'], districts: [] }]),
+    })
+    saveMock.mockResolvedValue(baseSettings)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await clickSave(wrapper)
+
+    const entries = saveMock.mock.calls[0][0]
+    expect(entries.grouping_mode).toBe('distance')
+    expect(entries.grouping_max_diameter_km).toBe('3.5')
+    expect(JSON.parse(entries.grouping_manual_groups)).toEqual([
+      { name: 'Örnek', neighborhoods: ['Kurgu'], districts: [] },
+    ])
+    wrapper.unmount()
+  })
+
+  it('boş adlı grup varken kaydetmez ve uyarı verir', async () => {
+    getMock.mockResolvedValue({
+      ...baseSettings,
+      grouping_mode: 'manual',
+      grouping_manual_groups: JSON.stringify([{ name: '', neighborhoods: [], districts: [] }]),
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await clickSave(wrapper)
+
+    expect(saveMock).not.toHaveBeenCalled()
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'warn', detail: labels.settings.grouping.invalid }),
+    )
+    wrapper.unmount()
+  })
+
+  it('işletme listesi alınamazsa gerçek hata mesajını gösterir', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    listCompaniesMock.mockRejectedValue(new Error('list_companies: veritabanı kilitli'))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'list_companies: veritabanı kilitli' }),
     )
     wrapper.unmount()
   })

@@ -17,10 +17,21 @@
         <Textarea id="company-address" v-model="form.addressText" rows="2" />
       </div>
 
-      <div class="field">
-        <label for="company-district">{{ labels.company.district }}</label>
-        <InputText id="company-district" v-model="form.district" />
-        <small class="hint">{{ labels.company.districtHint }}</small>
+      <div class="field-row">
+        <div class="field">
+          <label for="company-district">{{ labels.company.district }}</label>
+          <InputText id="company-district" v-model="form.district" aria-describedby="company-district-hint" />
+          <small id="company-district-hint" class="hint">{{ labels.company.districtHint }}</small>
+        </div>
+        <div class="field">
+          <label for="company-neighborhood">{{ labels.company.neighborhood }}</label>
+          <InputText
+            id="company-neighborhood"
+            v-model="form.neighborhood"
+            aria-describedby="company-neighborhood-hint"
+          />
+          <small id="company-neighborhood-hint" class="hint">{{ labels.company.neighborhoodHint }}</small>
+        </div>
       </div>
 
       <div class="field-row">
@@ -90,6 +101,7 @@ function emptyForm(): NewCompany {
     email: '',
     addressText: '',
     district: '',
+    neighborhood: '',
     latitude: null,
     longitude: null,
     oneWayDistanceKm: null,
@@ -106,6 +118,7 @@ function toForm(company: Company): NewCompany {
     email: company.email,
     addressText: company.addressText,
     district: company.district,
+    neighborhood: company.neighborhood,
     latitude: company.latitude,
     longitude: company.longitude,
     oneWayDistanceKm: company.oneWayDistanceKm,

@@ -52,6 +52,8 @@ export const labels = {
     address: 'Adres',
     district: 'İlçe',
     districtHint: 'Boş bırakılırsa adresten otomatik belirlenir.',
+    neighborhood: 'Mahalle',
+    neighborhoodHint: 'Boş bırakılırsa adresten otomatik belirlenir.',
     oneWayDistance: 'Tek Yön Mesafe (km)',
     roundTripDistance: 'Gidiş-Dönüş (km)',
     geocodeStatus: 'Konum Durumu',
@@ -74,6 +76,10 @@ export const labels = {
     resolved: 'Bulundu',
     failed: 'Bulunamadı',
     manual: 'Elle Düzeltildi',
+  },
+  geocodePrecision: {
+    neighborhood: 'Yaklaşık (mahalle)',
+    neighborhoodTooltip: 'Konum adresin kendisi değil, mahallesi düzeyinde bulundu.',
   },
   student: {
     title: 'Öğrenciler',
@@ -254,7 +260,7 @@ export const labels = {
     days: ['', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma'],
     hoursSuffix: 'saat',
     assignedSection: 'Atanmış İşletmeler',
-    districtUnknown: 'İlçe belirsiz',
+    ungrouped: 'Grupsuz',
     overlapViolation: (companyName: string) =>
       `Blok, ${companyName} işletmesinin bloğuyla çakışıyor.`,
     unknownCompanyFallback: 'başka bir atama',
@@ -379,6 +385,7 @@ export const labels = {
     resolved: 'bulundu',
     failed: 'bulunamadı',
     skipped: 'atlandı (konumu zaten var)',
+    approximate: 'yaklaşık (mahalle düzeyinde)',
     failedNote: 'Bulunamayanları İşletmeler ekranından haritaya tıklayarak elle işaretleyebilirsiniz.',
   },
   term: {
@@ -450,6 +457,30 @@ export const labels = {
     maxDailyLessons: 'Günlük Azami Ders Saati Sayısı',
     maxDailyLessonsHint: 'Izgaralar ve tablolar 1. ders saatinden başlayarak bu kadar ders saati gösterir.',
     maxDailyLessonsInvalid: 'Ders saati sayısı 1 ile 23 arasında olmalı.',
+    grouping: {
+      title: 'İşletme Gruplama',
+      description:
+        'Atama ekranında atanmamış işletmelerin nasıl gruplanacağını belirler. Konumu olmayan ya da hiçbir gruba uymayan işletme, ilçesinin grubuna düşer.',
+      mode: 'Gruplama yöntemi',
+      modeDistance: 'Mesafeye göre (otomatik)',
+      modeManual: 'Elle tanımlı gruplar',
+      maxDiameter: 'En büyük küme çapı (km)',
+      maxDiameterHint: 'Bir gruptaki en uzak iki işletme arasındaki mesafe bunu aşmaz. 0,5 ile 50 arasında.',
+      maxDiameterInvalid: 'Küme çapı 0,5 ile 50 km arasında olmalı.',
+      groupsHint:
+        'Bir işletme, mahallesi ya da ilçesi bir grubun listesinde geçiyorsa o gruba girer. Öneri listesi mevcut işletmelerden gelir; listede olmayan değeri yazıp Enter ile de ekleyebilirsiniz.',
+      addGroup: 'Grup Ekle',
+      removeGroup: 'Grubu sil',
+      groupName: 'Grup adı',
+      neighborhoods: 'Mahalleler',
+      districts: 'İlçeler',
+      noGroups: 'Henüz grup tanımlanmadı.',
+      nameEmpty: 'Grup adı boş olamaz.',
+      nameDuplicate: 'Bu ad başka bir grupta da kullanılıyor.',
+      nameTooLong: 'Grup adı en fazla 80 karakter olabilir.',
+      invalid: 'Gruplama ayarlarında düzeltilmesi gereken hatalar var.',
+      groupTitle: (index: number) => `Grup ${index}`,
+    },
     users: {
       title: 'Kullanıcılar',
       name: 'Ad Soyad',
