@@ -3,6 +3,7 @@
 //! Yalnız uydurma ad ve sayılar kullanılır; gerçek veritabanından hiçbir
 //! değer buraya kopyalanmaz.
 
+mod fuzz;
 mod hours;
 mod placement;
 mod policy;
@@ -121,12 +122,13 @@ impl Scenario {
     /// Çalıştırır ve çıktının kural ihlali taşımadığını DOĞRULAR: böylece her
     /// senaryo, kendi beklentisinin yanında değişmezleri de sınar.
     pub fn run(&self) -> AllocationProposal {
-        let proposal = self.optimize_raw();
+        let proposal = self.run_unchecked();
         assert_invariants(self, &proposal);
         proposal
     }
 
-    fn optimize_raw(&self) -> AllocationProposal {
+    /// Değişmez denetimi olmadan (geçersiz girdi testleri için).
+    pub fn run_unchecked(&self) -> AllocationProposal {
         optimize(&EngineInput {
             companies: &self.companies,
             teachers: &self.teachers,
@@ -171,10 +173,28 @@ pub fn change_of(proposal: &AllocationProposal, company_id: i64) -> Option<&Hour
         .find(|c| c.company_id == company_id)
 }
 
-/// Her öğretmen için: hücre çakışması yok, günlük 8 saat (OÖKY MADDE 88),
-/// kapasite (MADDE 15/2) ve havuz aşılmaz; önerilen bloklar boş saat ∩
-/// işletme günleri içinde ve ızgarada kalır.
+/// Sabit sayılan işletme mi? `problem::is_fixed_company` kuralının test
+/// tarafındaki bağımsız yazımı: ürün kararı 2026-10-03 (madde 3).
+fn is_fixed(scenario: &Scenario, company: &CompanyInput) -> bool {
+    let Some(current) = &company.current else {
+        return false;
+    };
+    scenario.mode == ProposalMode::FillGaps
+        || company.is_locked
+        || current.is_forced
+        || current.source == PlacementSource::Manual
+}
+
+/// Çıktının kural ihlali taşımadığını denetler: her işletme tam bir kez,
+/// sabit ve kilitli olanlar değişmemiş, saat değişiklikleri son saatlerle
+/// tutarlı; hücre çakışması yok, günlük 8 saat (OÖKY MADDE 88), kapasite
+/// (MADDE 15/2) ve havuz aşılmaz; oynak işletmelerin blokları (önerilen YA
+/// DA yerinde büyüyen) boş saat ∩ işletme günleri ve ızgara içinde kalır.
 fn assert_invariants(scenario: &Scenario, proposal: &AllocationProposal) {
+    for company in &scenario.companies {
+        assert_listed_exactly_once(proposal, company);
+        assert_hours_consistent(scenario, proposal, company);
+    }
     for teacher in &scenario.teachers {
         let placed: Vec<(i64, i64, i64, i64)> = scenario
             .companies
@@ -185,8 +205,82 @@ fn assert_invariants(scenario: &Scenario, proposal: &AllocationProposal) {
         assert_no_overlap(teacher, &placed);
         assert_load_limits(teacher, &placed);
     }
-    assert_proposed_blocks_are_eligible(scenario, proposal);
+    assert_movable_blocks_are_eligible(scenario, proposal);
     assert_pool_respected(scenario, proposal);
+}
+
+fn assert_listed_exactly_once(proposal: &AllocationProposal, company: &CompanyInput) {
+    let listed = proposal
+        .assignments
+        .iter()
+        .filter(|a| a.company_id == company.id)
+        .count()
+        + proposal
+            .kept
+            .iter()
+            .filter(|k| k.company_id == company.id)
+            .count()
+        + proposal
+            .unassigned
+            .iter()
+            .filter(|u| u.company_id == company.id)
+            .count();
+    assert_eq!(listed, 1, "işletme {} {listed} kez listelendi", company.id);
+}
+
+fn assert_hours_consistent(
+    scenario: &Scenario,
+    proposal: &AllocationProposal,
+    company: &CompanyInput,
+) {
+    let fixed = is_fixed(scenario, company);
+    if let (true, Some(current)) = (fixed, &company.current) {
+        let expected = (current.teacher_id, current.visit_day, current.visit_hour);
+        let found = final_of(proposal, company.id).map(|f| (f.0, f.1, f.2, f.3));
+        assert_eq!(
+            found,
+            Some((
+                expected.0,
+                expected.1,
+                expected.2,
+                company.awarded_hours.max(0)
+            )),
+            "sabit işletme {} değişti",
+            company.id
+        );
+    }
+    // Yerleşemeyen işletmenin saati: kilitliyse aynen, değilse 0'a döner.
+    let unplaced_hours = if company.is_locked {
+        company.awarded_hours
+    } else {
+        0
+    };
+    let final_hours = hours_of(proposal, company.id).unwrap_or(unplaced_hours);
+    if company.is_locked {
+        assert_eq!(final_hours, company.awarded_hours, "kilitli saat değişti");
+    }
+    let change = change_of(proposal, company.id);
+    assert_eq!(
+        final_hours != company.awarded_hours,
+        change.is_some(),
+        "işletme {}: saat değişikliği kaydı tutarsız ({} → {final_hours})",
+        company.id,
+        company.awarded_hours
+    );
+    let Some(change) = change else { return };
+    assert_eq!(
+        (change.old_hours, change.new_hours),
+        (company.awarded_hours, final_hours)
+    );
+    if change.reason_code == HourChangeReason::SearchLimit {
+        assert!(
+            proposal
+                .warnings
+                .iter()
+                .any(|w| w.contains("Arama sınırına")),
+            "SearchLimit sınır uyarısı olmadan"
+        );
+    }
 }
 
 fn assert_no_overlap(teacher: &TeacherInput, placed: &[(i64, i64, i64, i64)]) {
@@ -220,39 +314,38 @@ fn assert_load_limits(teacher: &TeacherInput, placed: &[(i64, i64, i64, i64)]) {
     );
 }
 
-fn assert_proposed_blocks_are_eligible(scenario: &Scenario, proposal: &AllocationProposal) {
-    for a in &proposal.assignments {
+fn assert_movable_blocks_are_eligible(scenario: &Scenario, proposal: &AllocationProposal) {
+    for company in scenario.companies.iter().filter(|c| !is_fixed(scenario, c)) {
+        let Some((teacher_id, day, start, hours)) = final_of(proposal, company.id) else {
+            continue;
+        };
         let teacher = scenario
             .teachers
             .iter()
-            .find(|t| t.id == a.teacher_id)
+            .find(|t| t.id == teacher_id)
             .unwrap();
-        let company = scenario
-            .companies
-            .iter()
-            .find(|c| c.id == a.company_id)
-            .unwrap();
-        assert!(
-            a.visit_end_hour < scenario.day_end,
-            "blok ızgara dışına taştı"
-        );
-        assert!(
-            company.workplace_days.contains(&a.visit_day),
-            "işletme günü dışı"
-        );
-        for hour in a.visit_hour..=a.visit_end_hour {
+        let end = start + hours.max(1) - 1;
+        assert!(end < scenario.day_end, "blok ızgara dışına taştı");
+        assert!(company.workplace_days.contains(&day), "işletme günü dışı");
+        for hour in start..=end {
             assert!(
-                teacher.free_slots.contains(&Slot::new(a.visit_day, hour)),
-                "{} için boş olmayan hücre: gün {} saat {hour}",
-                teacher.name,
-                a.visit_day
+                teacher.free_slots.contains(&Slot::new(day, hour)),
+                "{} için boş olmayan hücre: gün {day} saat {hour}",
+                teacher.name
             );
         }
-        assert!(a.awarded_hours <= company.max_hours.max(0), "tavan aşıldı");
+        if !company.is_locked {
+            assert!(hours <= company.max_hours.max(0), "tavan aşıldı");
+        }
     }
 }
 
+/// Havuz tanımlıysa son toplam `max(havuz, eski toplam)`'ı aşmaz: aşılmamış
+/// havuzda havuzu, aşılmış havuzda eski toplamı (toplamı artırmama kuralı).
 fn assert_pool_respected(scenario: &Scenario, proposal: &AllocationProposal) {
+    if scenario.pool <= 0 {
+        return;
+    }
     let base: i64 = scenario
         .teachers
         .iter()
@@ -264,13 +357,10 @@ fn assert_pool_respected(scenario: &Scenario, proposal: &AllocationProposal) {
         .map(|c| c.awarded_hours)
         .sum::<i64>()
         + base;
-    if scenario.pool <= 0 || old_total > scenario.pool {
-        return;
-    }
+    let limit = scenario.pool.max(old_total);
     assert!(
-        proposal.total_hours + base <= scenario.pool,
-        "havuz aşıldı: {} > {}",
-        proposal.total_hours + base,
-        scenario.pool
+        proposal.total_hours + base <= limit,
+        "toplam sınırı aşıldı: {} > {limit}",
+        proposal.total_hours + base
     );
 }

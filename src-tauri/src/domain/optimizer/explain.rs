@@ -3,7 +3,6 @@
 //! tutulan tek bilgi `made_room`'dur.
 
 use super::model::{HourChangeReason, UnassignedReason};
-use super::problem::Problem;
 use super::state::{Placement, State};
 use crate::domain::scheduling::MAX_HOURS_PER_DAY;
 use crate::domain::validation::day_name;
@@ -106,9 +105,12 @@ fn reason_text(
     }
 }
 
-/// Yerleşemeyen işletmenin nedeni. Kapasite ve havuz asla "yerleşemedi"
-/// üretmez (fahri ziyaret onlardan muaf); yalnız hücre yokluğu üretir.
-pub(super) fn unassigned_reason(p: &Problem, c: usize) -> (UnassignedReason, String) {
+/// Yerleşemeyen işletmenin nedeni. Oynak işletme için kapasite ve havuz asla
+/// "yerleşemedi" üretmez (fahri ziyaret onlardan muaf); yalnız hücre yokluğu
+/// üretir. KİLİTLİ işletmenin saati sabit olduğundan fahriye düşemez; o
+/// yüzden kapasite, ardışık blok ve günlük sınır da gerçek neden olabilir.
+pub(super) fn unassigned_reason(state: &State, c: usize) -> (UnassignedReason, String) {
+    let p = state.p;
     let company = p.companies[c];
     if p.teachers.is_empty() {
         return (
@@ -123,8 +125,10 @@ pub(super) fn unassigned_reason(p: &Problem, c: usize) -> (UnassignedReason, Str
                 .into(),
         );
     }
-    let any_eligible = (0..p.teachers.len()).any(|t| p.eligible(t, c) != 0);
-    if !any_eligible {
+    let eligible: Vec<usize> = (0..p.teachers.len())
+        .filter(|t| p.eligible(*t, c) != 0)
+        .collect();
+    if eligible.is_empty() {
         let days: Vec<String> = company
             .workplace_days
             .iter()
@@ -139,9 +143,68 @@ pub(super) fn unassigned_reason(p: &Problem, c: usize) -> (UnassignedReason, Str
             ),
         );
     }
+    if company.is_locked && p.awarded(c) > 0 {
+        if let Some(found) = locked_reason(state, c, &eligible) {
+            return found;
+        }
+    }
     (
         UnassignedReason::AllEligibleCellsOccupied,
         "Uygun boş saatlerin hepsi başka işletmelerce dolu; boş saat ekleyin ya da başka bir atamayı kaldırın"
             .into(),
     )
+}
+
+/// Kilitli ve yerleşemeyen işletmenin gerçek nedeni; sırayla elenir:
+/// saat uzunluğu → kapasite → ardışık blok → günlük sınır.
+fn locked_reason(
+    state: &State,
+    c: usize,
+    eligible: &[usize],
+) -> Option<(UnassignedReason, String)> {
+    let p = state.p;
+    let hours = p.awarded(c);
+    let name = &p.companies[c].name;
+    if hours > MAX_HOURS_PER_DAY || hours > p.day_end - p.day_start {
+        return Some((
+            UnassignedReason::LockedHoursTooLong,
+            format!(
+                "{name} işletmesinin kilitli saati ({hours}) günlük {MAX_HOURS_PER_DAY} saati \
+                 ya da ders saati ızgarasını aşıyor; kilitli saati düzeltin"
+            ),
+        ));
+    }
+    let with_capacity: Vec<usize> = eligible
+        .iter()
+        .copied()
+        .filter(|t| state.teachers[*t].rem_cap >= hours)
+        .collect();
+    if with_capacity.is_empty() {
+        return Some((
+            UnassignedReason::NoTeacherCapacity,
+            format!(
+                "Kilitli {hours} saat, uygun hiçbir öğretmenin kalan kapasitesine sığmıyor; \
+                 kapasiteyi artırın ya da başka bir atamayı kaldırın"
+            ),
+        ));
+    }
+    if !with_capacity
+        .iter()
+        .any(|t| state.any_block_position(*t, c, hours, false))
+    {
+        return Some((
+            UnassignedReason::NoConsecutiveBlock,
+            format!("Kilitli {hours} saat için ardışık boş saat bulunamadı; öğretmen boş saatlerini gözden geçirin"),
+        ));
+    }
+    if !with_capacity
+        .iter()
+        .any(|t| state.any_block_position(*t, c, hours, true))
+    {
+        return Some((
+            UnassignedReason::DailyCapReached,
+            format!("Kilitli {hours} saat, boş bloğun düştüğü günün {MAX_HOURS_PER_DAY} saatlik sınırını (OÖKY MADDE 88) aşıyor"),
+        ));
+    }
+    None
 }

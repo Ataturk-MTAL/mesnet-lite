@@ -16,6 +16,10 @@ pub(super) const DAYS: usize = 5;
 /// (5 × 25 = 125 ≤ 128). Gerçek ızgara günde 8–10 hücredir.
 pub(super) const MAX_GRID_LEN: i64 = 25;
 
+/// Girdideki saçma büyük saatlerin toplamları taşırmaması için üst sınır.
+/// Gerçek saat günlük 8'i geçemez; 1000 fazlasıyla güvenli bir sınırdır.
+const MAX_SANE_HOURS: i64 = 1_000;
+
 pub(super) struct Problem<'a> {
     pub companies: Vec<&'a CompanyInput>,
     pub teachers: Vec<&'a TeacherInput>,
@@ -101,7 +105,7 @@ impl<'a> Problem<'a> {
                 // Kilitli satırın saati sabittir; diğerleri tavana kadar oynar.
                 // Kullanıcı-fahri bayrağı tavanı 0'a ÇAKMAZ (ürün kararı 2026-10-02).
                 if c.is_locked {
-                    c.awarded_hours.max(0)
+                    c.awarded_hours.clamp(0, MAX_SANE_HOURS)
                 } else {
                     c.max_hours.min(grid_cap).max(0)
                 }
@@ -173,7 +177,7 @@ impl<'a> Problem<'a> {
             teacher,
             day: current.visit_day,
             start: current.visit_hour,
-            hours: company.awarded_hours.max(0),
+            hours: company.awarded_hours.clamp(0, MAX_SANE_HOURS),
         })
     }
 
@@ -211,10 +215,13 @@ impl<'a> Problem<'a> {
         }
         let reserved: i64 = (0..self.companies.len())
             .filter(|c| self.is_fixed[*c] || self.companies[*c].is_locked)
-            .map(|c| self.companies[c].awarded_hours.max(0))
+            .map(|c| self.awarded(c))
             .sum();
         let base: i64 = self.teachers.iter().map(|t| t.base_assigned_hours).sum();
-        let old_total: i64 = self.companies.iter().map(|c| c.awarded_hours).sum::<i64>() + base;
+        let old_total: i64 = (0..self.companies.len())
+            .map(|c| self.awarded(c))
+            .sum::<i64>()
+            + base;
         // Havuz zaten aşılmışsa yeni saat dağıtılmaz (MADDE 15/2 toplam havuz).
         self.pool_overrun = old_total > pool_hours;
         self.budget = Some((pool_hours.max(old_total) - reserved - base).max(0));
@@ -229,6 +236,11 @@ impl<'a> Problem<'a> {
     /// işletmelerin saati `fill_budget`'ta baştan ayrılmıştır.
     pub fn spends_budget(&self, c: usize) -> bool {
         !self.is_fixed[c] && !self.companies[c].is_locked
+    }
+
+    /// Yürürlükteki saat, güvenli aralığa kırpılmış (`0..=MAX_SANE_HOURS`).
+    pub fn awarded(&self, c: usize) -> i64 {
+        self.companies[c].awarded_hours.clamp(0, MAX_SANE_HOURS)
     }
 
     pub fn teacher_index(&self, id: i64) -> Option<usize> {
@@ -267,17 +279,24 @@ impl<'a> Problem<'a> {
 
     /// `span` ardışık hücrenin maskesi; gün sınırını aşıyorsa `None`.
     pub fn block_mask(&self, day: i64, start: i64, span: i64) -> Option<u128> {
-        if span < 1 || start + span > self.day_end {
+        if span < 1 || start.checked_add(span)? > self.day_end {
             return None;
         }
         let bit = self.cell_bit(day, start)?;
         Some(((1u128 << span) - 1) << bit)
     }
 
-    /// Bir yerleşimin kapladığı hücreler. Izgara dışındaki sabit atama
-    /// (ör. girdi hatası) hücre çakışması üretmez, yalnız saat yükü taşır.
+    /// Bir yerleşimin kapladığı hücreler. Izgara kenarını aşan sabit blok
+    /// (girdi hatası ya da ızgara sonradan daralmış) ızgara İÇİNDEKİ
+    /// hücrelerini yine de tutar: atılsaydı başkası üstüne konabilirdi.
     pub fn placement_mask(&self, placement: &Placement) -> u128 {
-        self.block_mask(placement.day, placement.start, visit_span(placement.hours))
+        let span = visit_span(placement.hours);
+        let first = placement.start.max(self.day_start);
+        let end = placement.start.saturating_add(span).min(self.day_end);
+        if first >= end {
+            return 0;
+        }
+        self.block_mask(placement.day, first, end - first)
             .unwrap_or(0)
     }
 }

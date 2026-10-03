@@ -188,6 +188,14 @@ pub enum UnassignedReason {
     NoWorkplaceDays,
     NoEligibleCell,
     AllEligibleCellsOccupied,
+    /// Kilitli işletmenin saati hiçbir öğretmenin kalan kapasitesine sığmıyor.
+    NoTeacherCapacity,
+    /// Kilitli saat kadar ARDIŞIK boş hücre yok.
+    NoConsecutiveBlock,
+    /// Kilitli saat, boş bloğun düştüğü günün 8 saat sınırını aşıyor.
+    DailyCapReached,
+    /// Kilitli saat günlük 8 saati ya da ızgara uzunluğunu aşıyor.
+    LockedHoursTooLong,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -236,6 +244,8 @@ pub struct AllocationProposal {
     pub unassigned: Vec<UnassignedCompany>,
     pub teacher_loads: Vec<TeacherLoadSummary>,
     pub placed_count: i64,
+    /// Yürürlükteki saatlerin toplamı: yerleşen işletmeler (sabit ve oynak)
+    /// artı yerleşemese bile kayıtta kalan KİLİTLİ işletmelerin saati.
     pub total_hours: i64,
     pub pool_hours: i64,
     /// Havuz tanımsızsa `None`; aşıldıysa negatif.

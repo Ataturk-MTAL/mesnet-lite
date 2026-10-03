@@ -35,5 +35,7 @@ pub fn optimize(input: &EngineInput) -> AllocationProposal {
     let mut state = state::State::new(&problem);
     construct::construct(&mut state);
     let report = improve::improve(&mut state);
+    #[cfg(test)]
+    state.assert_consistent("nihai");
     output::build(&problem, &mut state, &report)
 }

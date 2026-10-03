@@ -33,7 +33,7 @@ pub(super) fn build(p: &Problem, state: &mut State, report: &ImproveReport) -> A
         match (p.is_fixed[c], state.placement[c]) {
             (true, _) => keep_fixed(p, c, &mut out),
             (false, Some(placement)) => place_movable(p, state, c, placement, report, &mut out),
-            (false, None) => leave_unplaced(p, c, &mut out),
+            (false, None) => leave_unplaced(p, state, c, &mut out),
         }
     }
     let base: i64 = p.teachers.iter().map(|t| t.base_assigned_hours).sum();
@@ -61,7 +61,7 @@ fn kept_entry(company: &CompanyInput, hours: i64) -> Option<KeptAssignment> {
 
 fn keep_fixed(p: &Problem, c: usize, out: &mut AllocationProposal) {
     let company = p.companies[c];
-    let hours = company.awarded_hours.max(0);
+    let hours = p.awarded(c);
     out.kept.extend(kept_entry(company, hours));
     out.placed_count += 1;
     out.total_hours += hours;
@@ -124,9 +124,9 @@ fn proposed_assignment(p: &Problem, c: usize, placement: Placement) -> ProposedA
     }
 }
 
-fn leave_unplaced(p: &Problem, c: usize, out: &mut AllocationProposal) {
+fn leave_unplaced(p: &Problem, state: &State, c: usize, out: &mut AllocationProposal) {
     let company = p.companies[c];
-    let (reason_code, reason) = unassigned_reason(p, c);
+    let (reason_code, reason) = unassigned_reason(state, c);
     out.unassigned.push(UnassignedCompany {
         company_id: company.id,
         company_name: company.name.clone(),
@@ -134,6 +134,10 @@ fn leave_unplaced(p: &Problem, c: usize, out: &mut AllocationProposal) {
         reason,
         was_assigned: company.current.is_some(),
     });
+    // Kilitli işletmenin saati yerleşemese de kayıtta yürürlüktedir.
+    if company.is_locked {
+        out.total_hours += p.awarded(c);
+    }
     // Saat kayıtta kalırsa havuzu uygulama anında aşırabilir; kilitli değilse
     // saat havuza geri döner. Kilitli işletmenin saati aynen kalır.
     if !company.is_locked && company.awarded_hours > 0 {

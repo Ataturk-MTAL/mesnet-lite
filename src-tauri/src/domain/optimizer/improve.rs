@@ -53,15 +53,77 @@ pub(super) fn improve(state: &mut State) -> ImproveReport {
 }
 
 fn commit(state: &mut State, candidate: MoveCandidate, report: &mut ImproveReport) {
-    if let Some(room_for) = candidate.room_for {
-        for (c, target) in &candidate.changes {
-            let (Some(before), Some(after)) = (state.placement[*c], target) else {
-                continue;
-            };
-            if *c != room_for && after.hours < before.hours {
-                report.made_room.insert(*c, (after.hours, room_for));
-            }
+    for (c, target) in &candidate.changes {
+        // Bu hamle işletmenin saatini ya da yerini değiştiriyor: önceki
+        // `MadeRoomFor` kaydı bayatlar (sonradan aynı saate dönülse bile).
+        report.made_room.remove(c);
+        let (Some(before), Some(after), Some(room_for)) =
+            (state.placement[*c], target, candidate.room_for)
+        else {
+            continue;
+        };
+        if *c != room_for && after.hours < before.hours {
+            report.made_room.insert(*c, (after.hours, room_for));
         }
     }
     state.apply(&candidate.changes);
+    #[cfg(test)]
+    state.assert_consistent("hamle sonrası");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::problem::Problem;
+    use super::super::state::Placement;
+    use super::super::tests::{company, free, teacher};
+    use super::super::{EngineInput, ProposalMode, TeacherInput};
+    use super::*;
+
+    /// Başka bir hamle işletmenin saatini değiştirince eski `MadeRoomFor`
+    /// kaydı düşer; sonradan aynı saate dönülse bile bayat kayıt geri gelmez.
+    #[test]
+    fn made_room_record_is_dropped_when_another_move_changes_the_hours() {
+        let companies = [company(1), company(2)];
+        let teachers: [TeacherInput; 1] = [TeacherInput {
+            free_slots: free(1, 9..17),
+            ..teacher(1)
+        }];
+        let input = EngineInput {
+            companies: &companies,
+            teachers: &teachers,
+            day_start_hour: 9,
+            day_end_hour: 17,
+            pool_hours: 0,
+            mode: ProposalMode::FillGaps,
+            balance_gap_hours: 4,
+        };
+        let problem = Problem::new(&input);
+        let mut state = State::new(&problem);
+        let at = |start, hours| Placement {
+            teacher: 0,
+            day: 1,
+            start,
+            hours,
+        };
+        state.place(0, at(9, 2));
+        let mut report = ImproveReport {
+            made_room: BTreeMap::from([(0, (2, 1))]),
+            limit_reached: false,
+        };
+
+        let grow = MoveCandidate {
+            score: state.score(),
+            changes: vec![(0, Some(at(9, 3)))],
+            room_for: None,
+        };
+        commit(&mut state, grow, &mut report);
+        let back = MoveCandidate {
+            score: state.score(),
+            changes: vec![(0, Some(at(9, 2)))],
+            room_for: None,
+        };
+        commit(&mut state, back, &mut report);
+
+        assert!(report.made_room.is_empty());
+    }
 }

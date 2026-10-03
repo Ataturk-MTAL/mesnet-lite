@@ -279,3 +279,54 @@ fn proposal_serializes_with_camel_case_keys() {
     assert_eq!(reason["kind"], "madeRoomFor");
     assert_eq!(reason["companyId"], 7);
 }
+
+/// Izgara kenarını aşan sabit blok, ızgara İÇİNDEKİ hücrelerini yine de ayırır:
+/// 15–18 saatlik sabit atama 15 ve 16'yı tutar, B oraya konamaz.
+#[test]
+fn fixed_block_crossing_the_grid_edge_still_reserves_its_in_grid_cells() {
+    let fixed = CompanyInput {
+        current: current(1, 1, 15, PlacementSource::Manual),
+        ..company(1)
+    };
+    let small = CompanyInput {
+        awarded_hours: 2,
+        max_hours: 2,
+        workplace_days: days(&[1]),
+        ..company(2)
+    };
+    let teacher = TeacherInput {
+        free_slots: free(1, 15..17),
+        ..teacher(1)
+    };
+    let proposal = Scenario::new(vec![fixed, small], vec![teacher]).run();
+
+    assert!(proposal.unassigned.iter().any(|u| u.company_id == 2));
+    assert!(proposal.assignments.is_empty());
+}
+
+/// Saçma büyük saat panik üretmez (taşma yok).
+#[test]
+fn absurd_hours_do_not_overflow() {
+    let fixed = CompanyInput {
+        awarded_hours: i64::MAX,
+        current: current(1, 1, 9, PlacementSource::Manual),
+        ..company(1)
+    };
+    let movable = CompanyInput {
+        awarded_hours: i64::MAX,
+        max_hours: i64::MAX,
+        ..company(2)
+    };
+    let teacher = TeacherInput {
+        free_slots: free(2, 9..17),
+        ..teacher(1)
+    };
+    let proposal = Scenario::new(vec![fixed, movable], vec![teacher])
+        .pool(10)
+        .run_unchecked();
+
+    assert_eq!(
+        proposal.kept.len() + proposal.assignments.len() + proposal.unassigned.len(),
+        2
+    );
+}

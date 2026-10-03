@@ -428,3 +428,118 @@ fn unplaced_company_with_zero_hours_has_no_hour_change() {
 
     assert!(proposal.hour_changes.is_empty());
 }
+
+fn locked_scenario(awarded: i64, teacher: TeacherInput) -> AllocationProposal {
+    Scenario::new(vec![locked(1, awarded)], vec![teacher])
+        .pool(10)
+        .run()
+}
+
+fn unassigned_code(proposal: &AllocationProposal) -> UnassignedReason {
+    proposal.unassigned[0].reason_code
+}
+
+/// Kilitli, yerleşemeyen işletme: gerçek neden kapasite; saatleri havuzda
+/// ayrılı kalır ve `total_hours` / `pool_remaining` bunu yansıtır.
+#[test]
+fn unplaced_locked_company_reports_capacity_and_counts_its_hours() {
+    let teacher = TeacherInput {
+        capacity: 2,
+        free_slots: free_on(&[1, 2, 3, 4, 5], 9..17),
+        ..teacher(1)
+    };
+    let proposal = locked_scenario(4, teacher);
+
+    assert_eq!(
+        unassigned_code(&proposal),
+        UnassignedReason::NoTeacherCapacity
+    );
+    assert_eq!(proposal.total_hours, 4);
+    assert_eq!(proposal.pool_remaining, Some(6));
+}
+
+#[test]
+fn unplaced_locked_company_reports_missing_consecutive_block() {
+    let proposal = locked_scenario(4, one_teacher(9..12));
+    assert_eq!(
+        unassigned_code(&proposal),
+        UnassignedReason::NoConsecutiveBlock
+    );
+}
+
+#[test]
+fn unplaced_locked_company_reports_daily_cap() {
+    let teacher = TeacherInput {
+        base_assigned_hours: 6,
+        base_hours_by_day: [(1, 6)].into_iter().collect(),
+        ..one_teacher(9..13)
+    };
+    let proposal = locked_scenario(4, teacher);
+    assert_eq!(
+        unassigned_code(&proposal),
+        UnassignedReason::DailyCapReached
+    );
+}
+
+/// Günlük 8 saati ya da ızgarayı aşan kilitli saat hiçbir yere sığmaz.
+#[test]
+fn locked_hours_above_the_daily_cap_are_reported_as_too_long() {
+    let teacher = TeacherInput {
+        free_slots: free_on(&[1, 2, 3, 4, 5], 9..17),
+        ..teacher(1)
+    };
+    let proposal = locked_scenario(9, teacher);
+    assert_eq!(
+        unassigned_code(&proposal),
+        UnassignedReason::LockedHoursTooLong
+    );
+}
+
+/// Girdide olmayan öğretmene bağlı sabit atamanın saati kayıtta durur; havuz
+/// bütçesinde AYRILIR (10 − 4 = 6) ve toplamda görünür.
+#[test]
+fn fixed_company_of_an_unknown_teacher_still_reserves_its_hours() {
+    let orphan = CompanyInput {
+        current: current(99, 1, 9, PlacementSource::Manual),
+        ..company(1)
+    };
+    let other = CompanyInput {
+        awarded_hours: 2,
+        max_hours: 8,
+        ..company(2)
+    };
+    let teacher = TeacherInput {
+        free_slots: free_on(&[1, 2], 9..17),
+        ..teacher(1)
+    };
+    let proposal = Scenario::new(vec![orphan, other], vec![teacher])
+        .pool(10)
+        .run();
+
+    assert_eq!(hours_of(&proposal, 2), Some(6));
+    assert_eq!(proposal.total_hours, 10);
+}
+
+/// Oynak işletmenin bloğu ızgara sonunu aşamaz: öğretmen yalnız son iki
+/// hücrede (15, 16) boşsa 3 saatlik işletme 2'ye iner.
+#[test]
+fn movable_block_never_runs_past_the_grid_end() {
+    let teacher = TeacherInput {
+        free_slots: free(1, 15..17),
+        ..teacher(1)
+    };
+    let company = CompanyInput {
+        awarded_hours: 3,
+        max_hours: 3,
+        workplace_days: days(&[1]),
+        ..company(1)
+    };
+    let proposal = Scenario::new(vec![company], vec![teacher]).run();
+
+    let (_, _, start, hours) = final_of(&proposal, 1).unwrap();
+    assert_eq!((start, hours), (15, 2));
+    assert_eq!(
+        change_of(&proposal, 1).map(|c| c.reason_code),
+        Some(HourChangeReason::NoConsecutiveCells)
+    );
+}

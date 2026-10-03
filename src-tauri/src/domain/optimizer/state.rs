@@ -158,7 +158,7 @@ impl<'p, 'a> State<'p, 'a> {
             return 0;
         }
         let company = self.p.companies[c];
-        let old_hours = company.awarded_hours.max(0);
+        let old_hours = self.p.awarded(c);
         let Some(pl) = placement else {
             return if company.current.is_some() {
                 1 + old_hours
@@ -273,5 +273,85 @@ impl<'p, 'a> State<'p, 'a> {
         let count_after = teacher.count;
         self.totals.splits += splits_after - splits_before;
         self.totals.sum_sq_count += count_after * count_after - count_before * count_before;
+    }
+}
+
+/// Yalnız testlerde: artımlı tutulan toplamların sıfırdan yeniden hesapla
+/// eşitliğini ve sert kısıtları denetler. Üretim yolunda çağrılmaz; amacı,
+/// `place`/`unplace` artış mantığındaki sapmayı (ör. hücre bitlerinin
+/// yanlış silinmesi) ilk hamlede yakalamaktır.
+#[cfg(test)]
+impl State<'_, '_> {
+    pub fn assert_consistent(&self, ctx: &str) {
+        let p = self.p;
+        let mut fresh = State::new(p);
+        for c in 0..p.companies.len() {
+            if p.is_fixed[c] {
+                assert_eq!(
+                    self.placement[c], p.fixed_placement[c],
+                    "{ctx}: sabit yerleşim değişti"
+                );
+            } else if let Some(pl) = self.placement[c] {
+                fresh.place(c, pl);
+            }
+        }
+        assert_eq!(fresh.score(), self.score(), "{ctx}: skor sapması");
+        assert_eq!(
+            fresh.movable_hours, self.movable_hours,
+            "{ctx}: bütçe sapması"
+        );
+        for (t, (a, b)) in self.teachers.iter().zip(&fresh.teachers).enumerate() {
+            let same = a.occ == b.occ
+                && a.day_hours == b.day_hours
+                && a.rem_cap == b.rem_cap
+                && a.hours == b.hours
+                && a.count == b.count
+                && a.distinct == b.distinct
+                && a.groups == b.groups;
+            assert!(same, "{ctx}: öğretmen {t} toplamları sapmış");
+        }
+        self.assert_hard_constraints(ctx);
+    }
+
+    fn assert_hard_constraints(&self, ctx: &str) {
+        use crate::domain::scheduling::{visit_span, MAX_HOURS_PER_DAY};
+        let p = self.p;
+        let mut cells: Vec<u128> = p
+            .teachers
+            .iter()
+            .map(|t| p.slots_mask(t.base_used_slots.iter().map(|s| (s.day_of_week, s.hour))))
+            .collect();
+        for c in (0..p.companies.len()).filter(|c| p.is_fixed[*c]) {
+            if let Some(pl) = self.placement[c] {
+                cells[pl.teacher] |= p.placement_mask(&pl);
+            }
+        }
+        for c in (0..p.companies.len()).filter(|c| !p.is_fixed[*c]) {
+            let Some(pl) = self.placement[c] else {
+                continue;
+            };
+            let mask = p.block_mask(pl.day, pl.start, visit_span(pl.hours));
+            let mask = mask.unwrap_or_else(|| panic!("{ctx}: işletme {c} ızgara dışında"));
+            assert_eq!(
+                mask & p.eligible(pl.teacher, c),
+                mask,
+                "{ctx}: işletme {c} uygun değil"
+            );
+            assert_eq!(mask & cells[pl.teacher], 0, "{ctx}: işletme {c} çakışıyor");
+            cells[pl.teacher] |= mask;
+            assert!(
+                pl.hours <= p.ceiling[c] && pl.hours >= p.floor[c],
+                "{ctx}: işletme {c} tavan/taban dışında"
+            );
+            let day = day_index(pl.day).unwrap_or(0);
+            assert!(
+                pl.hours == 0 || self.teachers[pl.teacher].day_hours[day] <= MAX_HOURS_PER_DAY,
+                "{ctx}: öğretmen {} günlük sınırı aştı",
+                pl.teacher
+            );
+        }
+        if let Some(budget) = p.budget {
+            assert!(self.movable_hours <= budget, "{ctx}: bütçe aşıldı");
+        }
     }
 }
