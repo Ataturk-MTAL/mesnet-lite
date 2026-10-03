@@ -196,7 +196,7 @@ mod tests {
 
     const LOCATOR_SAMPLE: &str = "Result: Test Lisesi, Test Mahallesi, Toroslar/Mersin, Türkiye\n\
          Distance: 6.8 km\n\
-         Address: Test Mahallesi, 6214. Sk. No:40, 33020 Akdeniz/Mersin, Türkiye";
+         Address: Kurgu Mahallesi, 9876. Sk. No:12/A, 33000 Akdeniz/Mersin, Türkiye";
 
     #[test]
     fn locator_field_extracts_distance_and_address() {
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(parts.one_way_distance_km, Some(6.8));
         assert_eq!(
             parts.address.as_deref(),
-            Some("Test Mahallesi, 6214. Sk. No:40, 33020 Akdeniz/Mersin, Türkiye")
+            Some("Kurgu Mahallesi, 9876. Sk. No:12/A, 33000 Akdeniz/Mersin, Türkiye")
         );
     }
 
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(entry.company.contact_first_name, "MEHMET");
         assert_eq!(entry.company.phone, "(532) 000-0000");
         assert_eq!(entry.company.one_way_distance_km, Some(6.8));
-        assert!(entry.company.address_text.contains("6214. Sk."));
+        assert!(entry.company.address_text.contains("9876. Sk."));
 
         assert_eq!(entry.student.first_name, "AHMET");
         assert_eq!(entry.student.grade, "12/C");

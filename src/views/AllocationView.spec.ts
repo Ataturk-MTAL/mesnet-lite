@@ -325,14 +325,14 @@ describe('AllocationView işletme adresi', () => {
         companyId: 1,
         companyName: 'Firma A',
         district: 'Akdeniz',
-        addressText: 'Karaduvar Mah. Serbest Bölge 14.Cadde No:13, Akdeniz/Mersin',
+        addressText: 'Kurgu Mah. Deneme 5.Cadde No:21, Akdeniz/Mersin',
       }),
     ])
 
     // Assert
     const address = wrapper.find('.company-address')
     expect(address.exists()).toBe(true)
-    expect(address.text()).toBe('Karaduvar Mah. Serbest Bölge 14.Cadde No:13, Akdeniz/Mersin')
+    expect(address.text()).toBe('Kurgu Mah. Deneme 5.Cadde No:21, Akdeniz/Mersin')
     wrapper.unmount()
   })
 
@@ -354,7 +354,7 @@ describe('AllocationView işletme adresi', () => {
         companyId: 1,
         companyName: 'Firma A',
         district: 'Akdeniz',
-        addressText: 'Hürriyet Mah. Hüseyin Okan Merzeci Blv No:489, Yenişehir/Mersin',
+        addressText: 'Numune Mah. Deneme Blv No:731, Yenişehir/Mersin',
         assignedTeacherId: 7,
       }),
     ])
@@ -362,7 +362,7 @@ describe('AllocationView işletme adresi', () => {
     // Assert
     const addresses = wrapper.findAll('.company-address')
     expect(addresses).toHaveLength(1)
-    expect(addresses[0]?.text()).toBe('Hürriyet Mah. Hüseyin Okan Merzeci Blv No:489, Yenişehir/Mersin')
+    expect(addresses[0]?.text()).toBe('Numune Mah. Deneme Blv No:731, Yenişehir/Mersin')
     wrapper.unmount()
   })
 })
