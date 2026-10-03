@@ -9,6 +9,7 @@ use crate::domain::allocation::{
 };
 use crate::domain::grouping::{assign_groups, GroupingInput, GroupingSettings};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, CoordinatorRow};
+use crate::domain::history::events::AssignmentSource;
 use crate::domain::scheduling::{visit_span, Slot, MAX_HOURS_PER_DAY};
 use crate::domain::terms::{parse_date, today_local};
 use crate::domain::validation::{check_pool, check_teacher_totals, Violation};
@@ -58,6 +59,9 @@ pub struct BoardCompany {
     pub visit_end_hour: Option<i64>,
     pub is_forced: bool,
     pub force_reason: Option<String>,
+    /// `"manual"` | `"proposal"`; `None` = atanmamış. Arayüze `assignmentSource`
+    /// olarak gider (Issue #43).
+    pub assignment_source: Option<String>,
 }
 
 /// Atama ekranındaki bir öğretmen ve haftalık ızgarası.
@@ -245,6 +249,7 @@ async fn load_board(state: &AppState, read_at: &ReadAt) -> AppResult<AssignmentB
             visit_end_hour: assignment.map(|a| a.visit_hour + visit_span(awarded_hours) - 1),
             is_forced: assignment.map(|a| a.is_forced == 1).unwrap_or(false),
             force_reason: assignment.and_then(|a| a.force_reason.clone()),
+            assignment_source: assignment.map(|a| a.source.clone()),
         });
     }
 
@@ -520,6 +525,8 @@ fn coordinator_request(
         visit_hour: input.visit_hour,
         is_forced: input.is_forced,
         force_reason: input.force_reason.clone(),
+        // Panodaki elle atama: "Baştan dağıt" bu atamaya dokunmaz (Issue #43).
+        source: AssignmentSource::Manual,
     };
     Ok(ChangeRequest {
         term: term.to_string(),

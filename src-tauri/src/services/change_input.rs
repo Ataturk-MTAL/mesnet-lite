@@ -14,7 +14,7 @@ use sqlx::SqliteConnection;
 
 use crate::db::{companies, students, teachers};
 use crate::domain::history::decide::{
-    ChangeCommand, Materialized, NewStudentInput, NewTeacherProfile, TransferTarget,
+    ChangeCommand, CoordinatorRow, Materialized, NewStudentInput, NewTeacherProfile, TransferTarget,
 };
 use crate::domain::history::events::TeacherLoad;
 use crate::domain::models::{ChiefType, EmploymentType, NewCompany, NewStudent, NewTeacher};
@@ -42,6 +42,13 @@ fn innermost(command: &ChangeCommand) -> &ChangeCommand {
     }
 }
 
+fn validate_coordinator_rows(rows: &[CoordinatorRow], day_end_hour: i64) -> AppResult<()> {
+    rows.iter().try_for_each(|r| {
+        validate_slot(r.visit_day, r.visit_hour, day_end_hour)?;
+        validate_force_reason(r.is_forced, r.force_reason.as_deref())
+    })
+}
+
 /// Komutun taşıdığı her dış girdiyi doğrular (spec §8 gövdeleri).
 ///
 /// `day_end_hour`, ızgaranın bitişidir (HARİÇ; bkz. `db/settings.rs::lesson_hour_bounds`
@@ -62,10 +69,13 @@ pub(super) fn validate_command(command: &ChangeCommand, day_end_hour: i64) -> Ap
         }
         ChangeCommand::SetTeacherLoad { load, .. } => validate_load(load),
         ChangeCommand::SetCompanyHours { rows } => validate_hours(rows.iter().map(|r| r.awarded_hours)),
-        ChangeCommand::AssignCoordinators { rows } => rows.iter().try_for_each(|r| {
-            validate_slot(r.visit_day, r.visit_hour, day_end_hour)?;
-            validate_force_reason(r.is_forced, r.force_reason.as_deref())
-        }),
+        ChangeCommand::AssignCoordinators { rows } => validate_coordinator_rows(rows, day_end_hour),
+        // Üç parçanın her biri kendi komutuyla AYNI kurallardan geçer; kural
+        // iki yerde yazılmaz (`release` yalnız kimlik taşır, doğrulanacak değer yok).
+        ChangeCommand::ApplyProposal { hours, assign, .. } => {
+            validate_hours(hours.iter().map(|r| r.awarded_hours))?;
+            validate_coordinator_rows(assign, day_end_hour)
+        }
         ChangeCommand::SetTeacherSchedule { slots, .. } => {
             slots.iter().try_for_each(|s| validate_slot(s.day_of_week, s.hour, day_end_hour))
         }
@@ -258,7 +268,7 @@ pub(crate) fn employment_column(employment: EmploymentType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::history::decide::CoordinatorRow;
+    use crate::domain::history::decide::CompanyHoursRow;
     use crate::domain::scheduling::Slot;
 
     /// `max_daily_lessons = 9` iken ızgara `[1, 10)`tir: 9. saat kabul,
@@ -288,12 +298,35 @@ mod tests {
             visit_hour: hour,
             is_forced: false,
             force_reason: None,
+            source: Default::default(),
         };
 
         let ok = ChangeCommand::AssignCoordinators { rows: vec![row(9)] };
         let bad = ChangeCommand::AssignCoordinators { rows: vec![row(10)] };
         assert!(validate_command(&ok, day_end_hour).is_ok());
         assert!(validate_command(&bad, day_end_hour).is_err());
+    }
+
+    /// `ApplyProposal` iki girdi listesini de aynı kurallardan geçirir:
+    /// ızgara dışı ziyaret saati, gerekçesiz zorlama ve negatif saat reddedilir.
+    #[test]
+    fn apply_proposal_validates_its_hours_and_assign_rows() {
+        let row = |hour: i64, is_forced: bool| CoordinatorRow {
+            company_id: 1,
+            teacher_id: 1,
+            visit_day: 1,
+            visit_hour: hour,
+            is_forced,
+            force_reason: None,
+            source: Default::default(),
+        };
+        let hours = |awarded: i64| CompanyHoursRow { company_id: 1, awarded_hours: awarded, is_honorary: false, is_locked: false, notes: String::new() };
+        let proposal = |hours, assign| ChangeCommand::ApplyProposal { hours, assign, release: vec![2] };
+
+        assert!(validate_command(&proposal(vec![hours(2)], vec![row(9, false)]), 10).is_ok());
+        assert!(validate_command(&proposal(vec![], vec![row(10, false)]), 10).is_err(), "ızgara dışı saat");
+        assert!(validate_command(&proposal(vec![], vec![row(3, true)]), 10).is_err(), "gerekçesiz zorlama");
+        assert!(validate_command(&proposal(vec![hours(-1)], vec![]), 10).is_err(), "negatif saat");
     }
 
     /// Alt sınır ayardan bağımsızdır: saat 0 veya daha küçükse her zaman ret.
@@ -321,6 +354,7 @@ mod tests {
             visit_hour: 3,
             is_forced,
             force_reason: reason.map(str::to_string),
+            source: Default::default(),
         };
 
         let missing = ChangeCommand::AssignCoordinators { rows: vec![row(true, None)] };

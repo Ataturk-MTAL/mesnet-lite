@@ -65,6 +65,31 @@ pub struct HoursState {
     pub notes: String,
 }
 
+/// Bir atamanın nereden geldiği. "Baştan dağıt" kipinde motor yalnız
+/// `Proposal` kaynaklı atamaları yeniden düzenleyebilir; `Manual` (elle,
+/// zorlamalı olsun olmasın) atamalara dokunmaz (Issue #43 kullanıcı kararı).
+///
+/// Varsayılan `Manual`: bu alan eklenmeden önce yazılmış olaylar (açılış
+/// göçü dahil) kullanıcının elle yaptığı atamalardır ve öyle okunmalıdır.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AssignmentSource {
+    #[default]
+    Manual,
+    Proposal,
+}
+
+impl AssignmentSource {
+    /// `coordination_periods.source` sütunundaki ve arayüze giden metin
+    /// (migration 0018 CHECK kısıtıyla aynı iki değer).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AssignmentSource::Manual => "manual",
+            AssignmentSource::Proposal => "proposal",
+        }
+    }
+}
+
 /// `coordination` akışının durumu.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,6 +99,10 @@ pub struct CoordinationState {
     pub visit_hour: i64,
     pub is_forced: bool,
     pub force_reason: Option<String>,
+    /// `#[serde(default)]` olay sürümünü artırmadan eski JSON'ların
+    /// okunmasını sağlar (bkz. `CURRENT_KIND_VERSION`).
+    #[serde(default)]
+    pub source: AssignmentSource,
 }
 
 /// `teacher_load` akışının durumu.
@@ -515,7 +544,7 @@ mod tests {
     }
 
     fn sample_coordination_state() -> CoordinationState {
-        CoordinationState { teacher_id: 3, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None }
+        CoordinationState { teacher_id: 3, visit_day: 1, visit_hour: 3, is_forced: false, force_reason: None, source: Default::default() }
     }
 
     fn sample_teacher_load() -> TeacherLoad {
@@ -579,6 +608,35 @@ mod tests {
             assert!(decoded.is_ok(), "fixture decode edilemedi: {kind}: {decoded:?}");
             assert_eq!(decoded.unwrap().kind(), *kind);
         }
+    }
+
+    /// `source` alanı eklenmeden ÖNCE yazılmış bir `coordinator_assigned`
+    /// olayı (golden fixture dahil) sürüm artırılmadan okunabilmeli ve
+    /// ELLE atama sayılmalı: tarihçe değişmez, eski atamayı "öneri"
+    /// saymak "Baştan dağıt"ın kullanıcının elle yaptığı atamayı
+    /// bozmasına yol açardı (Issue #43).
+    #[test]
+    fn coordinator_event_written_before_source_existed_reads_as_manual() {
+        let json = include_str!("fixtures/coordinator_assigned.v1.json");
+        assert!(!json.contains("source"), "fixture eski biçimi temsil etmeli");
+
+        let decoded = EventPayload::decode("coordinator_assigned", CURRENT_KIND_VERSION, json).unwrap();
+
+        let EventPayload::CoordinatorAssigned { state, .. } = decoded else { panic!("CoordinatorAssigned beklenirdi") };
+        assert_eq!(state.source, AssignmentSource::Manual);
+    }
+
+    /// Kaynak olayın içinde `"manual"` / `"proposal"` küçük harfli metin
+    /// olarak saklanır ve gidiş-dönüşte korunur.
+    #[test]
+    fn coordination_source_is_stored_as_lowercase_text_and_roundtrips() {
+        let state = CoordinationState { source: AssignmentSource::Proposal, ..sample_coordination_state() };
+        let payload = EventPayload::CoordinatorAssigned { state, from_teacher_id: None, labels: labels(&[]) };
+
+        let encoded = payload.encode().unwrap();
+
+        assert!(encoded.json.contains(r#""source":"proposal""#), "biçim: {}", encoded.json);
+        assert_eq!(EventPayload::decode(encoded.kind, encoded.version, &encoded.json).unwrap(), payload);
     }
 
     #[test]
