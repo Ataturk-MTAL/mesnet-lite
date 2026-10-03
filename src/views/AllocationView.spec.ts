@@ -80,12 +80,17 @@ function planningTermDates(overrides: Partial<TermWithDates> = {}): TermWithDate
   }
 }
 
+/** Anahtar verilmediyse grup, ilçeden türetilir (arka ucun ilçe geri dönüşüyle aynı biçim). */
 function companyFixture(overrides: Partial<BoardCompany> = {}): BoardCompany {
+  const district = overrides.district ?? 'Akdeniz'
   return {
     companyId: 1,
     companyName: 'Firma A',
     addressText: 'Adres',
-    district: 'Akdeniz',
+    district,
+    neighborhood: '',
+    groupKey: district === '' ? null : `district:${district}`,
+    groupLabel: district,
     oneWayDistanceKm: null,
     studentCount: 1,
     studentNames: [],
@@ -205,7 +210,7 @@ describe('AllocationView atanmamış işletme gruplaması', () => {
     wrapper.unmount()
   })
 
-  it('ilçesi boş olan işletmeler için sonda "İlçe belirsiz" grubu oluşturur', async () => {
+  it('grubu olmayan işletmeler için sonda "Grupsuz" grubu oluşturur', async () => {
     // Arrange & Act
     const wrapper = await mountView([
       companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz' }),
@@ -214,18 +219,18 @@ describe('AllocationView atanmamış işletme gruplaması', () => {
 
     // Assert
     const headers = wrapper.findAll('.p-panel-title').map((el) => el.text())
-    expect(headers).toEqual(['Akdeniz (1)', `${labels.allocation.districtUnknown} (1)`])
+    expect(headers).toEqual(['Akdeniz (1)', `${labels.allocation.ungrouped} (1)`])
     wrapper.unmount()
   })
 
-  it('tüm işletmelerin ilçesi doluysa "İlçe belirsiz" grubu hiç gösterilmez', async () => {
+  it('tüm işletmelerin grubu varsa "Grupsuz" grubu hiç gösterilmez', async () => {
     // Arrange & Act
     const wrapper = await mountView([
       companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz' }),
     ])
 
     // Assert
-    expect(wrapper.text()).not.toContain(labels.allocation.districtUnknown)
+    expect(wrapper.text()).not.toContain(labels.allocation.ungrouped)
     wrapper.unmount()
   })
 
@@ -333,6 +338,47 @@ describe('AllocationView sağ panelin kendi içinde kayması', () => {
     expect(gridScroll.find('table.grid').exists()).toBe(true)
     expect(gridScroll.find('.teacher-select').exists()).toBe(false)
     expect(wrapper.find('.teacher-select').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('AllocationView groupKey ile gruplama', () => {
+  it('küme anahtarına göre gruplar ve başlıkta groupLabel kullanır', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, groupKey: 'cluster:1', groupLabel: 'Kurgu Bölgesi' }),
+      companyFixture({ companyId: 2, groupKey: 'cluster:1', groupLabel: 'Kurgu Bölgesi' }),
+      companyFixture({ companyId: 3, groupKey: 'manual:0', groupLabel: 'Deneme Grubu' }),
+    ])
+
+    // Assert
+    const headers = wrapper.findAll('.p-panel-title').map((el) => el.text())
+    expect(headers).toEqual(['Deneme Grubu (1)', 'Kurgu Bölgesi (2)'])
+    wrapper.unmount()
+  })
+
+  it('ilçesi dolu olsa bile groupKey null ise Grupsuz başlığına koyar', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, district: 'Akdeniz', groupKey: null, groupLabel: '' }),
+    ])
+
+    // Assert
+    const headers = wrapper.findAll('.p-panel-title').map((el) => el.text())
+    expect(headers).toEqual([`${labels.allocation.ungrouped} (1)`])
+    wrapper.unmount()
+  })
+
+  it('kartta mahalleyi ilçenin yanında gösterir; mahalle boşsa yalnız ilçe görünür', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ companyId: 1, companyName: 'Firma A', district: 'Akdeniz', neighborhood: 'Örnek' }),
+      companyFixture({ companyId: 2, companyName: 'Firma B', district: 'Akdeniz', neighborhood: '' }),
+    ])
+
+    // Assert
+    const places = wrapper.findAll('.company-place').map((el) => el.text())
+    expect(places).toEqual(['Akdeniz · Örnek', 'Akdeniz'])
     wrapper.unmount()
   })
 })

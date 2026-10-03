@@ -13,6 +13,7 @@ import type { SettingsMap } from '../api/settings'
 import type { GeocodeSummary } from '../api/files'
 import type { CompanyMergeSummary } from '../api/companies'
 import { useTermStore } from '../stores/term'
+import { filesApi } from '../api/files'
 
 const listMock = vi.fn<() => Promise<Company[]>>()
 const removeMock = vi.fn<(id: number) => Promise<CompanyRemoval>>()
@@ -78,9 +79,11 @@ function companyFixture(overrides: Partial<Company> = {}): Company {
     email: 'ali@example.com',
     addressText: 'Örnek Mah. Deneme 7. Cadde No:21 Akdeniz/Mersin',
     district: 'Akdeniz',
+    neighborhood: '',
     latitude: null,
     longitude: null,
     geocodeStatus: 'pending',
+    geocodePrecision: '',
     oneWayDistanceKm: 12.4,
     notes: '',
     createdAt: '2026-01-01',
@@ -425,6 +428,66 @@ describe('CompaniesView — işletme silme', () => {
       expect.objectContaining({ severity: 'error', detail: 'delete_company: açık yerleştirmesi var' }),
     )
     expect(listMock).toHaveBeenCalledTimes(1) // yalnız ilk yükleme; hata sonrası yenilenmedi
+    wrapper.unmount()
+  })
+})
+
+describe('CompaniesView yaklaşık konum', () => {
+  it('mahalle düzeyinde çözülen işletmeyi "Yaklaşık (mahalle)" olarak ayırt eder', async () => {
+    // Arrange & Act
+    const wrapper = await mountView([
+      companyFixture({ id: 1, geocodeStatus: 'resolved', geocodePrecision: 'neighborhood' }),
+      companyFixture({ id: 2, geocodeStatus: 'resolved', geocodePrecision: 'address' }),
+    ])
+
+    // Assert
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows[0].text()).toContain(labels.geocodePrecision.neighborhood)
+    expect(rows[1].text()).not.toContain(labels.geocodePrecision.neighborhood)
+    expect(rows[1].text()).toContain(labels.geocodeStatus.resolved)
+    wrapper.unmount()
+  })
+
+  it('konum çözme toast\'ında yaklaşık sayısını yalnız sıfırdan büyükse gösterir', async () => {
+    // Arrange
+    vi.mocked(filesApi.geocodePending).mockResolvedValue({
+      resolved: 5,
+      approximate: 2,
+      failed: 0,
+      skipped: 1,
+      warnings: [],
+    })
+    const wrapper = await mountView([companyFixture()])
+    const button = wrapper.findAll('button').find((b) => b.text() === labels.geocoding.button)!
+
+    // Act
+    await button.trigger('click')
+    await flushPromises()
+
+    // Assert
+    const detail = toastAddMock.mock.calls[0][0].detail
+    expect(detail).toContain(`2 ${labels.geocoding.approximate}`)
+    wrapper.unmount()
+  })
+
+  it('yaklaşık çözülen yoksa toast\'ta yaklaşık ifadesi geçmez', async () => {
+    // Arrange
+    vi.mocked(filesApi.geocodePending).mockResolvedValue({
+      resolved: 3,
+      approximate: 0,
+      failed: 0,
+      skipped: 0,
+      warnings: [],
+    })
+    const wrapper = await mountView([companyFixture()])
+    const button = wrapper.findAll('button').find((b) => b.text() === labels.geocoding.button)!
+
+    // Act
+    await button.trigger('click')
+    await flushPromises()
+
+    // Assert
+    expect(toastAddMock.mock.calls[0][0].detail).not.toContain(labels.geocoding.approximate)
     wrapper.unmount()
   })
 })

@@ -1,12 +1,32 @@
 {
-  "get_settings": {
-    "active_term": "2026-2027/1",
-    "school_name": "Atatürk MTAL"
-  },
-  "get_known_terms": [
-    "2026-2027/1"
+  "has_any_user": true,
+  "list_users": [
+    {
+      "id": 1,
+      "name": "Deniz ARSLAN",
+      "isActive": true
+    }
   ],
-  "list_terms_with_dates": [],
+  "get_settings": {
+    "school_name": "Atatürk Mesleki ve Teknik Anadolu Lisesi",
+    "principal_name": "Ali Veli",
+    "field_name": "Elektrik-Elektronik Teknolojisi",
+    "active_term": "2026-2027/1",
+    "institution_type": "other",
+    "is_metropolitan_district": "true",
+    "max_daily_lessons": "9",
+    "school_latitude": "",
+    "school_longitude": "",
+    "grouping_mode": "manual",
+    "grouping_max_diameter_km": "3",
+    "grouping_manual_groups": "[{\"name\": \"Kurgu Sanayi\", \"neighborhoods\": [\"Kurgu\", \"Numune\"], \"districts\": [\"Toroslar\"]}, {\"name\": \"\", \"neighborhoods\": [], \"districts\": []}, {\"name\": \"kurgu sanayi\", \"neighborhoods\": [\"Örnek\"], \"districts\": []}]"
+  },
+  "backup_status": {
+    "backupDir": "/Users/ogretmen/Library/Application Support/MESNET.Lite/backups",
+    "lastBackupAt": "2026-09-20",
+    "backupCount": 5
+  },
+  "plugin:dialog|open": "/Users/ogretmen/Downloads/mesnet-yedek-2026-09-15.db",
   "list_companies": [
     {
       "id": 1,

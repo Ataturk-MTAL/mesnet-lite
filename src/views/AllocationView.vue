@@ -110,7 +110,7 @@
 
               <Panel
                 v-for="group in unassignedGroups"
-                :key="group.district"
+                :key="group.key"
                 :header="group.label"
                 toggleable
                 class="district-group"
@@ -134,6 +134,9 @@
                   @keydown.space.prevent="toggleKeyboardSelection(company.companyId)"
                 >
                   <div class="company-name">{{ company.companyName }}</div>
+                  <div v-if="company.district.trim().length > 0 || company.neighborhood.trim().length > 0" class="company-place">
+                    {{ [company.district, company.neighborhood].filter((v) => v.trim().length > 0).join(' · ') }}
+                  </div>
                   <div
                     v-if="company.addressText.trim().length > 0"
                     class="company-address"
@@ -460,6 +463,7 @@ import type {
 import type { ChangeOutcome } from '../types/models'
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
+import { groupCompanies } from '../utils/companyGrouping'
 import { useSelectionStore } from '../stores/selection'
 import { useAsOfDateStore } from '../stores/asOfDate'
 import { useChangeDetailsDialog } from '../composables/useChangeDetailsDialog'
@@ -608,42 +612,11 @@ const assignedCompanies = computed(
   () => board.value?.companies.filter((c) => c.assignedTeacherId !== null) ?? [],
 )
 
-interface CompanyDistrictGroup {
-  /** Boş dize: ilçesi ayrıştırılamamış işletmeler grubu. */
-  district: string
-  /** "Akdeniz (13)" gibi; sayaç arama filtresinden ETKİLENMEZ, o ilçedeki TÜM atanmamış
-   *  işletmeleri sayar. Arama yalnızca hangi kartların gösterileceğini daraltır. */
-  label: string
-  companies: BoardCompany[]
-}
-
-/** Atanmamış işletmeleri ilçeye göre gruplar; Türkçe alfabetik sıralanır, ilçesi boş
- *  olanlar sonda ayrı bir grupta toplanır. Aramayla eşleşen kartı kalmayan grup hiç
- *  gösterilmez. */
-const unassignedGroups = computed<CompanyDistrictGroup[]>(() => {
-  const namedDistricts = [
-    ...new Set(
-      unassignedCompanies.value
-        .map((c) => c.district)
-        .filter((district) => district.trim().length > 0),
-    ),
-  ].sort((a, b) => a.localeCompare(b, 'tr'))
-
-  const orderedDistricts = [...namedDistricts, '']
-
-  return orderedDistricts
-    .map((district) => {
-      const totalCount = unassignedCompanies.value.filter((c) => c.district === district).length
-      const visibleCompanies = filteredUnassigned.value.filter((c) => c.district === district)
-      const districtName = district.trim().length > 0 ? district : labels.allocation.districtUnknown
-      return {
-        district,
-        label: `${districtName} (${totalCount})`,
-        companies: visibleCompanies,
-      }
-    })
-    .filter((group) => group.companies.length > 0)
-})
+/** Atanmamış işletmeleri sunucunun verdiği `groupKey`'e göre gruplar (bkz. utils/companyGrouping).
+ *  Sayaçlar arama filtresinden etkilenmez; arama yalnızca hangi kartların gösterileceğini daraltır. */
+const unassignedGroups = computed(() =>
+  groupCompanies(unassignedCompanies.value, filteredUnassigned.value),
+)
 
 function showError(error: unknown): void {
   const detail = error instanceof Error ? error.message : labels.common.error
@@ -1261,6 +1234,7 @@ onUnmounted(() => {
 .company-card--readonly { cursor: not-allowed; opacity: 0.7; }
 .company-card--readonly:hover { background: var(--p-content-background); }
 .company-name { font-weight: 600; font-size: 0.9375rem; }
+.company-place { font-size: 0.75rem; color: var(--p-text-muted-color); margin-top: 0.125rem; }
 .company-address {
   font-size: 0.75rem; color: var(--p-text-muted-color); margin-top: 0.125rem;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
