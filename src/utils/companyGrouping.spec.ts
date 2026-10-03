@@ -26,6 +26,7 @@ function company(id: number, groupKey: string | null, groupLabel: string): Board
     visitEndHour: null,
     isForced: false,
     forceReason: null,
+    assignmentSource: null,
   }
 }
 

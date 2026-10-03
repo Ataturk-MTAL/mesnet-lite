@@ -45,6 +45,7 @@ declare module 'vue' {
     Panel: typeof import('openvue/panel')['default']
     Password: typeof import('openvue/password')['default']
     ProgressBar: typeof import('openvue/progressbar')['default']
+    ProposalDialog: typeof import('./src/components/allocation/ProposalDialog.vue')['default']
     RadioButton: typeof import('openvue/radiobutton')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

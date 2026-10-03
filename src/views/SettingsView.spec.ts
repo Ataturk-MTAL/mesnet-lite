@@ -314,6 +314,78 @@ describe('SettingsView max daily lessons', () => {
   })
 })
 
+describe('SettingsView eşitlik eşiği', () => {
+  function gapField(wrapper: ReturnType<typeof mountView>) {
+    return wrapper.findAllComponents(InputNumber).find((c) => c.props('inputId') === 'balance-gap')!
+  }
+
+  it('kayıtlı eşiği yükler, yoksa varsayılan 4 gösterir', async () => {
+    getMock.mockResolvedValue({ ...baseSettings, allocation_balance_gap_hours: '7' })
+    const withValue = mountView()
+    await flushPromises()
+    expect(gapField(withValue).props('modelValue')).toBe(7)
+    withValue.unmount()
+
+    getMock.mockResolvedValue(baseSettings)
+    const withoutValue = mountView()
+    await flushPromises()
+    expect(gapField(withoutValue).props('modelValue')).toBe(4)
+    withoutValue.unmount()
+  })
+
+  it('düzenlenen eşiği tamsayı dizgisi olarak allocation_balance_gap_hours altında kaydeder', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    saveMock.mockResolvedValue(baseSettings)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await gapField(wrapper).vm.$emit('update:modelValue', 12)
+    await clickSave(wrapper)
+    await vi.waitFor(() => expect(saveMock).toHaveBeenCalledTimes(1))
+
+    expect(saveMock.mock.calls[0][0].allocation_balance_gap_hours).toBe('12')
+    wrapper.unmount()
+  })
+
+  it('sınırları (0 ve 40) kabul eder', async () => {
+    getMock.mockResolvedValue(baseSettings)
+    saveMock.mockResolvedValue(baseSettings)
+
+    const wrapper = mountView()
+    await flushPromises()
+    await gapField(wrapper).vm.$emit('update:modelValue', 0)
+    await clickSave(wrapper)
+    await gapField(wrapper).vm.$emit('update:modelValue', 40)
+    await clickSave(wrapper)
+    await vi.waitFor(() => expect(saveMock).toHaveBeenCalledTimes(2))
+
+    expect(saveMock.mock.calls[0][0].allocation_balance_gap_hours).toBe('0')
+    expect(saveMock.mock.calls[1][0].allocation_balance_gap_hours).toBe('40')
+    wrapper.unmount()
+  })
+
+  it('aralık dışı, kesirli ya da boş değerde kaydetmez ve uyarı gösterir', async () => {
+    getMock.mockResolvedValue(baseSettings)
+
+    const wrapper = mountView()
+    await flushPromises()
+    for (const invalid of [41, -1, 2.5, null]) {
+      await gapField(wrapper).vm.$emit('update:modelValue', invalid)
+      await clickSave(wrapper)
+    }
+
+    expect(saveMock).not.toHaveBeenCalled()
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'warn', detail: labels.settings.balanceGap.invalid }),
+    )
+    wrapper.unmount()
+  })
+
+  it('okul konumu notu artık kümeleme referansı demez', () => {
+    expect(labels.settings.schoolLocationNote).not.toContain('kümeleme referansı')
+  })
+})
+
 describe('SettingsView users section', () => {
   const sampleUsers: User[] = [
     { id: 1, name: 'Deniz ARSLAN', isActive: true },

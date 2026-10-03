@@ -10,10 +10,9 @@
           :label="labels.allocation.propose"
           icon="pi pi-bolt"
           outlined
-          :loading="isProposing"
           :disabled="isReadOnly"
           v-tooltip.top="labels.allocation.proposeTooltip"
-          @click="openProposalDialog"
+          @click="isProposalDialogOpen = true"
         />
         <Button
           v-if="appliedProposalChangeSetId !== null && !isReadOnly"
@@ -194,6 +193,12 @@
                     </div>
                     <div class="company-meta">
                       <Tag :value="assignedTeacherName(company)" severity="secondary" />
+                      <Tag
+                        v-if="company.assignmentSource === 'proposal'"
+                        :value="labels.allocation.assignmentSourceBadge"
+                        severity="info"
+                        v-tooltip.top="labels.allocation.assignmentSourceTooltip"
+                      />
                       <span class="muted">{{ assignedSlotLabel(company) }}</span>
                     </div>
                   </div>
@@ -363,75 +368,15 @@
       </template>
     </Dialog>
 
-    <!-- Öneri diyaloğu -->
-    <Dialog
+    <!-- Öneri diyaloğu: öneriyi kendisi ister; uygulama burada yapılır. -->
+    <ProposalDialog
       v-model:visible="isProposalDialogOpen"
-      modal
-      :header="labels.allocation.proposalTitle"
-      :style="{ width: '36rem' }"
-      @hide="closeProposalDialog"
-    >
-      <div v-if="!proposal || proposal.assignments.length === 0" class="empty">
-        {{ labels.allocation.proposalEmpty }}
-      </div>
-
-      <template v-else>
-        <div
-          v-for="item in proposal.assignments"
-          :key="item.companyId"
-          class="proposal-row"
-        >
-          <div class="proposal-row-info">
-            <div class="company-name">{{ item.companyName }}</div>
-            <div class="company-meta">
-              <Tag :value="item.teacherName" severity="secondary" />
-              <span class="muted">{{ proposalSlotLabel(item) }}</span>
-              <Tag
-                v-if="!item.exactBranchMatch"
-                :value="labels.allocation.nearField"
-                severity="warn"
-              />
-            </div>
-          </div>
-        </div>
-      </template>
-
-      <Message v-if="proposalRejection !== null" severity="error" :closable="false" class="proposal-rejection">
-        <div>{{ proposalRejection }}</div>
-        <div class="muted">{{ labels.allocation.proposalRejectedNote }}</div>
-      </Message>
-
-      <Panel
-        v-if="proposal && proposal.unassigned.length > 0"
-        :header="`${labels.allocation.proposalUnassigned} (${proposal.unassigned.length})`"
-        toggleable
-        class="proposal-unassigned-panel"
-      >
-        <div
-          v-for="item in proposal.unassigned"
-          :key="item.companyId"
-          class="proposal-unassigned-row"
-        >
-          <span class="company-name">{{ item.companyName }}</span>
-          <span class="muted">{{ item.reason }}</span>
-        </div>
-      </Panel>
-
-      <template #footer>
-        <Button
-          :label="labels.common.cancel"
-          severity="secondary"
-          outlined
-          @click="closeProposalDialog"
-        />
-        <Button
-          :label="labels.allocation.proposalApply"
-          :loading="isApplyingProposal"
-          :disabled="!proposal || proposal.assignments.length === 0 || isApplyingProposal || isReadOnly"
-          @click="applyProposal"
-        />
-      </template>
-    </Dialog>
+      :is-planning="isPlanning"
+      :is-applying="isApplyingProposal"
+      :rejection="proposalRejection"
+      @apply="applyProposal"
+      @proposal-change="proposalRejection = null"
+    />
 
     <ChangeDetailsDialog
       v-if="activeTermDates"
@@ -453,13 +398,9 @@ import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import { assignmentsApi } from '../api/assignments'
 import { commitChange } from '../api/history'
-import type {
-  AllocationProposal,
-  AssignmentBoard,
-  BoardCompany,
-  NewAssignment,
-  ProposedAssignment,
-} from '../api/assignments'
+import { hoursApi } from '../api/hours'
+import type { AllocationProposal, AssignmentBoard, BoardCompany, NewAssignment } from '../api/assignments'
+import { buildApplyProposalCommand } from '../utils/proposalApply'
 import type { ChangeOutcome } from '../types/models'
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
@@ -469,6 +410,7 @@ import { useAsOfDateStore } from '../stores/asOfDate'
 import { useChangeDetailsDialog } from '../composables/useChangeDetailsDialog'
 import ChangeDetailsDialog from '../components/history/ChangeDetailsDialog.vue'
 import AsOfReadOnlyBanner from '../components/history/AsOfReadOnlyBanner.vue'
+import ProposalDialog from '../components/allocation/ProposalDialog.vue'
 
 /** İşletme adresi ipucu. Varsayılan `--p-tooltip-max-width` (12.5rem) uzun bir
  *  adres için çok dar kalır; sınır `.p-tooltip` KÖKÜNDE tanımlı olduğundan
@@ -547,9 +489,7 @@ const pendingViolations = ref<string[]>([])
 
 // Öneri diyaloğu durumu
 const isProposalDialogOpen = ref(false)
-const isProposing = ref(false)
 const isApplyingProposal = ref(false)
-const proposal = ref<AllocationProposal | null>(null)
 /** Arka uç öneriyi reddettiğinde diyalogda gösterilen gerekçe; hiçbir şey yazılmamıştır. */
 const proposalRejection = ref<string | null>(null)
 /** Bu oturumda uygulanan önerinin değişiklik kümesi; yalnız bellekte, geri almak için. */
@@ -995,35 +935,8 @@ function confirmClear(): void {
   })
 }
 
-/** Önerilen atamanın gün/saat aralığı etiketi. `ProposedAssignment` yalnızca bloğun
- *  BAŞLANGICINI taşıdığından bitiş saati burada `awardedHours`'tan hesaplanır. */
-function proposalSlotLabel(item: ProposedAssignment): string {
-  const span = companySpan(item)
-  const endHour = item.visitHour + span - 1
-  const dayName = labels.allocation.days[item.visitDay]
-  return endHour > item.visitHour
-    ? `${dayName} ${item.visitHour}–${endHour}`
-    : `${dayName} ${item.visitHour}`
-}
-
-/** Öneriyi arka uçtan ister; hiçbir şey kaydetmez, yalnızca diyaloğu doldurur. */
-async function openProposalDialog(): Promise<void> {
-  if (isReadOnly.value) return
-  isProposing.value = true
-  try {
-    proposal.value = await assignmentsApi.propose()
-    proposalRejection.value = null
-    isProposalDialogOpen.value = true
-  } catch (error: unknown) {
-    showError(error)
-  } finally {
-    isProposing.value = false
-  }
-}
-
 function closeProposalDialog(): void {
   isProposalDialogOpen.value = false
-  proposal.value = null
   proposalRejection.value = null
 }
 
@@ -1033,14 +946,13 @@ function boardTerm(): string {
 }
 
 /**
- * Öneriyi TEK değişiklik kümesi olarak, tek işlemde yazar: bir kalem reddedilirse
- * hiçbiri yazılmaz. Reddedilirse gerekçe diyalogda kalır; kümenin kimliği geri
- * almak için bellekte saklanır.
+ * Öneriyi TEK değişiklik kümesi (`applyProposal`) olarak, tek işlemde yazar:
+ * saat → atama → bırakma; biri reddedilirse hiçbiri yazılmaz. Saat satırlarının
+ * kilit/not alanları güncel saat kaydından okunur. Reddedilirse gerekçe
+ * diyalogda kalır; kümenin kimliği geri almak için bellekte saklanır.
  */
-async function applyProposal(): Promise<void> {
+async function applyProposal(proposal: AllocationProposal): Promise<void> {
   if (isReadOnly.value) return
-  const items = proposal.value?.assignments ?? []
-  if (items.length === 0) return
 
   // Dönem başladıysa tek pencere açılır; Vazgeç'te hiçbir şey yazılmaz.
   const change = await requestChangeDetails()
@@ -1049,23 +961,19 @@ async function applyProposal(): Promise<void> {
   isApplyingProposal.value = true
   proposalRejection.value = null
   try {
+    const hoursBoard = await hoursApi.get()
+    const built = buildApplyProposalCommand(proposal, hoursBoard.rows)
+    if (!built.ok) {
+      showError(new Error(labels.allocation.proposalHoursRowMissing(built.missingHoursFor.join(', '))))
+      return
+    }
     const outcome = await commitChange(
       {
         term: boardTerm(),
         effectiveDate: change.effectiveDate,
         documentDate: null,
         reason: change.reason ?? '',
-        command: {
-          type: 'assignCoordinators',
-          rows: items.map((item) => ({
-            companyId: item.companyId,
-            teacherId: item.teacherId,
-            visitDay: item.visitDay,
-            visitHour: item.visitHour,
-            isForced: false,
-            forceReason: null,
-          })),
-        },
+        command: built.command,
       },
       null,
     )
@@ -1360,31 +1268,6 @@ onUnmounted(() => {
 .muted { color: var(--p-text-muted-color); font-size: 0.8125rem; }
 .force-reasons { margin: 0.5rem 0 1rem; padding-left: 1.25rem; color: var(--p-orange-500); }
 .field { display: flex; flex-direction: column; gap: 0.375rem; }
-
-/* Öneri diyaloğu satırları */
-.proposal-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  border: 1px solid var(--p-content-border-color);
-  border-radius: var(--p-content-border-radius);
-  padding: 0.5rem 0.75rem;
-  margin-bottom: 0.5rem;
-  background: var(--p-content-background);
-}
-.proposal-row-info { min-width: 0; }
-.proposal-rejection { margin-top: 1rem; }
-.proposal-unassigned-panel { margin-top: 1rem; }
-.proposal-unassigned-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.375rem 0;
-  border-bottom: 1px solid var(--p-content-border-color);
-}
-.proposal-unassigned-row:last-child { border-bottom: none; }
 
 /* Hareket duyarlılığı azaltılmış kullanıcılar için tüm geçiş/animasyonları kapat. */
 @media (prefers-reduced-motion: reduce) {
