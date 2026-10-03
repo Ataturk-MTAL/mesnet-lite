@@ -16,6 +16,17 @@
           @click="openProposalDialog"
         />
         <Button
+          v-if="appliedProposalChangeSetId !== null && !isReadOnly"
+          :label="labels.allocation.proposalUndo"
+          :aria-label="labels.allocation.proposalUndo"
+          icon="pi pi-undo"
+          severity="secondary"
+          outlined
+          :loading="isUndoingProposal"
+          v-tooltip.top="labels.allocation.proposalUndoTooltip"
+          @click="confirmUndoProposal"
+        />
+        <Button
           :label="labels.allocation.clearAll"
           icon="pi pi-trash"
           severity="danger"
@@ -366,10 +377,6 @@
           v-for="item in proposal.assignments"
           :key="item.companyId"
           class="proposal-row"
-          :class="{
-            'proposal-row--success': proposalResultFor(item.companyId)?.success === true,
-            'proposal-row--failed': proposalResultFor(item.companyId)?.success === false,
-          }"
         >
           <div class="proposal-row-info">
             <div class="company-name">{{ item.companyName }}</div>
@@ -382,20 +389,14 @@
                 severity="warn"
               />
             </div>
-            <div v-if="proposalResultFor(item.companyId)?.success === false" class="proposal-error">
-              {{ proposalResultFor(item.companyId)?.errorMessage }}
-            </div>
           </div>
-          <i
-            v-if="proposalResultFor(item.companyId)?.success === true"
-            class="pi pi-check proposal-icon proposal-icon--success"
-          />
-          <i
-            v-else-if="proposalResultFor(item.companyId)?.success === false"
-            class="pi pi-times proposal-icon proposal-icon--failed"
-          />
         </div>
       </template>
+
+      <Message v-if="proposalRejection !== null" severity="error" :closable="false" class="proposal-rejection">
+        <div>{{ proposalRejection }}</div>
+        <div class="muted">{{ labels.allocation.proposalRejectedNote }}</div>
+      </Message>
 
       <Panel
         v-if="proposal && proposal.unassigned.length > 0"
@@ -448,6 +449,7 @@ import { storeToRefs } from 'pinia'
 import { useToast } from 'openvue/usetoast'
 import { useConfirm } from 'openvue/useconfirm'
 import { assignmentsApi } from '../api/assignments'
+import { commitChange } from '../api/history'
 import type {
   AllocationProposal,
   AssignmentBoard,
@@ -455,6 +457,7 @@ import type {
   NewAssignment,
   ProposedAssignment,
 } from '../api/assignments'
+import type { ChangeOutcome } from '../types/models'
 import { labels } from '../i18n/labels'
 import { useTermStore } from '../stores/term'
 import { useSelectionStore } from '../stores/selection'
@@ -497,15 +500,6 @@ interface HoverCell {
 interface BlockHighlight {
   day: number
   hours: number[]
-}
-
-/** Öneri uygulanırken her bir kalemin sonucu; kaçının başarılı/başarısız olduğunu
- *  ve başarısızlık gerekçesini kullanıcıya tam olarak göstermek için tutulur. */
-interface ProposalApplyResult {
-  companyId: number
-  companyName: string
-  success: boolean
-  errorMessage: string | null
 }
 
 const toast = useToast()
@@ -552,7 +546,11 @@ const isProposalDialogOpen = ref(false)
 const isProposing = ref(false)
 const isApplyingProposal = ref(false)
 const proposal = ref<AllocationProposal | null>(null)
-const proposalApplyResults = ref<ProposalApplyResult[] | null>(null)
+/** Arka uç öneriyi reddettiğinde diyalogda gösterilen gerekçe; hiçbir şey yazılmamıştır. */
+const proposalRejection = ref<string | null>(null)
+/** Bu oturumda uygulanan önerinin değişiklik kümesi; yalnız bellekte, geri almak için. */
+const appliedProposalChangeSetId = ref<number | null>(null)
+const isUndoingProposal = ref(false)
 
 const selectedTeacher = computed(
   () => board.value?.teachers.find((t) => t.teacherId === selectedTeacherId.value) ?? null,
@@ -1035,18 +1033,13 @@ function proposalSlotLabel(item: ProposedAssignment): string {
     : `${dayName} ${item.visitHour}`
 }
 
-/** İlgili önerinin uygulama sonucu; henüz uygulanmadıysa `null`. */
-function proposalResultFor(companyId: number): ProposalApplyResult | null {
-  return proposalApplyResults.value?.find((r) => r.companyId === companyId) ?? null
-}
-
 /** Öneriyi arka uçtan ister; hiçbir şey kaydetmez, yalnızca diyaloğu doldurur. */
 async function openProposalDialog(): Promise<void> {
   if (isReadOnly.value) return
   isProposing.value = true
   try {
     proposal.value = await assignmentsApi.propose()
-    proposalApplyResults.value = null
+    proposalRejection.value = null
     isProposalDialogOpen.value = true
   } catch (error: unknown) {
     showError(error)
@@ -1058,78 +1051,121 @@ async function openProposalDialog(): Promise<void> {
 function closeProposalDialog(): void {
   isProposalDialogOpen.value = false
   proposal.value = null
-  proposalApplyResults.value = null
+  proposalRejection.value = null
+}
+
+/** Panonun dönemi; pano henüz gelmediyse etkin dönem. */
+function boardTerm(): string {
+  return board.value?.term ?? activeTerm.value
 }
 
 /**
- * Öneriyi sırayla uygular. Bir kalem hata verirse diğerleri de denenmeye devam eder
- * (hata sessizce yutulmaz, kalan kalemler de iptal edilmez); bittiğinde kaçının
- * başarılı/başarısız olduğu ve gerekçesi hem diyalogda satır satır hem de tek bir
- * toast özetinde kullanıcıya bildirilir. Sonunda pano tazelenir.
+ * Öneriyi TEK değişiklik kümesi olarak, tek işlemde yazar: bir kalem reddedilirse
+ * hiçbiri yazılmaz. Reddedilirse gerekçe diyalogda kalır; kümenin kimliği geri
+ * almak için bellekte saklanır.
  */
 async function applyProposal(): Promise<void> {
   if (isReadOnly.value) return
   const items = proposal.value?.assignments ?? []
   if (items.length === 0) return
 
-  // Dönem başladıysa TÜM atamalar için TEK pencere açılır; aynı tarih ve gerekçe
-  // her kaleme gönderilir. Vazgeç'te hiçbir atama uygulanmaz.
+  // Dönem başladıysa tek pencere açılır; Vazgeç'te hiçbir şey yazılmaz.
   const change = await requestChangeDetails()
   if (change === null) return
 
   isApplyingProposal.value = true
-  const results: ProposalApplyResult[] = []
-
-  for (const item of items) {
-    try {
-      await assignmentsApi.assign(
-        {
-          teacherId: item.teacherId,
-          companyId: item.companyId,
-          visitDay: item.visitDay,
-          visitHour: item.visitHour,
-          isForced: false,
-          forceReason: null,
+  proposalRejection.value = null
+  try {
+    const outcome = await commitChange(
+      {
+        term: boardTerm(),
+        effectiveDate: change.effectiveDate,
+        documentDate: null,
+        reason: change.reason ?? '',
+        command: {
+          type: 'assignCoordinators',
+          rows: items.map((item) => ({
+            companyId: item.companyId,
+            teacherId: item.teacherId,
+            visitDay: item.visitDay,
+            visitHour: item.visitHour,
+            isForced: false,
+            forceReason: null,
+          })),
         },
-        change,
-      )
-      results.push({
-        companyId: item.companyId,
-        companyName: item.companyName,
-        success: true,
-        errorMessage: null,
-      })
-    } catch (error: unknown) {
-      results.push({
-        companyId: item.companyId,
-        companyName: item.companyName,
-        success: false,
-        errorMessage: error instanceof Error ? error.message : labels.common.error,
-      })
-    }
+      },
+      null,
+    )
+    await handleApplyOutcome(outcome)
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isApplyingProposal.value = false
   }
+}
 
-  proposalApplyResults.value = results
-  await load()
-
-  const successCount = results.filter((r) => r.success).length
-  const failureCount = results.length - successCount
-  if (failureCount === 0) {
+async function handleApplyOutcome(outcome: ChangeOutcome): Promise<void> {
+  if (outcome.status === 'committed') {
+    appliedProposalChangeSetId.value = outcome.changeSetId
+    await load()
     toast.add({ severity: 'success', summary: labels.allocation.proposalApplied, life: 3000 })
+    closeProposalDialog()
+  } else if (outcome.status === 'rejected') {
+    proposalRejection.value = outcome.reason
+  } else if (outcome.status === 'stale') {
+    showError(new Error(outcome.message))
   } else {
-    const failedNames = results
-      .filter((r) => !r.success)
-      .map((r) => r.companyName)
-      .join(', ')
-    toast.add({
-      severity: 'warn',
-      summary: labels.allocation.proposalApplied,
-      detail: `${successCount}/${results.length} ${labels.allocation.proposalSuccessSuffix}. ${labels.allocation.proposalFailedPrefix}: ${failedNames}`,
-      life: 10000,
-    })
+    showError(new Error(labels.allocation.proposalUnexpectedOutcome))
   }
+}
 
-  isApplyingProposal.value = false
+function confirmUndoProposal(): void {
+  if (isReadOnly.value || appliedProposalChangeSetId.value === null) return
+  confirm.require({
+    message: labels.allocation.proposalUndoConfirm,
+    header: labels.allocation.proposalUndo,
+    acceptLabel: labels.common.yes,
+    rejectLabel: labels.common.no,
+    acceptProps: { severity: 'danger' },
+    accept: () => void undoProposal(),
+  })
+}
+
+async function undoProposal(): Promise<void> {
+  const changeSetId = appliedProposalChangeSetId.value
+  if (changeSetId === null) return
+  isUndoingProposal.value = true
+  try {
+    const outcome = await commitChange(
+      {
+        term: boardTerm(),
+        effectiveDate: null,
+        documentDate: null,
+        reason: labels.allocation.proposalUndoReason,
+        command: { type: 'revoke', changeSetId },
+      },
+      null,
+    )
+    await handleUndoOutcome(outcome)
+  } catch (error: unknown) {
+    showError(error)
+  } finally {
+    isUndoingProposal.value = false
+  }
+}
+
+async function handleUndoOutcome(outcome: ChangeOutcome): Promise<void> {
+  if (outcome.status === 'committed') {
+    appliedProposalChangeSetId.value = null
+    await load()
+    toast.add({ severity: 'success', summary: labels.allocation.proposalUndone, life: 3000 })
+  } else if (outcome.status === 'rejected') {
+    showError(new Error(outcome.reason))
+  } else if (outcome.status === 'stale') {
+    showError(new Error(outcome.message))
+  } else {
+    showError(new Error(labels.common.error))
+  }
 }
 
 async function load(): Promise<void> {
@@ -1363,13 +1399,8 @@ onUnmounted(() => {
   margin-bottom: 0.5rem;
   background: var(--p-content-background);
 }
-.proposal-row--success { border-color: var(--p-green-500); }
-.proposal-row--failed { border-color: var(--p-red-500); }
 .proposal-row-info { min-width: 0; }
-.proposal-error { font-size: 0.75rem; color: var(--p-red-500); margin-top: 0.25rem; }
-.proposal-icon { font-size: 1.125rem; flex-shrink: 0; }
-.proposal-icon--success { color: var(--p-green-500); }
-.proposal-icon--failed { color: var(--p-red-500); }
+.proposal-rejection { margin-top: 1rem; }
 .proposal-unassigned-panel { margin-top: 1rem; }
 .proposal-unassigned-row {
   display: flex;

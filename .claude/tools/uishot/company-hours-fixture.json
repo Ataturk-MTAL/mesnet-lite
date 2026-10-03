@@ -5,7 +5,7 @@
       {
         "companyId": 1,
         "companyName": "Akdeniz Elektronik San. Tic. Ltd. Şti.",
-        "addressText": "Kaleiçi Mah. Serbest Bölge",
+        "addressText": "Kurgu Mah. Deneme Bölgesi",
         "oneWayDistanceKm": 12.4,
         "roundTripDistanceKm": 24.8,
         "studentCount": 2,
@@ -19,7 +19,7 @@
       {
         "companyId": 2,
         "companyName": "Örnek Enerji Sistemleri Anonim Şirketi ve Endüstriyel Otomasyon Çözümleri",
-        "addressText": "Korukent Mah. Toroslar",
+        "addressText": "Numune Mah. Örnek Sk.",
         "oneWayDistanceKm": 8.5,
         "roundTripDistanceKm": 17.0,
         "studentCount": 3,
@@ -33,7 +33,7 @@
       {
         "companyId": 3,
         "companyName": "Toros Otomasyon ve Kontrol Sistemleri",
-        "addressText": "Serbest Bölge",
+        "addressText": "Deneme Bölgesi",
         "oneWayDistanceKm": 5.1,
         "roundTripDistanceKm": 10.2,
         "studentCount": 1,

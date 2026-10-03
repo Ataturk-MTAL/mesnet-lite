@@ -71,12 +71,12 @@ const LocationPickerMapStub = { template: '<div />' }
 function companyFixture(overrides: Partial<Company> = {}): Company {
   return {
     id: 1,
-    name: 'KALEKİM AŞ.',
+    name: 'ÖRNEK ELEKTRONİK A.Ş.',
     contactFirstName: 'Ali',
     contactLastName: 'Veli',
     phone: '0532 000 00 00',
     email: 'ali@example.com',
-    addressText: 'Karaduvar Mah. Serbest Bölge 14. Cadde No:13 Akdeniz/Mersin',
+    addressText: 'Örnek Mah. Deneme 7. Cadde No:21 Akdeniz/Mersin',
     district: 'Akdeniz',
     latitude: null,
     longitude: null,
@@ -168,13 +168,13 @@ describe('CompaniesView tablo sütunları', () => {
     const wrapper = await mountView([
       companyFixture({
         addressText:
-          'KALEKİM AŞ. KARADUVAR MAH. SERBEST BÖLGE 14.CADDE NO:13 AKDENİZ/MERSİN çok uzun bir adres metni burada devam ediyor',
+          'ÖRNEK ELEKTRONİK A.Ş. KURGU MAH. DENEME 5.CADDE NO:21 AKDENİZ/MERSİN çok uzun bir adres metni burada devam ediyor',
       }),
     ])
 
     // Assert
     expect(wrapper.find('td').exists()).toBe(true)
-    expect(wrapper.text()).not.toContain('SERBEST BÖLGE 14.CADDE')
+    expect(wrapper.text()).not.toContain('DENEME 5.CADDE')
     wrapper.unmount()
   })
 })
@@ -183,7 +183,7 @@ describe('CompaniesView arama', () => {
   it('adres metnine göre arama yapılabilir', async () => {
     // Arrange
     const wrapper = await mountView([
-      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Serbest Bölge' }),
+      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Deneme Bölgesi' }),
       companyFixture({ id: 2, name: 'Firma B', addressText: 'Adana Sanayi Sitesi' }),
     ])
 
@@ -228,7 +228,7 @@ describe('CompaniesView arama', () => {
   it('arama metni yeniden mount edilince korunur ve tabloya uygulanır (Pinia store)', async () => {
     // Arrange
     const wrapper = await mountView([
-      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Serbest Bölge' }),
+      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Deneme Bölgesi' }),
       companyFixture({ id: 2, name: 'Firma B', addressText: 'Adana Sanayi Sitesi' }),
     ])
     await wrapper.get('input[type="text"]').setValue('Mersin')
@@ -237,7 +237,7 @@ describe('CompaniesView arama', () => {
 
     // Act: sayfa değişip geri dönülmüş gibi ikinci bir mount.
     const wrapper2 = await mountView([
-      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Serbest Bölge' }),
+      companyFixture({ id: 1, name: 'Firma A', addressText: 'Mersin Deneme Bölgesi' }),
       companyFixture({ id: 2, name: 'Firma B', addressText: 'Adana Sanayi Sitesi' }),
     ])
 

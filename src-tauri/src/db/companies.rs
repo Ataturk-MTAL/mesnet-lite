@@ -906,7 +906,7 @@ mod tests {
         let (_dir, pool) = test_pool().await;
         let mut conn = pool.acquire().await.unwrap();
         let mut input = sample_input("Bağlantı Testi A.Ş.");
-        input.address_text = "33130 Akdeniz/Mersin".into();
+        input.address_text = "33000 Akdeniz/Mersin".into();
 
         let created = create_in(&mut conn, &input).await.unwrap();
 
@@ -976,7 +976,7 @@ mod tests {
     async fn create_derives_district_from_address_when_left_blank() {
         let (_dir, pool) = test_pool().await;
         let mut input = sample_input("Test İşletme A");
-        input.address_text = "Mega Center, Çilek, 63143 sokak D:8. Blok No:4, 33020 Akdeniz/Mersin, Türkiye".into();
+        input.address_text = "Örnek İş Merkezi, Deneme, 98765 sokak D:2. Blok No:7, 33000 Akdeniz/Mersin, Türkiye".into();
 
         let created = create(&pool, &input).await.unwrap();
 
@@ -989,7 +989,7 @@ mod tests {
     async fn create_keeps_the_explicit_district_instead_of_deriving_it() {
         let (_dir, pool) = test_pool().await;
         let mut input = sample_input("Test İşletme A");
-        input.address_text = "33020 Akdeniz/Mersin, Türkiye".into();
+        input.address_text = "33000 Akdeniz/Mersin, Türkiye".into();
         input.district = "Toroslar".into();
 
         let created = create(&pool, &input).await.unwrap();
@@ -1014,7 +1014,7 @@ mod tests {
         assert_eq!(created.district, "", "başlangıç adresinde posta kodu yok");
 
         let mut input = sample_input("Test İşletme A");
-        input.address_text = "33130 Akdeniz/Mersin".into();
+        input.address_text = "33000 Akdeniz/Mersin".into();
         let updated = update(&pool, created.id, &input).await.unwrap();
 
         assert_eq!(updated.district, "Akdeniz");
@@ -1028,7 +1028,7 @@ mod tests {
         let created = create(&pool, &sample_input("Test İşletme A")).await.unwrap();
 
         let mut input = sample_input("Test İşletme A");
-        input.address_text = "33130 Akdeniz/Mersin".into();
+        input.address_text = "33000 Akdeniz/Mersin".into();
         input.district = "Toroslar".into();
         let updated = update(&pool, created.id, &input).await.unwrap();
 
@@ -1039,8 +1039,8 @@ mod tests {
     #[test]
     fn normalize_name_lowercases_and_collapses_spaces() {
         assert_eq!(
-            normalize_name("  RITIMSAN   ELEKTRONIK  "),
-            "ritimsan elektronik"
+            normalize_name("  ORNEK   ELEKTRONIK  "),
+            "ornek elektronik"
         );
         // Aynı ad farklı yazımlarda aynı anahtara inmeli.
         assert_eq!(

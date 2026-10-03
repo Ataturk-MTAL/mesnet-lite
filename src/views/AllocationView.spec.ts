@@ -20,7 +20,7 @@ import { labels } from '../i18n/labels'
 import { useSelectionStore } from '../stores/selection'
 import { useTermStore } from '../stores/term'
 import { useAsOfDateStore } from '../stores/asOfDate'
-import type { EffectiveChangeInput, TermWithDates } from '../types/models'
+import type { ChangeOutcome, ChangeRequest, EffectiveChangeInput, TermWithDates } from '../types/models'
 
 const getBoardMock = vi.fn<(asOf: string | null) => Promise<AssignmentBoard>>()
 const proposeMock = vi.fn<() => Promise<AllocationProposal>>()
@@ -40,6 +40,24 @@ vi.mock('../api/assignments', async () => {
     },
   }
 })
+
+/** Etki özeti bu testlerde okunmaz; yalnız `changeSetId` anlamlıdır. */
+function committedOutcome(changeSetId: number): ChangeOutcome {
+  const impact = {} as Extract<ChangeOutcome, { status: 'committed' }>['impact']
+  return { status: 'committed', changeSetId, impact }
+}
+
+const commitChangeMock = vi.fn<(request: ChangeRequest, expectedHighWater: number | null) => Promise<ChangeOutcome>>()
+vi.mock('../api/history', () => ({
+  commitChange: (request: ChangeRequest, expectedHighWater: number | null) =>
+    commitChangeMock(request, expectedHighWater),
+}))
+
+// `<ConfirmDialog />` App.vue'da yaşar; onay penceresini hemen kabul eden bir casusla geçeriz.
+const confirmRequireMock = vi.fn<(options: { accept?: () => void }) => void>((options) => options.accept?.())
+vi.mock('openvue/useconfirm', () => ({
+  useConfirm: () => ({ require: confirmRequireMock }),
+}))
 
 // AllocationView `<Toast />`'u kendi içinde barındırmaz (App.vue'da yaşar); çakışma
 // engelinde gösterilen hata mesajını DOM yerine bu casusla doğrularız.
@@ -145,6 +163,8 @@ beforeEach(() => {
   getBoardMock.mockReset()
   proposeMock.mockReset()
   assignMock.mockReset()
+  commitChangeMock.mockReset()
+  confirmRequireMock.mockClear()
   unassignMock.mockReset()
   clearMock.mockReset()
   toastAddMock.mockReset()
@@ -325,14 +345,14 @@ describe('AllocationView işletme adresi', () => {
         companyId: 1,
         companyName: 'Firma A',
         district: 'Akdeniz',
-        addressText: 'Karaduvar Mah. Serbest Bölge 14.Cadde No:13, Akdeniz/Mersin',
+        addressText: 'Kurgu Mah. Deneme 5.Cadde No:21, Akdeniz/Mersin',
       }),
     ])
 
     // Assert
     const address = wrapper.find('.company-address')
     expect(address.exists()).toBe(true)
-    expect(address.text()).toBe('Karaduvar Mah. Serbest Bölge 14.Cadde No:13, Akdeniz/Mersin')
+    expect(address.text()).toBe('Kurgu Mah. Deneme 5.Cadde No:21, Akdeniz/Mersin')
     wrapper.unmount()
   })
 
@@ -354,7 +374,7 @@ describe('AllocationView işletme adresi', () => {
         companyId: 1,
         companyName: 'Firma A',
         district: 'Akdeniz',
-        addressText: 'Hürriyet Mah. Hüseyin Okan Merzeci Blv No:489, Yenişehir/Mersin',
+        addressText: 'Numune Mah. Deneme Blv No:731, Yenişehir/Mersin',
         assignedTeacherId: 7,
       }),
     ])
@@ -362,7 +382,7 @@ describe('AllocationView işletme adresi', () => {
     // Assert
     const addresses = wrapper.findAll('.company-address')
     expect(addresses).toHaveLength(1)
-    expect(addresses[0]?.text()).toBe('Hürriyet Mah. Hüseyin Okan Merzeci Blv No:489, Yenişehir/Mersin')
+    expect(addresses[0]?.text()).toBe('Numune Mah. Deneme Blv No:731, Yenişehir/Mersin')
     wrapper.unmount()
   })
 })
@@ -533,63 +553,210 @@ describe('AllocationView dönem başladıysa yazımlar tarih penceresinden geçe
     wrapper.unmount()
   })
 
-  it('öneri uygulama TÜM atamalar için TEK pencere açar, aynı tarihi her kaleme yollar', async () => {
-    // Arrange
+  /** İki kalemli öneriyi kurar, görünümü açar ve öneri diyaloğunu getirir. */
+  async function mountWithProposal() {
     const teacher = startedTeacher()
     const companyA = companyFixture({ companyId: 1, companyName: 'Firma A' })
     const companyB = companyFixture({ companyId: 2, companyName: 'Firma B' })
     const wrapper = await mountView([companyA, companyB], { teachers: [teacher] })
+    const item = (companyId: number, companyName: string, visitDay: number) => ({
+      companyId,
+      companyName,
+      teacherId: 1,
+      teacherName: teacher.teacherName,
+      awardedHours: 1,
+      visitDay,
+      visitHour: 9,
+      exactBranchMatch: true,
+    })
     proposeMock.mockResolvedValue({
-      assignments: [
-        {
-          companyId: 1,
-          companyName: 'Firma A',
-          teacherId: 1,
-          teacherName: teacher.teacherName,
-          awardedHours: 1,
-          visitDay: 1,
-          visitHour: 9,
-          exactBranchMatch: true,
-        },
-        {
-          companyId: 2,
-          companyName: 'Firma B',
-          teacherId: 1,
-          teacherName: teacher.teacherName,
-          awardedHours: 1,
-          visitDay: 2,
-          visitHour: 9,
-          exactBranchMatch: true,
-        },
-      ],
+      assignments: [item(1, 'Firma A', 1), item(2, 'Firma B', 2)],
       unassigned: [],
     })
-    assignMock.mockResolvedValue(boardFixture([companyA, companyB], { teachers: [teacher] }))
-
-    // Act — öneriyi üret, uygula. Öneri diyaloğu `body`e teleport edildiğinden
-    // "Uygula" düğmesi `wrapper` yerine `document.body` üzerinden aranır.
     const proposeButton = wrapper.findAll('button').find((b) => b.text().includes(labels.allocation.propose))
     await proposeButton!.trigger('click')
     await flushPromises()
+    return wrapper
+  }
+
+  /** Öneri diyaloğu `body`e teleport edildiğinden düğme `document.body` üzerinden aranır. */
+  async function clickApplyProposal(): Promise<void> {
     const applyButton = Array.from(document.body.querySelectorAll('button')).find((b) =>
       b.textContent?.includes(labels.allocation.proposalApply),
     )
     expect(applyButton).toBeDefined()
     applyButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
+  }
 
-    // Assert — TEK pencere açıldı, henüz hiçbir atama yazılmadı.
+  function undoButton(wrapper: VueWrapper): DOMWrapper<HTMLButtonElement> | undefined {
+    return wrapper.findAll('button').find((b) => b.text().includes(labels.allocation.proposalUndo))
+  }
+
+  it('öneri uygulama TEK pencere açar ve tüm kalemleri TEK commitChange çağrısıyla yazar', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValue(committedOutcome(77))
+
+    // Act
+    await clickApplyProposal()
+
+    // Assert — TEK pencere açıldı, henüz hiçbir şey yazılmadı.
     expect(document.body.querySelectorAll('[data-testid="change-details-dialog"]')).toHaveLength(1)
-    expect(assignMock).not.toHaveBeenCalled()
+    expect(commitChangeMock).not.toHaveBeenCalled()
 
     // Act
     await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'Öneri uygulaması')
     await flushPromises()
 
-    // Assert — her iki atama da AYNI tarih ve gerekçeyle gitti.
-    expect(assignMock).toHaveBeenCalledTimes(2)
-    expect(assignMock.mock.calls[0][1]).toEqual({ effectiveDate: '2026-10-12', reason: 'Öneri uygulaması' })
-    expect(assignMock.mock.calls[1][1]).toEqual({ effectiveDate: '2026-10-12', reason: 'Öneri uygulaması' })
+    // Assert — tek çağrı, iki satır, aynı tarih ve gerekçe; tek tek assign yok.
+    expect(assignMock).not.toHaveBeenCalled()
+    expect(commitChangeMock).toHaveBeenCalledTimes(1)
+    const [request, highWater] = commitChangeMock.mock.calls[0]
+    expect(highWater).toBeNull()
+    expect(request).toMatchObject({
+      term: '2026-2027/1',
+      effectiveDate: '2026-10-12',
+      documentDate: null,
+      reason: 'Öneri uygulaması',
+    })
+    expect(request.command).toEqual({
+      type: 'assignCoordinators',
+      rows: [
+        { companyId: 1, teacherId: 1, visitDay: 1, visitHour: 9, isForced: false, forceReason: null },
+        { companyId: 2, teacherId: 1, visitDay: 2, visitHour: 9, isForced: false, forceReason: null },
+      ],
+    })
+    wrapper.unmount()
+  })
+
+  it('başarılı uygulamada panoyu yeniler, başarı toast\'ı gösterir ve geri al düğmesi çıkar', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValue(committedOutcome(77))
+    const loadsBefore = getBoardMock.mock.calls.length
+    expect(undoButton(wrapper)).toBeUndefined()
+
+    // Act
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+
+    // Assert
+    expect(getBoardMock.mock.calls.length).toBeGreaterThan(loadsBefore)
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', summary: labels.allocation.proposalApplied }),
+    )
+    expect(undoButton(wrapper)).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('reddedilen öneri diyalogda gerekçeyi gösterir, diyalog açık kalır, geri al düğmesi çıkmaz', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValue({
+      status: 'rejected',
+      code: 'blockOverlap',
+      reason: 'Firma B için çakışma var',
+      conflictingChangeSetIds: [],
+      suggestedDate: null,
+    })
+
+    // Act
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+
+    // Assert
+    expect(document.body.textContent).toContain('Firma B için çakışma var')
+    expect(document.body.textContent).toContain(labels.allocation.proposalRejectedNote)
+    expect(document.body.textContent).toContain(labels.allocation.proposalTitle)
+    expect(undoButton(wrapper)).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('bayat sonuç ve fırlatılan hata sessiz yutulmaz, hata toast\'ı gösterilir', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValueOnce({ status: 'stale', message: 'Veri değişmiş' })
+
+    // Act — bayat sonuç
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+
+    // Assert
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'Veri değişmiş' }),
+    )
+
+    // Act — fırlatılan hata
+    commitChangeMock.mockRejectedValueOnce(new Error('Rust hatası'))
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+
+    // Assert
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'Rust hatası' }),
+    )
+    wrapper.unmount()
+  })
+
+  it('geri al onay ister, kaydedilen changeSetId ile revoke gönderir ve düğmeyi kaldırır', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValueOnce(committedOutcome(77))
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+    commitChangeMock.mockResolvedValueOnce(committedOutcome(78))
+
+    // Act
+    await undoButton(wrapper)!.trigger('click')
+    await flushPromises()
+
+    // Assert
+    expect(confirmRequireMock).toHaveBeenCalledTimes(1)
+    const [request] = commitChangeMock.mock.calls[1]
+    expect(request).toMatchObject({
+      term: '2026-2027/1',
+      effectiveDate: null,
+      documentDate: null,
+      reason: labels.allocation.proposalUndoReason,
+      command: { type: 'revoke', changeSetId: 77 },
+    })
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', summary: labels.allocation.proposalUndone }),
+    )
+    expect(undoButton(wrapper)).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('geri al reddedilirse gerekçe hata toast\'ında görünür ve düğme kalır', async () => {
+    // Arrange
+    const wrapper = await mountWithProposal()
+    commitChangeMock.mockResolvedValueOnce(committedOutcome(77))
+    await clickApplyProposal()
+    await fillChangeDetailsAndConfirm(wrapper, '2026-10-12', 'x')
+    await flushPromises()
+    commitChangeMock.mockResolvedValueOnce({
+      status: 'rejected',
+      code: 'blockOverlap',
+      reason: 'Sonradan değişiklik yapılmış',
+      conflictingChangeSetIds: [],
+      suggestedDate: null,
+    })
+
+    // Act
+    await undoButton(wrapper)!.trigger('click')
+    await flushPromises()
+
+    // Assert
+    expect(toastAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'Sonradan değişiklik yapılmış' }),
+    )
+    expect(undoButton(wrapper)).toBeDefined()
     wrapper.unmount()
   })
 

@@ -221,37 +221,37 @@ fn turkish_lower_char(c: char) -> char {
 mod tests {
     use super::*;
 
-    /// Gerçek veritabanındaki 28 adresten biri (Yenişehir grubu, 6 kayıttan
-    /// biri) — standart "posta kodu İlçe/İl" ekiyle biter.
+    /// Kurgusal adres (Yenişehir örneği) — standart "posta kodu İlçe/İl"
+    /// ekiyle biter.
     #[test]
-    fn parse_district_extracts_yenisehir_from_a_real_address() {
-        let address = "Çiftlikköy, Mersin Ünv., 33110 Yenişehir/Mersin, Türkiye";
+    fn parse_district_extracts_yenisehir_from_a_standard_address() {
+        let address = "Kurgu Mahallesi, Örnek Kampüsü, 33000 Yenişehir/Mersin, Türkiye";
         assert_eq!(parse_district(address), Some("Yenişehir".to_string()));
     }
 
-    /// Aynı 28 adresten biri (Akdeniz grubu): adreste YANILTICI bir 5 haneli
-    /// sayı da var ("63143 sokak D:8. Blok No:4," — bu bir posta kodu değil,
+    /// Kurgusal adres (Akdeniz örneği): adreste YANILTICI bir 5 haneli
+    /// sayı da var ("98765 sokak D:2. Blok No:7," — bu bir posta kodu değil,
     /// sokak numarası; hemen ardından '/' gelmeden önce ',' geldiği için
-    /// kalıp burada eşleşmez). Doğru eşleşme yalnızca sondaki "33020
+    /// kalıp burada eşleşmez). Doğru eşleşme yalnızca sondaki "33000
     /// Akdeniz/Mersin"dir.
     #[test]
-    fn parse_district_extracts_akdeniz_from_a_real_address() {
-        let address = "Mega Center, Çilek, 63143 sokak D:8. Blok No:4, 33020 Akdeniz/Mersin, Türkiye";
+    fn parse_district_extracts_akdeniz_despite_a_misleading_five_digit_street_number() {
+        let address = "Örnek İş Merkezi, Deneme, 98765 sokak D:2. Blok No:7, 33000 Akdeniz/Mersin, Türkiye";
         assert_eq!(parse_district(address), Some("Akdeniz".to_string()));
     }
 
-    /// Gerçek veritabanındaki KALEKİM AŞ. kaydı (28 adresin biri): işletmenin
-    /// kendi yazdığı serbest metinde "AKDENİZ/MERSİN" bir kez daha geçiyor.
+    /// Kurgusal "ÖRNEK SANAYİ AŞ." kaydı: işletmenin kendi yazdığı serbest
+    /// metinde "AKDENİZ/MERSİN" bir kez daha geçiyor.
     /// NOT: bu belirli adreste posta kodu (`\d{5}`) yalnızca SONDAKİ
-    /// "33020 Akdeniz/Mersin" önünde bulunduğu için kalıp fiilen tek kez
-    /// eşleşiyor (doğrulandı) — yine de "son eşleşmeyi al" tasarımının
-    /// dayandığı gerçek veri budur; ayrım gücünü kanıtlayan asıl test
+    /// "33000 Akdeniz/Mersin" önünde bulunduğu için kalıp fiilen tek kez
+    /// eşleşiyor — yine de "son eşleşmeyi al" tasarımının dayandığı veri
+    /// biçimi budur; ayrım gücünü kanıtlayan asıl test
     /// aşağıdaki `parse_district_prefers_the_last_match_over_the_first`.
     #[test]
-    fn parse_district_handles_the_kalekim_address_with_a_repeated_district_name() {
-        let address = "KALEKİM AŞ. KARADUVAR MAH. SERBEST BÖLGE 14.CADDE NO:13 AKDENİZ/MERSİN \
-             KALEKİM AŞ. KARADUVAR MAH. SERBEST BÖLGE 14.CADDE NO:13, Karaduvar, \
-             33020 Akdeniz/Mersin, Türkiye";
+    fn parse_district_handles_an_address_with_a_repeated_district_name() {
+        let address = "ÖRNEK SANAYİ AŞ. NUMUNE MAH. DENEME BÖLGE 7.CADDE NO:9 AKDENİZ/MERSİN \
+             ÖRNEK SANAYİ AŞ. NUMUNE MAH. DENEME BÖLGE 7.CADDE NO:9, Numune, \
+             33000 Akdeniz/Mersin, Türkiye";
         assert_eq!(parse_district(address), Some("Akdeniz".to_string()));
     }
 
@@ -260,14 +260,14 @@ mod tests {
     /// ilk eşleşme alınsaydı yanlış ilçe ("Kadıköy") dönerdi.
     #[test]
     fn parse_district_prefers_the_last_match_over_the_first() {
-        let address = "Merkez, 34000 Kadıköy/İstanbul eski kayıt, 33020 Akdeniz/Mersin, Türkiye";
+        let address = "Merkez, 34000 Kadıköy/İstanbul eski kayıt, 33000 Akdeniz/Mersin, Türkiye";
         assert_eq!(parse_district(address), Some("Akdeniz".to_string()));
     }
 
     /// Posta kodu hiç yoksa ayrıştırma başarısız olmalı; hata değil, `None`.
     #[test]
     fn parse_district_returns_none_without_a_postal_code() {
-        let address = "Cumhuriyet Mahallesi, Atatürk Caddesi No:5, Mersin, Türkiye";
+        let address = "Örnek Mahallesi, Deneme Caddesi No:5, Mersin, Türkiye";
         assert_eq!(parse_district(address), None);
     }
 
@@ -279,7 +279,7 @@ mod tests {
     /// Kısa biçim: adresin TAMAMI yalnızca "posta kodu İlçe/İl" olabilir.
     #[test]
     fn parse_district_handles_the_short_form_without_a_trailing_comma() {
-        assert_eq!(parse_district("33130 Akdeniz/Mersin"), Some("Akdeniz".to_string()));
+        assert_eq!(parse_district("33000 Akdeniz/Mersin"), Some("Akdeniz".to_string()));
     }
 
     /// Vue tarafına giden değer TEK bir yazımda olmalı: büyük/küçük harf

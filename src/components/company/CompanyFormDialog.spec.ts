@@ -18,7 +18,7 @@ function companyFixture(overrides: Partial<Company> = {}): Company {
     contactLastName: 'Veli',
     phone: '',
     email: '',
-    addressText: 'Karaduvar Mah. Serbest Bölge 14. Cadde No:13 Akdeniz/Mersin',
+    addressText: 'Örnek Mah. Deneme 7. Cadde No:21 Akdeniz/Mersin',
     district: 'Akdeniz',
     latitude: null,
     longitude: null,
