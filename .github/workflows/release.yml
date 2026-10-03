@@ -85,10 +85,18 @@ jobs:
               echo
               cat .github/release-install-note.md
             } > "${body}"
-            gh release create "${TAG}" --draft --target "${GITHUB_SHA}" \
-              --title "MESNET.Lite ${TAG}" --notes-file "${body}"
-            id=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-              --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id" | head -n 1)
+            # Kimlik oluşturma yanıtından alınır. Oluşturduktan hemen sonra
+            # listeyi sorgulamak taslağı henüz göstermeyebiliyor; o zaman
+            # `release_id` boş kalıyor ve `tauri-action` taslağı etikete göre
+            # arayıp ("Release not found or created") düşüyordu (v0.1.6).
+            id=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases" \
+              -f tag_name="${TAG}" -f target_commitish="${GITHUB_SHA}" \
+              -f name="MESNET.Lite ${TAG}" -F draft=true -F body=@"${body}" \
+              --jq .id)
+          fi
+          if [ -z "${id}" ]; then
+            echo "::error::${TAG} için taslak sürüm kimliği alınamadı."
+            exit 1
           fi
           echo "release_id=${id}" >> "$GITHUB_OUTPUT"
 
@@ -160,10 +168,10 @@ jobs:
           # penceresi kullanıcıya bu metni gösterir.
           releaseBody: ${{ needs.prepare.outputs.notes }}
           # `latest.json` (güncelleyicinin okuduğu dosya) varsayılan olarak
-          # yüklenir (`uploadUpdaterJson: true`); açıkça yazıldı ki sessizce
+          # yüklenir (`includeUpdaterJson: true`); açıkça yazıldı ki sessizce
           # kapatılmasın. Windows'ta hem NSIS hem MSI varsa NSIS seçilir:
           # uygulamanın asıl kurulum biçimi odur (`bundle.windows.nsis`).
-          uploadUpdaterJson: true
+          includeUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
