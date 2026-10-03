@@ -7,6 +7,7 @@ use crate::db::{
 use crate::domain::allocation::{
     propose, AllocationProposal, CompanyInput, TeacherInput,
 };
+use crate::domain::grouping::{assign_groups, GroupingInput, GroupingSettings};
 use crate::domain::history::decide::{ChangeCommand, ChangeRequest, CoordinatorRow};
 use crate::domain::scheduling::{visit_span, Slot, MAX_HOURS_PER_DAY};
 use crate::domain::terms::{parse_date, today_local};
@@ -29,6 +30,13 @@ pub struct BoardCompany {
     /// Atanmamış işletmelerin ilçe bazlı gruplanması için (bkz.
     /// `domain::address::parse_district`); adresten türetilemezse boştur.
     pub district: String,
+    /// Mahalle (migration 0016); boş olabilir.
+    pub neighborhood: String,
+    /// Atanmamış işletmelerin gruplanması için (bkz. `domain::grouping`,
+    /// Issue #42); `None` = grup yok.
+    pub group_key: Option<String>,
+    /// Grubun görünen adı; grup yoksa boştur.
+    pub group_label: String,
     pub one_way_distance_km: Option<f64>,
     pub student_count: i64,
     pub student_names: Vec<String>,
@@ -173,7 +181,24 @@ async fn load_board(state: &AppState, read_at: &ReadAt) -> AppResult<AssignmentB
         .map(|row| (row.company_id, row))
         .collect();
 
+    // Gruplama ayarı tarihe göre değil güncel okunur: salt okunur pano da
+    // kullanıcının şu anki gruplama tercihini göstermelidir.
+    let groups = assign_groups(
+        &all_companies
+            .iter()
+            .map(|c| GroupingInput {
+                company_id: c.id,
+                neighborhood: c.neighborhood.clone(),
+                district: c.district.clone(),
+                latitude: c.latitude,
+                longitude: c.longitude,
+            })
+            .collect::<Vec<_>>(),
+        &GroupingSettings::from_settings(&all_settings),
+    );
+
     for company in &all_companies {
+        let group = groups.get(&company.id);
         let company_students: Vec<_> = all_students
             .iter()
             .filter(|s| s.company_id == Some(company.id))
@@ -200,6 +225,9 @@ async fn load_board(state: &AppState, read_at: &ReadAt) -> AppResult<AssignmentB
             company_name: company.name.clone(),
             address_text: company.address_text.clone(),
             district: company.district.clone(),
+            neighborhood: company.neighborhood.clone(),
+            group_key: group.map(|g| g.key.clone()),
+            group_label: group.map(|g| g.label.clone()).unwrap_or_default(),
             one_way_distance_km: company.one_way_distance_km,
             student_count: company_students.len() as i64,
             student_names: company_students

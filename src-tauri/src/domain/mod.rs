@@ -1,6 +1,7 @@
 pub mod address;
 pub mod allocation;
 pub mod group_count;
+pub mod grouping;
 pub mod hour_distribution;
 pub mod hour_rules;
 pub mod history;

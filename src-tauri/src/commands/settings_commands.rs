@@ -1,4 +1,5 @@
 use crate::db::{settings, teaching_load, terms, AppState};
+use crate::domain::grouping;
 use crate::error::{AppError, AppResult};
 use crate::services::commission_minutes;
 use serde::Serialize;
@@ -33,6 +34,7 @@ async fn save_settings_in_pool(
     entries: &BTreeMap<String, String>,
 ) -> AppResult<BTreeMap<String, String>> {
     commission_minutes::validate_minutes_settings(entries)?;
+    grouping::validate_settings(entries)?;
     settings::set_many(pool, entries).await?;
     if let Some(active_term) = entries.get("active_term") {
         terms::ensure(pool, active_term).await?;
@@ -197,6 +199,36 @@ mod tests {
     use super::*;
     use crate::db::init_pool;
     use sqlx::SqlitePool;
+
+    /// Migration 0017: gruplama ayarlarının varsayılanları yazılmış olmalı
+    /// (çap 3 km: bkz. `domain::grouping::DEFAULT_MAX_DIAMETER_KM`).
+    #[tokio::test]
+    async fn migration_0017_seeds_grouping_defaults() {
+        let (_dir, pool) = test_pool().await;
+        let all = settings::get_all(&pool).await.unwrap();
+        assert_eq!(all.get("grouping_mode").map(String::as_str), Some("distance"));
+        assert_eq!(all.get("grouping_max_diameter_km").map(String::as_str), Some("3"));
+        assert_eq!(all.get("grouping_manual_groups").map(String::as_str), Some("[]"));
+        assert_eq!(
+            grouping::GroupingSettings::from_settings(&all),
+            grouping::GroupingSettings::from_settings(&BTreeMap::new()),
+        );
+    }
+
+    /// Tek geçersiz gruplama değeri bütün kaydı reddeder; geçerli komşusu da yazılmaz.
+    #[tokio::test]
+    async fn save_settings_rejects_invalid_grouping_values_atomically() {
+        let (_dir, pool) = test_pool().await;
+        let entries: BTreeMap<String, String> = [
+            ("grouping_mode".to_string(), "manual".to_string()),
+            ("grouping_max_diameter_km".to_string(), "99".to_string()),
+        ]
+        .into();
+        let result = save_settings_in_pool(&pool, &entries).await;
+        assert!(matches!(result, Err(AppError::Validation(_))));
+        let stored = settings::get(&pool, "grouping_mode").await.unwrap();
+        assert_eq!(stored.as_deref(), Some("distance"));
+    }
 
     async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();

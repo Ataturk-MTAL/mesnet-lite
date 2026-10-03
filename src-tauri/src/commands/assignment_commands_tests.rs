@@ -80,6 +80,62 @@
 
     /// Atama tahtasının saat aralığı da AYNI türetmeden gelir
     /// (`settings::lesson_hour_bounds`); "Gün Başlangıç Saati" ayarı kalktı.
+    fn grouping_company(name: &str, neighborhood: &str, position: Option<(f64, f64)>) -> crate::domain::models::NewCompany {
+        crate::domain::models::NewCompany {
+            name: name.into(),
+            contact_first_name: String::new(),
+            contact_last_name: String::new(),
+            phone: String::new(),
+            email: String::new(),
+            address_text: String::new(),
+            latitude: position.map(|p| p.0),
+            longitude: position.map(|p| p.1),
+            one_way_distance_km: None,
+            district: "Örnek".into(),
+            neighborhood: neighborhood.into(),
+            notes: String::new(),
+        }
+    }
+
+    /// Pano, ayarlardaki moda göre `groupKey`/`groupLabel` doldurur: yakın iki
+    /// işletme tek kümede, konumsuz olan ilçe grubunda; elle modda ayar yeniden okunur.
+    #[tokio::test]
+    async fn board_fills_group_fields_from_settings_and_positions() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(&dir.path().join("test.db")).await.unwrap();
+        for company in [
+            grouping_company("A İşletme", "Deneme", Some((0.0, 0.0))),
+            grouping_company("B İşletme", "Deneme", Some((0.0, 0.005))),
+            grouping_company("C İşletme", "Başka", None),
+        ] {
+            companies::create(&pool, &company).await.unwrap();
+        }
+        let state = AppState { pool };
+
+        let board = load_board(&state, &ReadAt::Latest).await.unwrap();
+        let by_name = |name: &str| board.companies.iter().find(|c| c.company_name == name).unwrap().clone();
+        let (a, b, c) = (by_name("A İşletme"), by_name("B İşletme"), by_name("C İşletme"));
+        assert_eq!(a.neighborhood, "Deneme");
+        assert_eq!(a.group_key.as_deref(), Some("cluster:1"));
+        assert_eq!(a.group_key, b.group_key);
+        assert_eq!(a.group_label, "Deneme");
+        assert_eq!(c.group_key.as_deref(), Some("district:Örnek"));
+        assert_eq!(c.group_label, "Örnek");
+
+        settings::set(&state.pool, "grouping_mode", "manual").await.unwrap();
+        settings::set(
+            &state.pool,
+            "grouping_manual_groups",
+            r#"[{"name":"Özel","neighborhoods":["Başka"],"districts":[]}]"#,
+        )
+        .await
+        .unwrap();
+        let manual = load_board(&state, &ReadAt::Latest).await.unwrap();
+        let c = manual.companies.iter().find(|c| c.company_name == "C İşletme").unwrap();
+        assert_eq!(c.group_key.as_deref(), Some("manual:0"));
+        assert_eq!(c.group_label, "Özel");
+    }
+
     #[tokio::test]
     async fn board_hours_default_to_one_through_ten_when_max_daily_lessons_is_unset() {
         let dir = tempfile::tempdir().unwrap();
